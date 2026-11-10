@@ -138,14 +138,29 @@ class WorkspaceTools:
                 re.DOTALL,
             ),
         )
+        def redact_assignment(match: re.Match[str]) -> str:
+            value = match.group(3).strip().casefold()
+            placeholders = {
+                "example", "placeholder", "replace-me", "replace_me",
+                "change-me", "change_me", "changeme", "your-api-key",
+                "your_api_key", "your-token", "your_token", "your-secret",
+                "your_secret", "todo",
+            }
+            if (
+                value in placeholders
+                or value.startswith("your_")
+                or value.startswith("your-")
+                or (value.startswith("<") and value.endswith(">"))
+                or (value.startswith("${") and value.endswith("}"))
+            ):
+                return match.group(0)
+            return match.group(1) + match.group(2) + "[REDACTED]"
+
         redacted = content
         count = 0
         for index, pattern in enumerate(patterns):
             if index == 0:
-                redacted, replacements = pattern.subn(
-                    lambda match: match.group(1) + match.group(2) + "[REDACTED]",
-                    redacted,
-                )
+                redacted, replacements = pattern.subn(redact_assignment, redacted)
             elif index == 1:
                 redacted, replacements = pattern.subn(r"\1[REDACTED]", redacted)
             else:
