@@ -31,7 +31,7 @@ Initial v0.1 screen:
 | Vision | Declared metadata only; quality not assessed |
 | Long context, research, creative writing, multilingual, planning, error recovery, audio | Not assessed in v0.1 |
 
-A single passed smoke test proves only that a model passed that one item once. It is not a broad ability guarantee. Store method, attempts, pass count, confidence, duration, evidence and limitations. Full evaluation requires task samples, repeated trials, held-out tasks, adversarial cases and independent scoring.
+A single passed smoke test proves only that a model passed that one item once. It is not a broad ability guarantee. The v0.2 profiler supports 1–5 repeated trials per smoke dimension and stores method, attempts, pass count, confidence, duration, numeric/timing metrics, evidence and limitations. Failed trials count as zero in aggregate scores; raw model messages and tool arguments are not stored in the metric record. Full evaluation requires task samples, repeated trials, held-out tasks, adversarial cases and independent scoring.
 
 ### Operational dossier
 
@@ -45,7 +45,13 @@ A role recommendation includes supporting capabilities, evidence count/coverage,
 
 ## Agent Identity Package
 
-JSON includes schema version, timestamp, title, specialization, rationale, confidence, provider/model/digest binding, harness mode, tool permission default, capability records, origin evidence, limitations and profile version. Later versions may include approved skill manifests, MCP grants, memory policies and signed certification.
+The current schema-1.0 export includes schema/package metadata, timestamp, identity title and roles, rationale/confidence, Ollama provider/model/digest binding, model family/size/quantization, agentability mode/status, default permission label, capability records (including attempts, passes, method, confidence, numeric metrics, evidence and limitations), publisher/origin evidence, known limitations and profile version. The exporter does not assign a workspace or grant tools. Resource envelope, explicit memory-policy manifest, signed certification, harness qualification and MCP grants remain future versioned package fields.
+
+## Memory and workforce
+
+The v0.2 memory service is local SQLite with explicit user-authored writes, scoped user/project/agent records, six note categories, tags, confidence, timestamps, access counts and archive/forget semantics. Project memory can be added and archived from the desktop. Agent runs retrieve project-path notes, user-default notes and exact-model-digest notes. Retrieval filters by terms in SQLite before deterministic token/tag-overlap ranking and currently caps the candidate set at 500 matching records per recall. There is no embedding/vector search, automatic conversation-to-memory write, consolidation, contradiction resolution or run checkpointing. Retrieved text is treated as untrusted context, not system authority.
+
+The workforce matcher derives role requirements from the same canonical role taxonomy used by identity assignment. It currently ranks profiles by capability score, sample confidence and requirement coverage, and reports missing dimensions. Results remain provisional until an explicit role-qualification process exists. Hardware/resource constraints, tool grants, historical reliability and automated multi-agent scheduling are not yet part of selection.
 
 ## Research provenance
 
@@ -60,4 +66,4 @@ Public model-card discovery is opt-in. Hugging Face search results are candidate
 5. **Agent-qualified** — exact model + harness + toolset completes repeated end-to-end tasks.
 6. **Production-certified** — security, resource, reliability and regression gates pass on a declared hardware/software matrix.
 
-0.1.0 implements discovery/profile foundations only. It does not claim role qualification, agent qualification or production certification.
+The 0.1.0 baseline established discovery and agent-runtime foundations. The v0.2 development increment adds structured publisher research, repeated smoke profiling, local telemetry, scoped memory and fail-closed model-digest binding. It still does not claim role qualification, agent qualification or production certification.
