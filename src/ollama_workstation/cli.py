@@ -130,7 +130,10 @@ def main(argv: list[str] | None = None) -> int:
                                   repository=repository, memory_store=MemoryStore(repository)).run(
                 args.model, profile, args.task, tools,
                 event=lambda item: print(f"[{item.kind}] {item.message}", file=sys.stderr))
-            print(result.final_message)
+            safe_message, redacted_count = WorkspaceTools.redact_sensitive_text(result.final_message)
+            if redacted_count:
+                print(f"[security] Redacted {redacted_count} credential-like value(s) from the final response.", file=sys.stderr)
+            print(safe_message)
             return 0 if result.status == "completed" else 1
     except (OllamaError, OSError, RuntimeError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
