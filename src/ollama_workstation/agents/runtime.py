@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import uuid
@@ -88,10 +89,13 @@ class AgentRuntime:
 
     def run(self, model: str, profile: ModelProfile, task: str, tools: AgentToolRegistry,
             *, event: Callable[[AgentEvent], None] | None = None,
-            cancel_event: Event | None = None) -> AgentResult:
-        """Execute a bounded agent loop and honor cancellation at safe boundaries."""
+            cancel_event: Event | None = None,
+            resume_checkpoint: dict[str, Any] | None = None) -> AgentResult:
+        """Execute or safely resume a bounded agent loop at a verified checkpoint."""
         emit = event or (lambda _item: None)
-        run_id = str(uuid.uuid4())
+        run_id = str(resume_checkpoint["run_id"]) if resume_checkpoint else str(uuid.uuid4())
+        created_at = str(resume_checkpoint.get("created_at") or utc_now()) if resume_checkpoint else utc_now()
+        start_step = 1
         trace: list[AgentEvent] = []
         persistence_warning_reported = False
 
@@ -142,8 +146,10 @@ class AgentRuntime:
                 try:
                     self.repository.save_run(
                         run_id, model, profile.professional_title, safe_task, status,
-                        trace[0].timestamp if trace else utc_now(), utc_now(), safe_trace,
+                        created_at, utc_now(), safe_trace,
                     )
+                    if status not in {"step_limit", "failed", "context_limit"}:
+                        self.repository.delete_run_checkpoint(run_id)
                 except Exception as exc:
                     record("persistence_error", f"Execution finished but trace persistence failed: {exc}")
             return result
@@ -152,31 +158,126 @@ class AgentRuntime:
         tool_names = [entry["function"]["name"] for entry in tool_specs]
         native_tools = profile.agentability_mode == "native_tools"
         structured = profile.agentability_mode == "structured_actions"
+        workspace_path = str(Path(tools.workspace).expanduser().resolve())
+        tool_manifest = hashlib.sha256(
+            json.dumps(tool_specs, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+        ).hexdigest()
         memories: list[MemoryRecord] = []
-        if self.memory_store is not None:
-            try:
-                memories = self.memory_store.recall(
-                    task,
-                    [("user", "default"), ("project", str(tools.workspace)),
-                     ("agent", profile.digest or profile.model_name)],
-                    limit=6,
-                )
-                if memories:
-                    record("memory_retrieved", f"Retrieved {len(memories)} relevant local memory note(s).",
-                           memory_ids=[item.memory_id for item in memories])
-            except Exception as exc:
-                record("memory_unavailable", f"Local memory retrieval failed: {type(exc).__name__}.")
-        messages: list[dict[str, Any]] = [
-            {"role": "system", "content": self._system_prompt(
-                profile, memories, tool_specs, profile.agentability_mode
-            )},
-            {"role": "user", "content": task},
-        ]
         total_tool_calls = 0
-        record("started", f"Agent started as {profile.professional_title}.",
-               model=model, mode=profile.agentability_mode, workspace=str(tools.workspace))
+        messages: list[dict[str, Any]]
+        if resume_checkpoint is not None:
+            if self.repository is None:
+                raise RuntimeError("Run recovery requires the persistent repository.")
+            if resume_checkpoint.get("state") not in {"ready", "awaiting_model"}:
+                raise RuntimeError(
+                    "This run stopped during a tool operation. Review the last tool action and its "
+                    "side effects before starting a new run; automatic replay is blocked."
+                )
+            payload = resume_checkpoint.get("payload")
+            if not isinstance(payload, dict) or payload.get("version") != 1:
+                raise ValueError("Unsupported or malformed agent checkpoint version.")
+            expected = {
+                "model_name": model,
+                "model_digest": profile.digest,
+                "agent_title": profile.professional_title,
+                "workspace": workspace_path,
+                "harness_mode": profile.agentability_mode,
+                "tool_manifest_sha256": tool_manifest,
+            }
+            mismatches = [
+                key for key, value in expected.items()
+                if resume_checkpoint.get(key) != value
+            ]
+            if mismatches:
+                raise ValueError(
+                    "Cannot resume because the execution binding changed: "
+                    + ", ".join(mismatches)
+                )
+            if payload.get("task") != str(_sanitize_event_value(task)):
+                raise ValueError("Cannot resume because the saved task does not match this request.")
+            raw_messages = payload.get("messages")
+            if (
+                not isinstance(raw_messages, list)
+                or len(raw_messages) < 2
+                or not all(isinstance(item, dict) for item in raw_messages)
+            ):
+                raise ValueError("The saved checkpoint does not contain a valid conversation.")
+            messages = raw_messages
+            start_step = max(1, int(resume_checkpoint.get("step", 0)) + 1)
+            total_tool_calls = int(resume_checkpoint.get("tool_calls", 0))
+            created_at = str(resume_checkpoint.get("created_at") or created_at)
+            trace = [
+                AgentEvent(
+                    str(item.get("kind") or "event"),
+                    str(item.get("message") or ""),
+                    item.get("data") if isinstance(item.get("data"), dict) else {},
+                    str(item.get("timestamp") or utc_now()),
+                )
+                for item in self.repository.list_run_events(run_id)
+            ]
+            record(
+                "resumed",
+                "Resumed from an integrity-checked safe execution boundary.",
+                checkpoint_state=resume_checkpoint.get("state"),
+                next_step=start_step,
+            )
+        else:
+            if self.memory_store is not None:
+                try:
+                    memories = self.memory_store.recall(
+                        task,
+                        [("user", "default"), ("project", workspace_path),
+                         ("agent", profile.digest or profile.model_name)],
+                        limit=6,
+                    )
+                    if memories:
+                        record("memory_retrieved", f"Retrieved {len(memories)} relevant local memory note(s).",
+                               memory_ids=[item.memory_id for item in memories])
+                except Exception as exc:
+                    record("memory_unavailable", f"Local memory retrieval failed: {type(exc).__name__}.")
+            messages = [
+                {"role": "system", "content": self._system_prompt(
+                    profile, memories, tool_specs, profile.agentability_mode
+                )},
+                {"role": "user", "content": task},
+            ]
+            record("started", f"Agent started as {profile.professional_title}.",
+                   model=model, mode=profile.agentability_mode, workspace=workspace_path)
 
-        for step in range(1, self.max_steps + 1):
+        def persist_checkpoint(
+            state: str,
+            completed_step: int,
+            *,
+            pending_tool: dict[str, Any] | None = None,
+        ) -> None:
+            if self.repository is None:
+                return
+            # Preserve the system contract and original objective, plus the most recent
+            # bounded working set. Credentials are redacted before SQLite persistence.
+            recent_messages = [messages[0], messages[1], *messages[2:][-98:]]
+            snapshot = {
+                "version": 1,
+                "task": str(_sanitize_event_value(task)),
+                "messages": _sanitize_event_value(recent_messages),
+                "pending_tool": _sanitize_event_value(pending_tool) if pending_tool else None,
+            }
+            self.repository.save_run_checkpoint(
+                run_id=run_id,
+                model_name=model,
+                model_digest=profile.digest,
+                agent_title=profile.professional_title,
+                workspace=workspace_path,
+                harness_mode=profile.agentability_mode,
+                tool_manifest_sha256=tool_manifest,
+                state=state,
+                step=completed_step,
+                tool_calls=total_tool_calls,
+                payload=snapshot,
+                created_at=created_at,
+                updated_at=utc_now(),
+            )
+
+        for step in range(start_step, start_step + self.max_steps):
             if cancel_event is not None and cancel_event.is_set():
                 record("cancelled", "Agent cancellation acknowledged before the next provider request.")
                 return finish("cancelled", "Execution was cancelled by the user.", step - 1)
