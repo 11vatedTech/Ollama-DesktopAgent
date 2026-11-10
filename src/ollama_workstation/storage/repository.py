@@ -58,6 +58,25 @@ class Repository:
                 );
                 CREATE INDEX IF NOT EXISTS idx_agent_run_events_time
                     ON agent_run_events(run_id, created_at);
+                CREATE TABLE IF NOT EXISTS agent_run_checkpoints (
+                    run_id TEXT PRIMARY KEY,
+                    model_name TEXT NOT NULL,
+                    model_digest TEXT NOT NULL,
+                    agent_title TEXT NOT NULL,
+                    workspace TEXT NOT NULL,
+                    harness_mode TEXT NOT NULL,
+                    tool_manifest_sha256 TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    step INTEGER NOT NULL,
+                    tool_calls INTEGER NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    payload_sha256 TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(run_id) REFERENCES agent_runs(run_id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_agent_run_checkpoints_state
+                    ON agent_run_checkpoints(state, updated_at DESC);
                 CREATE TABLE IF NOT EXISTS conversations (
                     conversation_id TEXT PRIMARY KEY, model_name TEXT NOT NULL, title TEXT NOT NULL,
                     updated_at TEXT NOT NULL, messages_json TEXT NOT NULL
@@ -274,3 +293,108 @@ class Repository:
                 "WHERE memory_id=? AND archived=0", (memory_id,)
             )
             return cursor.rowcount > 0
+
+
+    def save_run_checkpoint(
+        self,
+        *,
+        run_id: str,
+        model_name: str,
+        model_digest: str,
+        agent_title: str,
+        workspace: str,
+        harness_mode: str,
+        tool_manifest_sha256: str,
+        state: str,
+        step: int,
+        tool_calls: int,
+        payload: dict[str, Any],
+        created_at: str,
+        updated_at: str,
+    ) -> None:
+        """Atomically persist a bounded, integrity-checked safe-boundary snapshot."""
+        if state not in {"ready", "awaiting_model", "tool_in_progress", "needs_review"}:
+            raise ValueError(f"Unsupported run checkpoint state: {state}")
+        if step < 0 or tool_calls < 0:
+            raise ValueError("Checkpoint counters cannot be negative")
+        payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+        if len(payload_json.encode("utf-8")) > 1_000_000:
+            raise ValueError("Agent run checkpoint exceeds the 1 MB persistence limit")
+        payload_sha256 = __import__("hashlib").sha256(payload_json.encode("utf-8")).hexdigest()
+        with self._connection() as db:
+            db.execute(
+                """INSERT INTO agent_run_checkpoints(
+                    run_id,model_name,model_digest,agent_title,workspace,harness_mode,
+                    tool_manifest_sha256,state,step,tool_calls,payload_json,payload_sha256,
+                    created_at,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(run_id) DO UPDATE SET
+                    model_name=excluded.model_name, model_digest=excluded.model_digest,
+                    agent_title=excluded.agent_title, workspace=excluded.workspace,
+                    harness_mode=excluded.harness_mode,
+                    tool_manifest_sha256=excluded.tool_manifest_sha256,
+                    state=excluded.state, step=excluded.step, tool_calls=excluded.tool_calls,
+                    payload_json=excluded.payload_json, payload_sha256=excluded.payload_sha256,
+                    updated_at=excluded.updated_at""",
+                (run_id, model_name, model_digest, agent_title, workspace, harness_mode,
+                 tool_manifest_sha256, state, step, tool_calls, payload_json,
+                 payload_sha256, created_at, updated_at),
+            )
+
+    def get_run_checkpoint(self, run_id: str) -> dict[str, Any] | None:
+        """Load and integrity-check one run checkpoint."""
+        with self._connection() as db:
+            row = db.execute(
+                """SELECT run_id,model_name,model_digest,agent_title,workspace,harness_mode,
+                          tool_manifest_sha256,state,step,tool_calls,payload_json,payload_sha256,
+                          created_at,updated_at
+                   FROM agent_run_checkpoints WHERE run_id=?""",
+                (run_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        import hashlib
+
+        encoded = str(row["payload_json"])
+        digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+        if digest != row["payload_sha256"]:
+            raise ValueError(f"Run checkpoint integrity check failed for {run_id}")
+        return {
+            "run_id": row["run_id"], "model_name": row["model_name"],
+            "model_digest": row["model_digest"], "agent_title": row["agent_title"],
+            "workspace": row["workspace"], "harness_mode": row["harness_mode"],
+            "tool_manifest_sha256": row["tool_manifest_sha256"], "state": row["state"],
+            "step": row["step"], "tool_calls": row["tool_calls"],
+            "payload": json.loads(encoded), "payload_sha256": row["payload_sha256"],
+            "created_at": row["created_at"], "updated_at": row["updated_at"],
+        }
+
+    def list_run_checkpoints(self, limit: int = 100) -> list[dict[str, Any]]:
+        """List checkpoint metadata without loading conversation payloads."""
+        bounded = max(1, min(int(limit), 500))
+        with self._connection() as db:
+            rows = db.execute(
+                """SELECT c.run_id,c.model_name,c.model_digest,c.agent_title,c.workspace,
+                          c.harness_mode,c.state,c.step,c.tool_calls,c.created_at,c.updated_at,
+                          r.task,r.status
+                   FROM agent_run_checkpoints c
+                   LEFT JOIN agent_runs r ON r.run_id=c.run_id
+                   ORDER BY c.updated_at DESC LIMIT ?""",
+                (bounded,),
+            ).fetchall()
+        return [{
+            "run_id": row["run_id"], "model_name": row["model_name"],
+            "model_digest": row["model_digest"], "agent_title": row["agent_title"],
+            "workspace": row["workspace"], "harness_mode": row["harness_mode"],
+            "state": row["state"], "step": row["step"], "tool_calls": row["tool_calls"],
+            "created_at": row["created_at"], "updated_at": row["updated_at"],
+            "task": row["task"], "run_status": row["status"],
+        } for row in rows]
+
+    def delete_run_checkpoint(self, run_id: str) -> bool:
+        with self._connection() as db:
+            cursor = db.execute(
+                "DELETE FROM agent_run_checkpoints WHERE run_id=?", (run_id,)
+            )
+            return cursor.rowcount > 0
+
