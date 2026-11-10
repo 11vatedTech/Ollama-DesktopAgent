@@ -2,47 +2,55 @@
 
 ## Security objective
 
-An agent may propose actions, but only the host application can authorize and execute them. Model output, model-card content, retrieved documents, browser pages and tool results are untrusted data.
+An agent may propose an action, but only host code can authorize and execute it. Model output, publisher model cards, retrieved memory, local documents, browser content and tool results are untrusted data.
 
-## Threat model
+The application is local-first, not automatically offline or sandboxed. A configured remote Ollama endpoint receives prompts and whatever project context the agent is permitted to read. Public model-card research is a separate, opt-in network feature.
 
-Assets include user source files, local credentials, model files, Git repositories, local services, workspaces and application state. Threat actors include malicious prompt content, hostile websites/documents, compromised model packages, confused or unreliable models, malicious MCP servers and accidental destructive tool calls.
+## Assets and threats
 
-## 0.1.0 controls
+Assets include source code, workspaces, local credentials, private keys, Git repositories, model files, local services, benchmark evidence and application state. Threats include prompt injection in documents/memory, hostile model output, compromised model packages, symlink/path escapes, malicious tool arguments, unsafe approved executables, malicious MCP servers, accidental destructive actions, stale model profiles and data disclosure to remote endpoints.
 
-- Ollama endpoint defaults to loopback (`127.0.0.1`). Users may configure another endpoint; remote endpoints are not assumed private.
-- Remote model-card research is disabled by default.
+## Implemented controls in the 0.2 development branch
+
+- Ollama defaults to loopback (127.0.0.1). A user-configured remote endpoint is not assumed private.
+- Public Hugging Face model-card research is disabled by default and requires explicit upstream-repository selection.
+- Agent execution verifies the installed model name and exact Ollama digest against the saved profile before starting.
 - Workspace paths are resolved and checked for containment before file operations.
-- File reads are limited to 64 KB and writes to 1 MB per tool call.
-- Existing-file overwrite requires host approval.
-- Shell tool is omitted from tool definitions unless explicitly enabled in settings.
-- Shell execution uses argument arrays and `shell=False`; executable must be allow-listed; a host approval callback is required; timeout is 90 seconds.
-- Agent loop has a bounded maximum step count (1–40, default 12).
-- Tool names and argument objects are checked by host code before invocation.
-- Tool output is truncated for command output.
-- SQLite state is kept in the user's local app-data directory.
+- Conventional credential/private-key locations are denied by default: .env files, credential stores, .ssh, .aws, .azure, .kube, .gnupg, secret directories and common private-key/certificate suffixes. .env.example, .env.sample and .env.template are allowed as templates. This is a heuristic deny-list, not a complete secret scanner.
+- File reads are limited to 64 KB and writes to 1 MB per call. Writes use an atomic temporary-file replacement. Existing-file overwrites require host approval.
+- Tool requests are validated by host code for registered tool name, required parameters, types, enums and unexpected properties.
+- Tool outputs are capped before being returned to the model.
+- Native tool calling, JSON-schema actions and guided ACTION/FINAL text actions use the same host tool catalogue and validation path.
+- Desktop agent runs can request cancellation. The desktop passes a cancellation event into the Ollama client; the client streams the response and closes the HTTP stream when cancellation is requested. The server-side generation may not stop instantaneously.
+- Optional command execution is disabled by default. When explicitly enabled, command names are resolved to configured executable paths, path-form model requests are rejected, shell=False is used, a host approval callback is required, the environment is reduced and a 90-second deadline is enforced.
+- Command cancellation/timeout attempts to terminate the process tree: POSIX uses a dedicated process group; Windows uses taskkill /T /F while the direct parent remains available. This is best-effort process cleanup, not an OS sandbox.
+- Local memory writes are explicit, scope-bound (user/project/agent) and validated. Recalled notes are marked as untrusted data in the system prompt and cannot grant permissions.
+- Run execution is bounded by a configured step limit. Run traces are persisted in SQLite on completion.
 
-## Known limitations in 0.1.0
+## Known limitations — not production-certified
 
-- The initial shell allow-list does not provide OS-level sandboxing. An allow-listed executable such as Python can run arbitrary code when the user explicitly approves it. Keep shell disabled for untrusted tasks.
-- File path containment has application-level checks; production hardening should use platform-specific handle-based operations to mitigate filesystem race/symlink TOCTOU cases.
-- No MCP server manager, browser automation, desktop control, secret broker or network egress firewall is exposed yet.
-- PySide UI uses a deny-by-default approval callback; advanced interactive tool approvals need a dedicated main-thread policy service before enabling shell in the desktop UI.
-- A remote Ollama endpoint can receive prompts and local project context. Treat it as a data processor and configure accordingly.
-- Prompt injection is not solved by system prompts. Every tool and adapter must enforce host-side policy.
+- The command allow-list is not a sandbox. An approved Python executable can run arbitrary code; Git and other approved binaries can also have powerful side effects. Keep command execution disabled for untrusted tasks.
+- POSIX process groups and Windows taskkill improve cleanup but do not provide a complete isolation or resource-control boundary. Windows Job Objects/AppContainer or a disposable VM/container are still required.
+- Filesystem containment uses application-level path resolution. Handle-based operations are still required to fully address filesystem race/symlink TOCTOU risks.
+- Credential path protection is a deny-list; it cannot identify every secret, encoded key, renamed credential file or application-specific vault.
+- The allow_sensitive_files constructor option exists for trusted host integrations, but the desktop does not expose it. Do not enable it for model-controlled tasks.
+- The stop action can close the active HTTP stream, but it cannot guarantee that the Ollama server immediately releases GPU memory or stops all work. Provider cancellation semantics must be verified for each supported Ollama release.
+- The runtime does not yet implement a durable checkpoint/resume protocol, OS sandbox enforcement, network egress firewall, production MCP manager, browser/computer-use controls, credential broker or signed certification.
+- Prompt injection is not solved by system prompts. Every adapter, file path and external tool needs host-side policy.
+- Remote Ollama endpoints receive prompts and local project context. Configure a remote endpoint only when its data-handling posture is acceptable.
 
 ## Production requirements before broader computer control
 
-1. Use a per-run temporary workspace/container or Windows AppContainer/Job Object strategy with restricted ACLs.
-2. Separate read, write, delete, execute, network and GUI permissions.
-3. Use typed tool schemas with argument validation and per-tool risk classification.
-4. Add human approval for destructive writes, external network actions, installs, Git pushes, credentials and application control.
-5. Store secrets outside model context; provide short-lived, scoped credential handles when necessary.
-6. Add a sanitized tool-result channel and defend against tool-output prompt injection.
-7. Record immutable audit events with user, agent, model digest, tool, approval, arguments digest, result and timestamp.
-8. Add cancellation, process-tree termination, CPU/memory/time limits and cleanup on crash.
-9. Add SBOM, dependency scanning, code signing and reproducible Windows packaging.
-10. Threat-model MCP server provenance, remote transport authentication and server capability grants.
+1. Isolate each run with an OS-enforced boundary: Windows AppContainer/Job Object restrictions or a disposable VM/container with strict ACLs.
+2. Separate read, write, delete, execute, network, GUI and credential grants.
+3. Add tool-specific risk classes and policy evaluation; require approval for destructive writes, installs, external transactions, Git pushes and application control.
+4. Store secrets outside model context; provide short-lived, scoped credential handles only when necessary.
+5. Add sanitized observations and an explicit untrusted-data boundary for files, memory and web content.
+6. Record append-only audit events for run start, model digest, tool request, policy decision, approval, execution, result and verification.
+7. Add in-flight cancellation, process-tree cleanup, CPU/RAM/disk/process-count quotas and cleanup after application crashes.
+8. Add crash-safe run checkpoints and resumable execution with model/harness/policy version binding.
+9. Add SBOM, dependency/license scanning, vulnerability review, signed installers and reproducible Windows packaging.
+10. Threat-model MCP server provenance, remote transport authentication, server capabilities and child-agent permission inheritance.
 
 ## Reporting vulnerabilities
 
