@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from ollama_workstation import __version__
+from ollama_workstation.agents.binding import validate_installed_model_binding
 from ollama_workstation.agents.identity_package import export_identity_package
 from ollama_workstation.agents.memory import MemoryStore
 from ollama_workstation.agents.runtime import AgentRuntime
@@ -113,6 +114,14 @@ def main(argv: list[str] | None = None) -> int:
             if profile is None:
                 print("Profile not found. Run 11vated profile MODEL first.", file=sys.stderr)
                 return 2
+            installed = next(
+                (item for item in ModelProfiler(client).inventory() if item.name == args.model),
+                None,
+            )
+            if installed is None:
+                print(f"Model {args.model!r} is not installed in the configured Ollama instance.", file=sys.stderr)
+                return 2
+            validate_installed_model_binding(profile, installed)
             def approve(description: str) -> bool:
                 return input(f"APPROVAL REQUIRED: {description}\nAllow? [y/N] ").strip().lower() == "y"
             tools = WorkspaceTools(args.workspace, allow_shell=settings.allow_shell_tools,
