@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import html
 import json
-from pathlib import Path
 from collections.abc import Callable
+from pathlib import Path
 
 from PySide6.QtCore import QThreadPool
 from PySide6.QtWidgets import (
