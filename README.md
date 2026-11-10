@@ -30,8 +30,8 @@ The core is provider/harness/UI separated. The desktop shell does not duplicate 
 |---|---|
 | Ollama health, model inventory, model metadata and loaded-model inspection | Implemented |
 | Local model smoke probes | Implemented; not a full benchmark suite |
-| Evidence-backed model title and role generation | Implemented; provisional pending repeated certification |
-| Opt-in Hugging Face model-card research | Implemented as a service; explicit repository linking required |
+| Evidence-backed professional title and expanded role taxonomy | Implemented; provisional pending role qualification |
+| Opt-in Hugging Face model-card research | Implemented in CLI and desktop; explicit repository selection required; lexical match is only a hint |\n| Structured publisher dossier | Implemented for model description, intended use, limitations, training/evaluation disclosures, datasets, base model, languages, license and provenance hash |\n| Repeatable smoke profiling | Implemented with 1–5 trials, pass-rate aggregation and confidence tracking; not a full benchmark suite |
 | Agent Identity Package export | Implemented |
 | Native tool-call loop | Implemented |
 | Structured JSON action fallback and guided text action fallback | Implemented |
@@ -84,7 +84,7 @@ python -m ollama_workstation
 11vated export-agent qwen2.5-coder:7b
 ```
 
-The probe suite makes several model calls and loads the selected model. It is an initial smoke-test battery, not a substitute for SWE-bench, Terminal-Bench, BFCL or statistically meaningful capability certification.
+The probe suite makes several model calls and loads the selected model. `--repeats 1..5` repeats each smoke probe and records pass rate and confidence. It remains an initial smoke-test battery, not a substitute for SWE-bench, Terminal-Bench, BFCL or statistically meaningful capability certification.
 
 ## Privacy and security
 
