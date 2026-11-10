@@ -33,6 +33,14 @@ Initial v0.1 screen:
 
 A single passed smoke test proves only that a model passed that one item once. It is not a broad ability guarantee. The v0.2 profiler supports 1–5 repeated trials per smoke dimension and stores method, attempts, pass count, confidence, duration, numeric/timing metrics, evidence and limitations. Failed trials count as zero in aggregate scores; raw model messages and tool arguments are not stored in the metric record. Full evaluation requires task samples, repeated trials, held-out tasks, adversarial cases and independent scoring.
 
+### Reproducible local benchmark runner
+
+The CLI exposes a versioned `11vated-core@1.0.0` suite through `11vated benchmark MODEL --suite core --repeats 3`. Its six synthetic deterministic items cover exact instruction compliance, arithmetic, code-trace reasoning, JSON extraction, code comprehension and planning-order constraints. Host-side evaluators independently score exact strings, numeric answers, JSON shape/value and ordered terms; the model is never asked to grade itself.
+
+The runner clamps repeats to 1–5 and writes a JSON report bound to the exact installed Ollama model digest and a SHA-256 hash of the test/prompt/evaluator manifest. Per-case results include attempts, pass counts, raw per-trial outcomes (with credential-like values filtered from previews), Wilson 95% intervals, median/p95 latency, generation throughput and a host snapshot. Errors and cancellations do not produce a certified partial report.
+
+This suite deliberately does not claim broad role qualification: six small synthetic cases are a local regression/diagnostic layer, not a replacement for audited specialist evaluations, held-out tasks, repository repair, real tool use, browser/computer use or production agent tasks. Never compare scores across suite versions or manifest hashes as though they were identical experiments.
+
 ### Operational dossier
 
 Record cold/warm load time, prompt and generation throughput, token counts, VRAM/RAM, context behavior, concurrent memory pressure and scheduling constraints. Include hardware, driver, Ollama version, model digest and benchmark configuration. The v0.2 increment adds dependency-free host snapshots (OS, CPU count, system memory) and best-effort NVIDIA telemetry through nvidia-smi, plus Ollama generation/prompt token counters, load duration and derived generation throughput. GPU telemetry is unavailable when nvidia-smi is absent; unknown values remain null rather than fabricated.
