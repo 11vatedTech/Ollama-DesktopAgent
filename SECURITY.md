@@ -35,7 +35,7 @@ Assets include source code, workspaces, local credentials, private keys, Git rep
 - Credential path protection and value redaction are heuristic deny-lists/pattern filters; they cannot identify every secret, encoded key, custom token format, renamed credential file or application-specific vault. Never treat them as a complete data-loss-prevention system.
 - The allow_sensitive_files constructor option exists for trusted host integrations, but the desktop does not expose it. Do not enable it for model-controlled tasks.
 - The stop action can close the active HTTP stream, but it cannot guarantee that the Ollama server immediately releases GPU memory or stops all work. Provider cancellation semantics must be verified for each supported Ollama release.
-- The runtime does not yet implement a durable checkpoint/resume protocol, OS sandbox enforcement, network egress firewall, production MCP manager, browser/computer-use controls, credential broker or signed certification.
+- The runtime does not yet implement a durable checkpoint/resume protocol, OS sandbox enforcement, network egress firewall, MCP OAuth/protected-resource authorization, browser/computer-use controls, credential broker or signed certification. The optional MCP client supports exact, user-configured tool grants over stdio and Streamable HTTP, but does not sandbox child servers. Do not enable untrusted MCP packages or protected remote servers.
 - Prompt injection is not solved by system prompts. Every adapter, file path and external tool needs host-side policy.
 - Remote Ollama endpoints receive prompts and local project context. Configure a remote endpoint only when its data-handling posture is acceptable.
 
@@ -50,7 +50,7 @@ Assets include source code, workspaces, local credentials, private keys, Git rep
 7. Add in-flight cancellation, process-tree cleanup, CPU/RAM/disk/process-count quotas and cleanup after application crashes.
 8. Add crash-safe run checkpoints and resumable execution with model/harness/policy version binding.
 9. Add SBOM, dependency/license scanning, vulnerability review, signed installers and reproducible Windows packaging.
-10. Threat-model MCP server provenance, remote transport authentication, server capabilities and child-agent permission inheritance.
+10. Threat-model MCP server provenance, remote transport authentication, server capabilities and child-agent permission inheritance. The current client uses explicit per-server tool-name grants and environment-variable references for stdio secrets; OAuth, custom HTTP authorization headers, resource/prompt subscriptions and an MCP server are not implemented.
 
 ## Reporting vulnerabilities
 
