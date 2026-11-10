@@ -247,6 +247,7 @@ class ModelProfiler:
 
     @staticmethod
     def _aggregate_metrics(outcomes: list[CapabilityResult]) -> dict[str, Any]:
+        """Aggregate safe numeric metrics and retain individual trial measurements."""
         keys = {key for item in outcomes for key in item.metrics}
         aggregate: dict[str, Any] = {"trials": [item.metrics for item in outcomes if item.metrics]}
         for key in keys:
@@ -261,6 +262,7 @@ class ModelProfiler:
 
     @staticmethod
     def _performance_summary(capabilities: list[CapabilityResult]) -> dict[str, Any]:
+        """Summarize probe counts, latency and observed generation throughput."""
         metrics = [item.metrics for item in capabilities if item.metrics]
         latencies = [
             item.duration_ms for item in capabilities
