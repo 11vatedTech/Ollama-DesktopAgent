@@ -125,9 +125,7 @@ class WorkspaceTools:
         """Redact common credential value patterns before text reaches model context."""
         patterns = (
             re.compile(
-                r'(?i)(\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|'
-                r'password|passwd|secret|private[_-]?key|refresh[_-]?token|'
-                r'aws[_-]?secret[_-]?access[_-]?key|database[_-]?url)\b["']?\s*[:=]\s*)(["\']?)([^"\'\s,;#}]+)'
+                r"""(?i)(\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|password|passwd|secret|private[_-]?key|refresh[_-]?token|aws[_-]?secret[_-]?access[_-]?key|database[_-]?url)\b["']?\s*[:=]\s*)(["']?)([^"'\s,;#}]+)"""
             ),
             re.compile(r"(?i)(\bBearer\s+)[A-Za-z0-9._~+/-]{10,}"),
             re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
