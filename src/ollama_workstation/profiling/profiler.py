@@ -164,7 +164,8 @@ class ModelProfiler:
             )
         passed = sum(item.status == "passed" for item in outcomes)
         attempts = len(outcomes)
-        status = "passed" if passed == attempts else "partial" if passed else "failed"
+        has_partial = any(item.status == "partial" for item in outcomes)
+        status = "passed" if passed == attempts else "partial" if passed or has_partial else "failed"
         scored = [item.score for item in outcomes if item.score is not None]
         score = (sum(scored) / len(scored)) if scored else None
         durations = [item.duration_ms for item in outcomes if item.duration_ms is not None]
