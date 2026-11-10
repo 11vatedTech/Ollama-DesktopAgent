@@ -169,7 +169,7 @@ Production execution requires:
 - MCP server provenance, transport authentication and per-server grants.
 - SBOM, dependency/license scanning, vulnerability review and signed releases.
 
-The current shell allow-list is not an OS sandbox. Keep shell disabled for untrusted tasks until sandbox enforcement is implemented and independently tested.
+The current shell allow-list is not an OS sandbox. Keep shell disabled for untrusted tasks until sandbox enforcement is implemented and independently tested. Workspace tool arguments are now checked against host-owned required fields, types, enums and additional-property rules before invocation; this is input validation, not a substitute for OS isolation.
 
 ## Competitive research register
 
@@ -204,8 +204,8 @@ These are research references, not approved runtime dependencies. For every prop
 |---|---|---|
 | G0 — Repository foundation | CI, typed boundaries, install and launch | Implemented baseline; CI must be green |
 | G1 — Model dossier | Publisher fields, source links, explicit match confirmation, hash, unknown handling | v0.2 increment implemented; needs CI and live model-card validation |
-| G2 — Empirical profiling | Repeated tests, expanded task suites, repeatability, confidence and resource metrics | Partial; smoke probes only |
-| G3 — Agentification | Protocol adapters, schema validation, bounded recovery and digest binding | Partial; initial native/structured/guided paths |
+| G2 — Empirical profiling | Repeated tests, host/GPU telemetry, expanded task suites, repeatability, confidence and resource metrics | Partial; repeated smoke probes and best-effort telemetry implemented, specialist suites remain |
+| G3 — Agentification | Protocol adapters, strict host-side tool argument validation, bounded recovery and digest binding | Partial; native/structured/guided paths and workspace tool schema validation implemented |
 | G4 — Safe execution | OS sandbox, permission broker, cancellation, audit and cleanup | Not production-ready |
 | G5 — Durable agents | Checkpointing, resumable runs, memory retrieval and event store | Not complete |
 | G6 — Multi-agent workforce | Delegation, shared state, scheduling, budgets and least privilege | Not complete |
