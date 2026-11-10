@@ -14,6 +14,10 @@ ROLE_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "research": ("structured_output", "instruction_following", "long_context"),
     "visual_analysis": ("vision",),
     "quantitative_analysis": ("mathematics", "reasoning"),
+    "data_extraction": ("data_extraction", "structured_output", "instruction_following"),
+    "creative": ("creative_writing", "instruction_following"),
+    "multilingual": ("multilingual", "instruction_following"),
+    "planning": ("planning", "reasoning", "instruction_following"),
     "general_assistance": ("instruction_following",),
 }
 
