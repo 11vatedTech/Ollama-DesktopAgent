@@ -134,13 +134,14 @@ Delegation is not a security boundary. Each child agent must receive only its ex
 | Layer | Reference suite | What it validates |
 |---|---|---|
 | Language/model tasks | Inspect AI, LM Evaluation Harness | Controlled task accuracy and scoring |
-| Function calling | BFCL / Gorilla | Tool choice, argument correctness and multi-turn use |
-| Repository engineering | SWE-bench Verified | Issue resolution against real repositories |
+| Function calling | BFCL V4 plus an independent 11vated tool suite | Tool choice, argument correctness, multi-turn and agentic use |
+| Repository engineering | SWE-bench Pro V2 (pinned protocol) plus private/held-out repository tasks | Issue resolution and regression behavior |
 | Terminal operations | Terminal-Bench, TUA-Bench | Multi-step command-line work |
-| Computer use | OSWorld | Desktop application operation |
+| Computer use | OSWorld 2.0 (exact version pinned) | Desktop application operation |
 | Browser work | Browser Use benchmark | Browser task completion |
 | Product-specific | 11Vated Agent Arena | Identity, recovery, verification, resource and autonomy behavior |
 
+Benchmark selection is version-aware. The research register documents known validity issues: do not rely on SWE-bench Verified as a headline coding measure; do not mix SWE-bench Pro v1 with V2; and treat BFCL V4 as one diagnostic signal because a September 2026 review found substantial issues in its audited sample. Every external benchmark must undergo protocol, dataset and task-quality review before it is used as a certification gate.
 ### Comparison protocol
 
 For a controlled comparison, freeze exact model digest, quantization, prompt, context budget, task set, tool manifest, environment, timeout and scorer. Compare raw chat, native tools, structured actions, guided ReAct, eligible reference harnesses and 11vated Agentification using the same inputs.
@@ -207,10 +208,10 @@ These are research references, not approved runtime dependencies. For every prop
 | G2 — Empirical profiling | Repeated tests, host/GPU telemetry, expanded task suites, repeatability, confidence and resource metrics | Partial; repeated smoke probes and best-effort telemetry implemented, specialist suites remain |
 | G3 — Agentification | Protocol adapters, strict host-side tool argument validation, bounded recovery and digest binding | Partial; native/structured/guided paths and workspace tool schema validation implemented |
 | G4 — Safe execution | OS sandbox, permission broker, cancellation, audit and cleanup | Not production-ready |
-| G5 — Durable agents | Checkpointing, resumable runs, scoped memory retrieval and event store | Partial; scoped SQLite memory, explicit project-note capture/archive and retrieval are implemented; run checkpoint/resume remains incomplete |
+| G5 — Durable agents | Checkpointing, resumable runs, scoped memory retrieval and event store | Partial; scoped SQLite memory with explicit project-note capture/archive and lexical retrieval is implemented; vector retrieval, automatic consolidation, run checkpoint/resume and crash recovery remain incomplete |
 | G6 — Multi-agent workforce | Delegation, shared state, scheduling, budgets and least privilege | Not complete |
 | G7 — Interoperability | MCP client/server, ACP and browser/computer adapters | Not complete |
-| G8 — Certification | Benchmark adapters, controlled comparisons and regression gates | Not complete |
+| G8 — Certification | Version-pinned benchmark adapters, audited tasks, controlled comparisons and regression gates | Not complete; research register establishes selection policy, no full benchmark adapter or role/agent certification yet |
 | G9 — Distribution | Signed installer, SBOM, dependency audit, upgrade/uninstall and recovery | Partial |
 
 A release may not be called production-certified until all applicable gates pass on the supported Windows hardware/software matrix. Feature presence alone is not proof of production readiness.
