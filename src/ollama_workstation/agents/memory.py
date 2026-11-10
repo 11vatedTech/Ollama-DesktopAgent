@@ -31,6 +31,7 @@ class MemoryRecord:
     access_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-serializable snapshot of this memory record."""
         return asdict(self)
 
 
@@ -40,11 +41,13 @@ class MemoryStore:
     MAX_CONTENT_CHARS = 8_000
 
     def __init__(self, repository: Repository) -> None:
+        """Create a memory service backed by the workstation repository."""
         self.repository = repository
 
     def remember(self, content: str, *, scope: str, scope_id: str,
                  category: str = "fact", tags: list[str] | None = None,
                  source: str = "user", confidence: float = 1.0) -> MemoryRecord:
+        """Persist an explicit, validated note in one named memory scope."""
         normalized = content.strip()
         if not normalized or len(normalized) > self.MAX_CONTENT_CHARS:
             raise ValueError(f"Memory content must contain 1-{self.MAX_CONTENT_CHARS} characters")
@@ -67,6 +70,7 @@ class MemoryStore:
         return record
 
     def recall(self, query: str, scopes: list[tuple[str, str]], limit: int = 6) -> list[MemoryRecord]:
+        """Rank relevant notes only within the caller-provided scopes."""
         if not scopes:
             return []
         terms = set(re.findall(r"[a-z0-9_'-]{2,}", query.casefold()))
@@ -102,7 +106,9 @@ class MemoryStore:
         return selected
 
     def list(self, scopes: list[tuple[str, str]], limit: int = 100) -> list[MemoryRecord]:
+        """List active notes in explicitly requested scopes."""
         return [MemoryRecord(**raw) for raw in self.repository.list_memories(scopes, limit=limit)]
 
     def forget(self, memory_id: str) -> bool:
+        """Archive one note so it is excluded from future retrieval."""
         return self.repository.archive_memory(memory_id)
