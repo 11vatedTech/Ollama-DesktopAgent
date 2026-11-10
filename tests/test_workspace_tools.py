@@ -129,3 +129,40 @@ def test_workspace_search_never_returns_secrets(tmp_path: Path) -> None:
     tools = WorkspaceTools(tmp_path)
     result = tools.search_text("TOP_SECRET")
     assert result["matches"] == []
+
+
+
+def test_text_outputs_redact_credentials_before_model_context(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "config.txt").write_text(
+        'API_KEY=plain-api-secret\\n'
+        '{"client_secret": "json-client-secret", "mode": "local"}\\n'
+        'Authorization: Bearer bearer-token-value-123456789\\n'
+        'AWS_ACCESS_KEY_ID=AKIA1234567890ABCDEF\\n'
+        'github=ghp_123456789012345678901234567890123456\\n',
+        encoding="utf-8",
+    )
+    tools = WorkspaceTools(workspace)
+    result = tools.read_file("config.txt")
+    assert result["secrets_redacted"] >= 5
+    assert "plain-api-secret" not in result["content"]
+    assert "json-client-secret" not in result["content"]
+    assert "bearer-token-value" not in result["content"]
+    assert "AKIA1234567890ABCDEF" not in result["content"]
+    assert "ghp_123456789012345678901234567890123456" not in result["content"]
+    assert "mode" in result["content"]
+
+
+def test_search_and_command_output_redact_sensitive_values(tmp_path: Path) -> None:
+    (tmp_path / "notes.txt").write_text(
+        "API_TOKEN=search-secret-value-123456\\n",
+        encoding="utf-8",
+    )
+    tools = WorkspaceTools(tmp_path)
+    search = tools.search_text("API_TOKEN")
+    assert search["matches"]
+    assert "search-secret-value" not in search["matches"][0]["text"]
+    safe_stdout, count = tools.redact_sensitive_text("PASSWORD=command-secret-value")
+    assert count == 1
+    assert "command-secret-value" not in safe_stdout
