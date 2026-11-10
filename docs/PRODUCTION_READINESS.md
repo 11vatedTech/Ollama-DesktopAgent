@@ -82,17 +82,17 @@ The title is a proposed operational identity, not a claim about sentience, perso
 
 ### Agent Identity Package
 
-An exportable package binds:
-- Provider, exact model tag and digest.
-- Profile version and source evidence.
-- Title, mission, primary and secondary roles.
-- Capability scores, attempts, confidence and methods.
-- Selected harness and its qualification state.
-- Tool grants and workspace scope.
-- Memory policy and resource envelope.
-- Known limitations and certification evidence.
+The current schema-1.0 exporter emits:
+- Package type, schema version and creation timestamp.
+- Identity title, primary/secondary specialization, recommended role keys, rationale and confidence.
+- Ollama provider, model name, digest, family, parameter size and quantization.
+- Agentability mode/status and the default permission label.
+- Capability name, status, score, confidence, method, metrics, evidence and limitations.
+- Publisher/origin evidence, known limitations and profile version.
 
-A package must not silently grant permissions. Importing an agent identity never authorizes shell, browser, network, desktop or secret access.
+The current exporter does **not** include capability attempt/pass counts, a concrete tool-grant manifest, an assigned workspace, a memory policy, a resource envelope, or a signed certification record. Those are planned package-version fields, not recoverable from the current export.
+
+A package must not silently grant permissions. The current default permission label is descriptive metadata; it is not an imported authorization. Importing an agent identity never authorizes shell, browser, network, desktop or secret access.
 
 ## Universal Agentification Engine
 
@@ -106,7 +106,7 @@ The engine evaluates protocols rather than assuming all models implement native 
 4. Shell-oriented harness only inside an OS-enforced sandbox and with explicit grants.
 5. Code-action harness only in a disposable isolated execution environment.
 
-The chosen harness is bound to a specific model digest, Ollama version, prompt/schema version, tool manifest, policy version and environment. A model update invalidates affected qualification records.
+A production qualification record must bind a chosen harness to a specific model digest, Ollama version, prompt/schema version, tool manifest, policy version and environment. The v0.2 CLI and desktop run paths now compare the currently installed Ollama digest with the saved profile digest and refuse execution when either digest is missing or they differ. Ollama-version, prompt/schema, tool-manifest, policy-version and environment-based qualification invalidation remain planned because the current profile does not yet store a complete harness certification record. Re-profile after replacing or updating a model artifact.
 
 ### Execution lifecycle
 
@@ -125,9 +125,9 @@ Required runtime properties:
 
 ### Workforce composition
 
-The workforce matcher ranks available agents by verified role suitability, task requirements, context fit, tool grants, latency, memory budget, hardware constraints and historical reliability. It must expose why an agent was selected and why alternatives were rejected.
+The current WorkforceMatcher ranks saved model profiles for a requested canonical identity role using observed capability scores, sample confidence and evidence coverage. It returns a provisional score and missing capability list. It does not currently consider tool grants, context-window fit, latency, memory budgets, hardware constraints or historical reliability, and it does not yet provide a full selection/rejection explanation. Those are planned workforce-scheduler inputs.
 
-Delegation is not a security boundary. Each child agent receives only its explicitly granted tools and workspace scope. The orchestrator cannot elevate a child agent's privileges.
+Delegation is not a security boundary. Each child agent must receive only its explicitly granted tools and workspace scope. The orchestrator must not be able to elevate a child agent's privileges.
 
 ## Benchmark architecture
 
