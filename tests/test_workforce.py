@@ -1,6 +1,7 @@
 from ollama_workstation.agents.workforce import WorkforceMatcher
 from ollama_workstation.models.schemas import CapabilityResult, ModelProfile
 
+
 def test_workforce_matcher_prefers_evidence_and_exposes_missing_data() -> None:
     profiles = [
         ModelProfile(model_name="coder", digest="1", generated_at="now", professional_title="Coder",
