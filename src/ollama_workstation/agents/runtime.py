@@ -114,12 +114,18 @@ class AgentRuntime:
                     return finish("context_limit", "Stopped because task context exceeded the safe runtime budget.", step - 1)
             record("thinking", f"Requesting model response ({step}/{self.max_steps}).", step=step)
             try:
-                response = self.client.chat(
-                    model, messages, tools=tool_specs if native_tools else None,
-                    output_format=self._action_schema(tool_names) if structured else None,
-                    keep_alive=self.keep_alive,
-                )
+                request_options: dict[str, Any] = {
+                    "tools": tool_specs if native_tools else None,
+                    "output_format": self._action_schema(tool_names) if structured else None,
+                    "keep_alive": self.keep_alive,
+                }
+                if cancel_event is not None:
+                    request_options["cancel_event"] = cancel_event
+                response = self.client.chat(model, messages, **request_options)
             except Exception as exc:
+                if cancel_event is not None and cancel_event.is_set():
+                    record("cancelled", "Agent cancellation interrupted the active Ollama request.")
+                    return finish("cancelled", "Execution was cancelled by the user.", step - 1)
                 record("error", f"Ollama request failed: {exc}")
                 return finish("failed", str(exc), step - 1)
 
