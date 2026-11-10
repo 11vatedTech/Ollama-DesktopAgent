@@ -17,7 +17,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[desktop,dev]" pyinstaller
       - name: Build executable
-        run: pyinstaller --noconfirm --clean --windowed --name 11vated-Intelligence --paths src -m ollama_workstation
+        run: pyinstaller --noconfirm --clean --windowed --name 11vated-Intelligence --paths src --collect-all PySide6 --collect-all shiboken6 src/ollama_workstation/__main__.py
       - name: Upload package
         uses: actions/upload-artifact@v4
         with:
