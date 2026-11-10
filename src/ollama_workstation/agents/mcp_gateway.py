@@ -208,6 +208,8 @@ class MCPServerConnection:
         self.ready_timeout_seconds = ready_timeout_seconds
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._serve_task: asyncio.Task[None] | None = None
+        self._close_requested = threading.Event()
         self._client: Any = None
         self._stop_event: asyncio.Event | None = None
         self._ready = threading.Event()
@@ -253,7 +255,12 @@ class MCPServerConnection:
         self._loop = loop
         asyncio.set_event_loop(loop)
         try:
-            loop.run_until_complete(self._serve())
+            self._serve_task = loop.create_task(self._serve())
+            if self._close_requested.is_set():
+                self._serve_task.cancel()
+            loop.run_until_complete(self._serve_task)
+        except asyncio.CancelledError:
+            pass
         except BaseException as exc:
             self._error = exc
             self._ready.set()
@@ -284,6 +291,8 @@ class MCPServerConnection:
                 self._tools = tools
                 self._ready.set()
                 await self._stop_event.wait()
+        except asyncio.CancelledError:
+            raise
         except BaseException as exc:
             self._error = exc
             self._ready.set()
@@ -321,11 +330,12 @@ class MCPServerConnection:
         if self._closed:
             return
         self._closed = True
+        self._close_requested.set()
         if self._loop is not None and self._thread is not None:
             if self._stop_event is not None:
                 self._loop.call_soon_threadsafe(self._stop_event.set)
-            else:
-                self._loop.call_soon_threadsafe(self._loop.stop)
+            if self._serve_task is not None:
+                self._loop.call_soon_threadsafe(self._serve_task.cancel)
             self._thread.join(timeout=5.0)
             if self._thread.is_alive():
                 self._loop.call_soon_threadsafe(self._loop.stop)
