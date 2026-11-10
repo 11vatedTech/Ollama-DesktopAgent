@@ -9,6 +9,7 @@ from typing import Any
 
 from ollama_workstation import __version__
 from ollama_workstation.agents.identity_package import export_identity_package
+from ollama_workstation.agents.memory import MemoryStore
 from ollama_workstation.agents.runtime import AgentRuntime
 from ollama_workstation.agents.tools import WorkspaceTools
 from ollama_workstation.config import AppPaths, load_settings
@@ -117,7 +118,7 @@ def main(argv: list[str] | None = None) -> int:
             tools = WorkspaceTools(args.workspace, allow_shell=settings.allow_shell_tools,
                                    allowed_commands=settings.allowed_commands, approval=approve)
             result = AgentRuntime(client, max_steps=args.max_steps, keep_alive=settings.keep_alive,
-                                  repository=repository).run(
+                                  repository=repository, memory_store=MemoryStore(repository)).run(
                 args.model, profile, args.task, tools,
                 event=lambda item: print(f"[{item.kind}] {item.message}", file=sys.stderr))
             print(result.final_message)
