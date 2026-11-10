@@ -32,10 +32,12 @@ class HuggingFaceResearcher:
     """Searches public Hugging Face metadata; it does not infer training data."""
 
     def __init__(self, timeout: float = 12.0) -> None:
+        """Configure bounded public metadata requests."""
         self.timeout = timeout
 
     @staticmethod
     def _search_term(ollama_name: str) -> str:
+        """Normalize a local Ollama tag into a broad upstream search term."""
         base = ollama_name.split(":", 1)[0]
         return re.sub(r"[^a-zA-Z0-9._-]+", " ", base).strip()
 
@@ -63,6 +65,7 @@ class HuggingFaceResearcher:
         return score, reasons
 
     def search_candidates(self, ollama_name: str, limit: int = 8) -> list[ModelCardCandidate]:
+        """Find public repository candidates and rank them using name hints only."""
         term = self._search_term(ollama_name)
         try:
             response = httpx.get(
@@ -70,7 +73,7 @@ class HuggingFaceResearcher:
                 params={"search": term, "limit": max(1, min(limit, 20)),
                         "sort": "downloads", "direction": "-1"},
                 timeout=self.timeout,
-                headers={"User-Agent": "11vated-Ollama-Workstation/0.2.0"},
+                headers={"User-Agent": "11vated-Ollama-Workstation/0.2.0.dev0"},
             )
             response.raise_for_status()
             data = response.json()
@@ -93,6 +96,7 @@ class HuggingFaceResearcher:
         return result
 
     def fetch_model_card(self, repository_id: str) -> dict[str, Any]:
+        """Fetch bounded publisher metadata and README text for a selected repo."""
         if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository_id):
             raise ValueError("Expected a Hugging Face repository identifier such as org/model")
         api = f"https://huggingface.co/api/models/{repository_id}"
