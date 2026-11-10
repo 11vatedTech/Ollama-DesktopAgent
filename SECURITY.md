@@ -19,20 +19,20 @@ Assets include source code, workspaces, local credentials, private keys, Git rep
 - Conventional credential/private-key locations are denied by default: .env files, credential stores, .ssh, .aws, .azure, .kube, .gnupg, secret directories and common private-key/certificate suffixes. .env.example, .env.sample and .env.template are allowed as templates. This is a heuristic deny-list, not a complete secret scanner.
 - File reads are limited to 64 KB and writes to 1 MB per call. Writes use an atomic temporary-file replacement. Existing-file overwrites require host approval.
 - Tool requests are validated by host code for registered tool name, required parameters, types, enums and unexpected properties.
-- Tool outputs are capped before being returned to the model.
+- Tool outputs are capped before being returned to the model. Common credential-value patterns are heuristically redacted from text files, search snippets and command output. The same redaction is applied to saved memory notes, persisted run objectives/event payloads and final CLI/desktop responses. Placeholder values such as replace-me remain visible.
 - Native tool calling, JSON-schema actions and guided ACTION/FINAL text actions use the same host tool catalogue and validation path.
 - Desktop agent runs can request cancellation. The desktop passes a cancellation event into the Ollama client; the client streams the response and closes the HTTP stream when cancellation is requested. The server-side generation may not stop instantaneously.
 - Optional command execution is disabled by default. When explicitly enabled, command names are resolved to configured executable paths, path-form model requests are rejected, shell=False is used, a host approval callback is required, the environment is reduced and a 90-second deadline is enforced.
 - Command cancellation/timeout attempts to terminate the process tree: POSIX uses a dedicated process group; Windows uses taskkill /T /F while the direct parent remains available. This is best-effort process cleanup, not an OS sandbox.
-- Local memory writes are explicit, scope-bound (user/project/agent) and validated. Recalled notes are marked as untrusted data in the system prompt and cannot grant permissions.
-- Run execution is bounded by a configured step limit. Run traces are persisted in SQLite on completion.
+- Local memory writes are explicit, scope-bound (user/project/agent), credential-redacted and validated. Recalled notes are marked as untrusted data in the system prompt and cannot grant permissions.
+- Run execution is bounded by a configured step limit. Ordered events are journaled to SQLite during execution; crash-interrupted runs remain visible with a running status. The journal is not tamper-proof, and it is not a resumable checkpoint.
 
 ## Known limitations — not production-certified
 
 - The command allow-list is not a sandbox. An approved Python executable can run arbitrary code; Git and other approved binaries can also have powerful side effects. Keep command execution disabled for untrusted tasks.
 - POSIX process groups and Windows taskkill improve cleanup but do not provide a complete isolation or resource-control boundary. Windows Job Objects/AppContainer or a disposable VM/container are still required.
 - Filesystem containment uses application-level path resolution. Handle-based operations are still required to fully address filesystem race/symlink TOCTOU risks.
-- Credential path protection is a deny-list; it cannot identify every secret, encoded key, renamed credential file or application-specific vault.
+- Credential path protection and value redaction are heuristic deny-lists/pattern filters; they cannot identify every secret, encoded key, custom token format, renamed credential file or application-specific vault. Never treat them as a complete data-loss-prevention system.
 - The allow_sensitive_files constructor option exists for trusted host integrations, but the desktop does not expose it. Do not enable it for model-controlled tasks.
 - The stop action can close the active HTTP stream, but it cannot guarantee that the Ollama server immediately releases GPU memory or stops all work. Provider cancellation semantics must be verified for each supported Ollama release.
 - The runtime does not yet implement a durable checkpoint/resume protocol, OS sandbox enforcement, network egress firewall, production MCP manager, browser/computer-use controls, credential broker or signed certification.
