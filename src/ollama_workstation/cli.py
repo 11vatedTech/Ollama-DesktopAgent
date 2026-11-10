@@ -100,6 +100,8 @@ def main(argv: list[str] | None = None) -> int:
                 "run_id": report.run_id,
                 "model": report.model_name,
                 "digest": report.model_digest,
+                "ollama_version": report.ollama_version,
+                "inference_options": report.inference_options,
                 "suite": f"{report.suite_id}@{report.suite_version}",
                 "score": report.score,
                 "passed": report.total_passed,
