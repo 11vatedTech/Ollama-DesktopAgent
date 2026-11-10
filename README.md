@@ -24,7 +24,7 @@ Ollama supplies local inference. This workstation provides the operational syste
 
 The core is provider/harness/UI separated. The desktop shell does not duplicate inference or tool policy. Read [Architecture](docs/ARCHITECTURE.md), [Model Intelligence](docs/MODEL_INTELLIGENCE.md), [Benchmarking](docs/BENCHMARKING.md) and the [competitive research register](docs/research/COMPETITIVE_RESEARCH.md).
 
-## Implemented in 0.1.0
+## Implemented in the current development branch (pre-release v0.2)
 
 | Capability | Status |
 |---|---|
@@ -40,10 +40,10 @@ The core is provider/harness/UI separated. The desktop shell does not duplicate 
 | Structured JSON action fallback and guided text action fallback | Implemented |
 | Workspace-scoped file tools | Implemented with path containment, size limits and host-side JSON argument validation |
 | Optional allow-listed shell tool | Implemented but disabled by default; approval required |
-| SQLite profile, conversation and run persistence | Implemented |
+| SQLite profile, conversation, run and scoped-memory persistence | Implemented; project memory can be captured, recalled and archived |
 | PySide6 desktop shell and headless CLI | Implemented; actual Windows/Qt runtime validation remains |
 | Evidence-based workforce ranking primitive | Implemented for software, repository, workflow, research, visual, quantitative, data, creative, multilingual and planning roles; qualification is explicit |
-| Full MCP client/server ecosystem, browser/computer-use adapters, durable multi-agent scheduler, memory retrieval, full benchmark adapters and model-card provenance automation | Roadmap |
+| Full MCP client/server ecosystem, browser/computer-use adapters, durable resumable runs, dynamic multi-agent scheduler, specialist benchmark adapters and role/agent certification | Roadmap |
 
 ## Requirements
 
@@ -93,7 +93,7 @@ The probe suite makes several model calls and loads the selected model. `--repea
 
 - Inference targets the configured Ollama endpoint.
 - Remote model research is opt-in and disabled by default.
-- No telemetry service is included in 0.1.0.
+- Hardware telemetry is local-only (system memory/CPU and best-effort NVIDIA nvidia-smi); no telemetry is uploaded to a service.
 - Models are untrusted input generators; the host validates tool calls.
 - File tools are workspace scoped and size limited.
 - Overwrites require approval.
@@ -111,7 +111,7 @@ ruff check .
 python -m compileall -q src
 ```
 
-CI is configured for Python 3.11/3.12 on Windows and Ubuntu. The Windows packaging workflow builds a PyInstaller distribution. CI must still run on GitHub before a release can be certified.
+CI is configured for Python 3.11/3.12 on Windows and Ubuntu. The current development branch has passed compile, Ruff, test and Windows desktop-import jobs (36 tests in the latest completed run). The Windows packaging workflow builds a PyInstaller distribution; installer signing and release certification remain open gates.
 
 ## Research sources
 
