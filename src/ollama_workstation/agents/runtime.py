@@ -88,7 +88,7 @@ class AgentRuntime:
             if self.repository is not None:
                 try:
                     self.repository.append_run_event(
-                        run_id, model, profile.professional_title, task,
+                        run_id, model, profile.professional_title, _sanitize_event_value(task),
                         {
                             "kind": item.kind,
                             "message": item.message,
