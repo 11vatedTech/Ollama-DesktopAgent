@@ -196,8 +196,9 @@ class WorkspaceTools:
     def run_command(self, command: str, args: list[str] | None = None,
                     cwd: str = ".") -> dict[str, Any]:
         """Run one exact allow-listed executable; never resolve model input as a path."""
-        alias = Path(command).name.lower()
-        if (not self.allow_shell or command != alias and command != Path(command).name
+        alias = command.lower()
+        if (not self.allow_shell or not command or command != command.strip()
+                or "/" in command or "\\" in command
                 or alias not in self.allowed_command_paths):
             raise ToolError("Command execution is disabled or the executable is not allow-listed")
         executable = self.allowed_command_paths[alias]
