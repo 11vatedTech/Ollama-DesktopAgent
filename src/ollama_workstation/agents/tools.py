@@ -125,16 +125,16 @@ class WorkspaceTools:
         """Redact common credential value patterns before text reaches model context."""
         patterns = (
             re.compile(
-                r'(?i)(\\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|'
+                r'(?i)(\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|'
                 r'password|passwd|secret|private[_-]?key|refresh[_-]?token|'
-                r'aws[_-]?secret[_-]?access[_-]?key|database[_-]?url)\\b\\s*[:=]\\s*)(["\']?)([^"\'\\s,;#}]+)'
+                r'aws[_-]?secret[_-]?access[_-]?key|database[_-]?url)\b\s*[:=]\s*)(["\']?)([^"\'\s,;#}]+)'
             ),
-            re.compile(r"(?i)(\\bBearer\\s+)[A-Za-z0-9._~+/-]{10,}"),
-            re.compile(r"\\bAKIA[0-9A-Z]{16}\\b"),
-            re.compile(r"\\bgh[pousr]_[A-Za-z0-9_]{20,}\\b"),
-            re.compile(r"\\bgithub_pat_[A-Za-z0-9_]{20,}\\b"),
-            re.compile(r"\\bAIza[0-9A-Za-z_-]{30,}\\b"),
-            re.compile(r"\\beyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\b"),
+            re.compile(r"(?i)(\bBearer\s+)[A-Za-z0-9._~+/-]{10,}"),
+            re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+            re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{20,}\b"),
+            re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
+            re.compile(r"\bAIza[0-9A-Za-z_-]{30,}\b"),
+            re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"),
             re.compile(
                 r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----",
                 re.DOTALL,
@@ -149,7 +149,7 @@ class WorkspaceTools:
                     redacted,
                 )
             elif index == 1:
-                redacted, replacements = pattern.subn(r"\\1[REDACTED]", redacted)
+                redacted, replacements = pattern.subn(r"\1[REDACTED]", redacted)
             else:
                 redacted, replacements = pattern.subn("[REDACTED]", redacted)
             count += replacements
