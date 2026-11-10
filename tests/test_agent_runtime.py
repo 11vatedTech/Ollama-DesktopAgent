@@ -42,6 +42,9 @@ def test_native_tool_agent_inspects_workspace_and_persists_trace(tmp_path: Path)
     assert journal[0]["kind"] == "started"
     assert journal[-1]["kind"] == "completed"
     assert len(journal) == len(result.trace)
+    tool_started = next(item for item in journal if item["kind"] == "tool_started")
+    assert tool_started["data"]["argument_keys"] == ["path"]
+    assert "arguments" not in tool_started["data"]
     assert client.payloads[0]["tools"]
 
 def test_guided_agent_can_use_action_text_fallback(tmp_path: Path) -> None:
