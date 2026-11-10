@@ -16,7 +16,6 @@ from ollama_workstation.agents.tools import WorkspaceTools
 from ollama_workstation.benchmarking.catalog import get_suite
 from ollama_workstation.benchmarking.models import (
     BenchmarkAttempt,
-    BenchmarkCase,
     BenchmarkCaseResult,
     BenchmarkRun,
 )
@@ -106,9 +105,15 @@ class BenchmarkRunner:
                     elapsed = (time.perf_counter() - started) * 1000.0
                     eval_count = response.get("eval_count")
                     eval_duration = response.get("eval_duration")
+                    try:
+                        numeric_eval_count = float(eval_count)
+                        numeric_eval_duration = float(eval_duration)
+                    except (TypeError, ValueError):
+                        numeric_eval_count = 0.0
+                        numeric_eval_duration = 0.0
                     speed = (
-                        float(eval_count) / (float(eval_duration) / 1_000_000_000)
-                        if eval_count and eval_duration else None
+                        numeric_eval_count / (numeric_eval_duration / 1_000_000_000)
+                        if numeric_eval_count > 0 and numeric_eval_duration > 0 else None
                     )
                     attempts.append(BenchmarkAttempt(
                         attempt=trial,
@@ -121,13 +126,16 @@ class BenchmarkRunner:
                 except BenchmarkCancelled:
                     raise
                 except Exception as exc:
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise BenchmarkCancelled("Benchmark cancelled during an Ollama request.") from exc
                     elapsed = (time.perf_counter() - started) * 1000.0
+                    safe_error, _ = WorkspaceTools.redact_sensitive_text(str(exc)[:500])
                     attempts.append(BenchmarkAttempt(
                         attempt=trial,
                         passed=False,
                         duration_ms=elapsed,
                         output_preview="",
-                        error=f"{type(exc).__name__}: {str(exc)[:500]}",
+                        error=f"{type(exc).__name__}: {safe_error}",
                     ))
 
             passed_count = sum(item.passed for item in attempts)
