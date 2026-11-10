@@ -38,12 +38,13 @@ The core is provider/harness/UI separated. The desktop shell does not duplicate 
 | Agent Identity Package export | Implemented |
 | Native tool-call loop | Implemented |
 | Structured/guided tool catalogue and action contracts | Implemented; host validation required before execution |
-| Streaming cancellation and command cleanup | Desktop can close in-flight Ollama streams; command cancellation uses process-group/taskkill cleanup, best-effort only |
+| Streaming cancellation and command cleanup | Desktop closes active Ollama streams; commands use best-effort process-group/taskkill cleanup, not OS isolation |
+| Durable run journal and Run History UI | Ordered SQLite events are written during execution; desktop history shows completed and crash-interrupted runs |
 | Structured JSON action fallback and guided text action fallback | Implemented |
-| Workspace-scoped file tools | Implemented with path containment, size limits, host-side JSON argument validation and default credential/private-key path denial |
+| Workspace-scoped file tools | Implemented with containment, size limits, host schemas, credential-path denial and heuristic secret-value redaction before model context |
 | Optional allow-listed command tool | Implemented but disabled by default; configured executable resolution and human approval required; not a sandbox |
-| SQLite profile, conversation, run and scoped-memory persistence | Implemented; scoped notes support explicit capture, lexical retrieval, listing and archive. Agent events are durably journaled as they occur; run resume/checkpointing and embeddings remain open |
-| PySide6 desktop shell and headless CLI | Implemented; Windows desktop import passes in CI; full GUI workflow QA on supported hardware remains |
+| SQLite profile, conversation, run and scoped-memory persistence | Implemented; explicit scoped notes, lexical recall/archive, per-event durable run journal and Run History UI. Resume/checkpointing and embeddings remain open |
+| PySide6 desktop shell and headless CLI | Implemented with Model Intelligence, Agent Workspace, Run History and Settings pages; Windows desktop import passes in CI; full interactive QA on supported hardware remains |
 | Evidence-based workforce ranking primitive | Implemented for software, repository, workflow, research, visual, quantitative, data, creative, multilingual and planning roles; qualification is explicit |
 | Full MCP client/server ecosystem, browser/computer-use adapters, durable resumable runs, dynamic multi-agent scheduler, specialist benchmark adapters and role/agent certification | Roadmap |
 
@@ -100,7 +101,7 @@ The probe suite makes several model calls and loads the selected model. `--repea
 - File tools are workspace scoped and size limited.
 - Overwrites require approval.
 - Shell execution is disabled by default; when enabled it is allow-listed, approval-gated, uses no `shell=True`, and is time limited.
-- No unrestricted browser, desktop-control, network or arbitrary Python-evaluation tool is exposed in this development increment. Shell stays disabled in the desktop agent.
+- Credential-like values are heuristically redacted from workspace file/search output, command output, explicit memory, persisted task descriptions, event payloads and final agent responses. This is not a substitute for an OS secret broker or a complete secret scanner. No unrestricted browser, desktop-control, network or arbitrary Python-evaluation tool is exposed in this development increment. Command execution stays disabled in the desktop agent.
 
 Read [SECURITY.md](SECURITY.md) before enabling command execution or using sensitive workspaces. The desktop stop button closes the active streamed Ollama request and is checked between tool operations. Command termination is best-effort; this does not replace OS-level run isolation.
 
