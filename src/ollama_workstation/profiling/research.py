@@ -180,6 +180,10 @@ def attach_model_card_evidence(profile: Any, card: dict[str, Any]) -> Any:
         "retrieved_at": datetime.now(UTC).isoformat(),
         "publisher_tags": dossier.tags,
     }
+    profile.known_limitations = [
+        item for item in profile.known_limitations
+        if not item.startswith("Publisher-disclosed: ")
+    ]
     if dossier.limitations:
         limitation = "Publisher-disclosed: " + dossier.limitations[:1200]
         if limitation not in profile.known_limitations:
