@@ -158,7 +158,8 @@ class AgentRuntime:
                 return finish("cancelled", "Execution was cancelled by the user.", step - 1)
             current_size = len(json.dumps(messages, ensure_ascii=False, default=str))
             if current_size > self.MAX_CONVERSATION_CHARS:
-                messages = [messages[0], messages[1], *messages[-8:]]
+                recent_messages = messages[2:][-8:]
+                messages = [messages[0], messages[1], *recent_messages]
                 record("context_compacted", "Older turns removed to respect the local context budget.",
                        previous_chars=current_size, retained_messages=len(messages))
                 current_size = len(json.dumps(messages, ensure_ascii=False, default=str))
