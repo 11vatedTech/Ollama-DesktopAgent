@@ -11,14 +11,47 @@ import signal
 import subprocess
 import tempfile
 import time
+from collections import deque
 from collections.abc import Callable
 from pathlib import Path
-from threading import Event
-from typing import Any
+from threading import Event, Lock, Thread
+from typing import Any, TextIO
 
 
 class ToolError(RuntimeError):
     """Raised for invalid, unauthorized or failed tool operations."""
+
+
+class _BoundedPipeCapture:
+    """Drain a subprocess pipe concurrently while retaining only a bounded tail."""
+
+    def __init__(self, max_chars: int = 256_000) -> None:
+        self.max_chars = max(1, max_chars)
+        self._chunks: deque[str] = deque()
+        self._size = 0
+        self._lock = Lock()
+
+    def drain(self, stream: TextIO) -> None:
+        try:
+            while chunk := stream.read(8192):
+                with self._lock:
+                    self._chunks.append(chunk)
+                    self._size += len(chunk)
+                    while self._size > self.max_chars and self._chunks:
+                        excess = self._size - self.max_chars
+                        first = self._chunks[0]
+                        if len(first) <= excess:
+                            self._chunks.popleft()
+                            self._size -= len(first)
+                        else:
+                            self._chunks[0] = first[excess:]
+                            self._size -= excess
+        finally:
+            stream.close()
+
+    def value(self) -> str:
+        with self._lock:
+            return "".join(self._chunks)
 
 
 class WorkspaceTools:
@@ -39,6 +72,7 @@ class WorkspaceTools:
 
     COMMAND_TIMEOUT_SECONDS = 90.0
     COMMAND_TERMINATION_GRACE_SECONDS = 2.0
+    MAX_COMMAND_CAPTURE_CHARS = 256_000
 
     def __init__(self, workspace: Path, *, allow_shell: bool = False,
                  allowed_commands: tuple[str, ...] = (),
@@ -333,23 +367,43 @@ class WorkspaceTools:
             process = subprocess.Popen(argv, **process_options)
         except OSError as exc:
             raise ToolError(f"Unable to launch approved executable: {exc}") from exc
+        if process.stdout is None or process.stderr is None:
+            self._terminate_process_tree(process)
+            raise ToolError("Command output capture could not be initialized")
+
+        stdout_capture = _BoundedPipeCapture(self.MAX_COMMAND_CAPTURE_CHARS)
+        stderr_capture = _BoundedPipeCapture(self.MAX_COMMAND_CAPTURE_CHARS)
+        readers = [
+            Thread(target=stdout_capture.drain, args=(process.stdout,), name="agent-stdout-capture", daemon=True),
+            Thread(target=stderr_capture.drain, args=(process.stderr,), name="agent-stderr-capture", daemon=True),
+        ]
+        for reader in readers:
+            reader.start()
 
         deadline = time.monotonic() + self.COMMAND_TIMEOUT_SECONDS
+        cancelled = False
+        timed_out = False
         while True:
             if self.cancel_event is not None and self.cancel_event.is_set():
+                cancelled = True
                 self._terminate_process_tree(process)
-                raise ToolError("Command execution was cancelled and its process tree was stopped")
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                self._terminate_process_tree(process)
-                raise ToolError("Command exceeded the 90-second execution limit; its process tree was stopped")
-            try:
-                stdout, stderr = process.communicate(timeout=min(0.2, remaining))
                 break
-            except subprocess.TimeoutExpired:
-                continue
-        safe_stdout, stdout_redactions = self.redact_sensitive_text(stdout[-12000:])
-        safe_stderr, stderr_redactions = self.redact_sensitive_text(stderr[-12000:])
+            if time.monotonic() >= deadline:
+                timed_out = True
+                self._terminate_process_tree(process)
+                break
+            if process.poll() is not None and not any(reader.is_alive() for reader in readers):
+                break
+            time.sleep(0.05)
+
+        for reader in readers:
+            reader.join(timeout=self.COMMAND_TERMINATION_GRACE_SECONDS)
+        if cancelled:
+            raise ToolError("Command execution was cancelled and its process tree was stopped")
+        if timed_out:
+            raise ToolError("Command exceeded the 90-second execution limit; its process tree was stopped")
+        safe_stdout, stdout_redactions = self.redact_sensitive_text(stdout_capture.value()[-12000:])
+        safe_stderr, stderr_redactions = self.redact_sensitive_text(stderr_capture.value()[-12000:])
         return {
             "command": safe_argv,
             "return_code": process.returncode,
