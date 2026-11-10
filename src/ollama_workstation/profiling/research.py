@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from difflib import SequenceMatcher
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -23,6 +24,8 @@ class ModelCardCandidate:
     tags: list[str] = field(default_factory=list)
     last_modified: str | None = None
     model_card_url: str = ""
+    match_score: float = 0.0
+    match_reasons: list[str] = field(default_factory=list)
 
 
 class HuggingFaceResearcher:
@@ -35,6 +38,27 @@ class HuggingFaceResearcher:
     def _search_term(ollama_name: str) -> str:
         base = ollama_name.split(":", 1)[0]
         return re.sub(r"[^a-zA-Z0-9._-]+", " ", base).strip()
+
+    @staticmethod
+    def candidate_match(ollama_name: str, repository_id: str) -> tuple[float, list[str]]:
+        """Return a lexical candidate hint, never an automatic identity decision."""
+        local_name = ollama_name.split(":", 1)[0].lower()
+        upstream_name = repository_id.rsplit("/", 1)[-1].lower()
+        normalize = lambda value: re.sub(r"[^a-z0-9]+", "", value)
+        local_normalized = normalize(local_name)
+        upstream_normalized = normalize(upstream_name)
+        sequence_score = SequenceMatcher(None, local_normalized, upstream_normalized).ratio()
+        local_tokens = set(re.findall(r"[a-z]+|[0-9]+", local_name))
+        upstream_tokens = set(re.findall(r"[a-z]+|[0-9]+", upstream_name))
+        union = local_tokens | upstream_tokens
+        token_score = len(local_tokens & upstream_tokens) / len(union) if union else 0.0
+        score = round(max(sequence_score, token_score), 3)
+        reasons = [
+            f"Normalized name similarity: {sequence_score:.0%}",
+            f"Token overlap: {token_score:.0%}",
+            "Heuristic only; user confirmation is required before attaching this source.",
+        ]
+        return score, reasons
 
     def search_candidates(self, ollama_name: str, limit: int = 8) -> list[ModelCardCandidate]:
         term = self._search_term(ollama_name)
@@ -60,7 +84,10 @@ class HuggingFaceResearcher:
                     tags=[str(tag) for tag in item.get("tags", [])[:50]],
                     last_modified=item.get("lastModified"),
                     model_card_url=f"https://huggingface.co/{repo_id}",
+                    match_score=self.candidate_match(ollama_name, repo_id)[0],
+                    match_reasons=self.candidate_match(ollama_name, repo_id)[1],
                 ))
+        result.sort(key=lambda candidate: (candidate.match_score, candidate.downloads), reverse=True)
         return result
 
     def fetch_model_card(self, repository_id: str) -> dict[str, Any]:
