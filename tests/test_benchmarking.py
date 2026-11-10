@@ -17,6 +17,9 @@ class FakeClient:
         self.calls: list[dict[str, Any]] = []
         self.cancel_on_call = cancel_on_call
 
+    def version(self) -> str:
+        return "0.11.2"
+
     def chat(self, model: str, messages: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
         self.calls.append({"model": model, "messages": messages, "kwargs": kwargs})
         if self.cancel_on_call:
@@ -80,6 +83,9 @@ def test_benchmark_runner_is_repeatable_and_records_a_hashed_manifest() -> None:
 
     assert report.status == "completed"
     assert report.model_digest == "sha256:local"
+    assert report.ollama_version == "0.11.2"
+    assert report.inference_options == {"temperature": 0.0}
+    assert all(call["kwargs"]["options"] == {"temperature": 0.0} for call in client.calls)
     assert report.suite_id == "11vated-core"
     assert len(report.manifest_sha256) == 64
     assert report.total_attempts == len(CORE_SUITE.cases) * 2
@@ -113,3 +119,31 @@ def test_benchmark_cancellation_stops_the_run_without_a_partial_certificate() ->
     with pytest.raises(BenchmarkCancelled, match="cancelled"):
         runner.run("fake:latest", repeats=1, cancel_event=Event())
     assert len(client.calls) == 1
+
+
+
+def test_benchmark_manifest_changes_when_inference_parameters_change() -> None:
+    first = BenchmarkRunner._manifest(
+        CORE_SUITE, 3, {
+            "keep_alive": "5m",
+            "ollama_version": "0.11.2",
+            "inference_options": {"temperature": 0.0},
+        },
+    )
+    second = BenchmarkRunner._manifest(
+        CORE_SUITE, 3, {
+            "keep_alive": "5m",
+            "ollama_version": "0.11.2",
+            "inference_options": {"temperature": 0.2},
+        },
+    )
+    assert first != second
+
+
+def test_benchmark_runner_rejects_non_numeric_or_unknown_inference_options() -> None:
+    with pytest.raises(ValueError, match="Unsupported"):
+        BenchmarkRunner._normalize_inference_options({"api_token": "never-store-me"})
+    with pytest.raises(TypeError, match="numeric"):
+        BenchmarkRunner._normalize_inference_options({"temperature": "zero"})
+    with pytest.raises(ValueError, match="finite"):
+        BenchmarkRunner._normalize_inference_options({"temperature": float("nan")})
