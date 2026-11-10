@@ -61,6 +61,9 @@ class AgentResult:
 class AgentRuntime:
     MAX_TOOL_RESULT_CHARS = 12_000
     MAX_CONVERSATION_CHARS = 240_000
+    MAX_TOOL_CALLS_PER_STEP = 8
+    MAX_TOTAL_TOOL_CALLS = 64
+    MAX_TOOL_CALLS_PER_BATCH = 32
 
     def __init__(self, client: OllamaClient, *, max_steps: int = 12,
                  keep_alive: str = "5m", repository: Any | None = None,
@@ -153,12 +156,12 @@ class AgentRuntime:
             if cancel_event is not None and cancel_event.is_set():
                 record("cancelled", "Agent cancellation acknowledged before the next provider request.")
                 return finish("cancelled", "Execution was cancelled by the user.", step - 1)
-            current_size = sum(len(str(message.get("content") or "")) for message in messages)
+            current_size = len(json.dumps(messages, ensure_ascii=False, default=str))
             if current_size > self.MAX_CONVERSATION_CHARS:
                 messages = [messages[0], messages[1], *messages[-8:]]
                 record("context_compacted", "Older turns removed to respect the local context budget.",
                        previous_chars=current_size, retained_messages=len(messages))
-                current_size = sum(len(str(message.get("content") or "")) for message in messages)
+                current_size = len(json.dumps(messages, ensure_ascii=False, default=str))
                 if current_size > self.MAX_CONVERSATION_CHARS:
                     record("context_limit", "Current task context exceeds runtime budget.")
                     return finish("context_limit", "Stopped because task context exceeded the safe runtime budget.", step - 1)
@@ -182,9 +185,11 @@ class AgentRuntime:
             if cancel_event is not None and cancel_event.is_set():
                 record("cancelled", "Agent cancellation acknowledged after the provider response.")
                 return finish("cancelled", "Execution was cancelled by the user.", step)
-            assistant = response.get("message") or {}
+            raw_assistant = response.get("message")
+            assistant = raw_assistant if isinstance(raw_assistant, dict) else {}
             messages.append({"role": "assistant", **assistant})
-            calls = assistant.get("tool_calls") or []
+            raw_calls = assistant.get("tool_calls") or []
+            calls = raw_calls if isinstance(raw_calls, list) else []
             if not calls and structured:
                 calls, final = self._decode_structured_action(str(assistant.get("content") or ""))
                 if final is not None:
@@ -206,11 +211,37 @@ class AgentRuntime:
                 record("completed", "Agent returned a final response.")
                 return finish("completed", final, step)
 
+            if len(calls) > self.MAX_TOOL_CALLS_PER_BATCH:
+                record(
+                    "tool_batch_rejected",
+                    "The model returned more tool calls than the per-response safety limit; none were executed.",
+                    requested_calls=len(calls),
+                    allowed_calls=self.MAX_TOOL_CALLS_PER_BATCH,
+                )
+                return finish(
+                    "tool_call_limit",
+                    "Execution stopped because the model requested an oversized tool-call batch.",
+                    step,
+                )
+
+            if len(calls) > self.MAX_TOOL_CALLS_PER_STEP:
+                deferred_calls = calls[self.MAX_TOOL_CALLS_PER_STEP:]
+                calls = calls[:self.MAX_TOOL_CALLS_PER_STEP]
+                record(
+                    "tool_batch_limited",
+                    "Only the first bounded set of tool calls will execute; remaining calls are denied.",
+                    requested_calls=len(calls) + len(deferred_calls),
+                    allowed_calls=self.MAX_TOOL_CALLS_PER_STEP,
+                )
+            else:
+                deferred_calls = []
+
             for call in calls:
                 if cancel_event is not None and cancel_event.is_set():
                     record("cancelled", "Agent cancellation acknowledged before the next tool operation.")
                     return finish("cancelled", "Execution was cancelled by the user.", step)
-                function = call.get("function") or {}
+                function = call.get("function") if isinstance(call, dict) else {}
+                function = function if isinstance(function, dict) else {}
                 name = str(function.get("name") or "")
                 arguments = function.get("arguments") or {}
                 if isinstance(arguments, str):
@@ -218,10 +249,15 @@ class AgentRuntime:
                         arguments = json.loads(arguments)
                     except json.JSONDecodeError:
                         arguments = {}
-                if name not in tool_names or not isinstance(arguments, dict):
-                    output: dict[str, Any] = {"error": "Unknown tool or invalid arguments."}
+                if total_tool_calls >= self.MAX_TOTAL_TOOL_CALLS:
+                    output = {"error": "The agent run has exhausted its host-enforced tool-call budget."}
+                    record("tool_budget_exhausted", "Tool call denied because the per-run budget is exhausted.", tool=name)
+                elif name not in tool_names or not isinstance(arguments, dict):
+                    total_tool_calls += 1
+                    output = {"error": "Unknown tool or invalid arguments."}
                     record("tool_rejected", f"Rejected invalid tool request: {name}.", tool=name)
                 else:
+                    total_tool_calls += 1
                     try:
                         record("tool_started", f"Executing {name}.", tool=name, arguments=arguments)
                         output = tools.invoke(name, arguments)
@@ -237,6 +273,18 @@ class AgentRuntime:
                         "note": "Tool result was truncated by the host context budget.",
                     }, ensure_ascii=False)
                 messages.append({"role": "tool", "tool_name": name, "content": encoded_output})
+
+            for deferred in deferred_calls:
+                deferred_function = deferred.get("function") if isinstance(deferred, dict) else {}
+                deferred_function = deferred_function if isinstance(deferred_function, dict) else {}
+                deferred_name = str(deferred_function.get("name") or "")
+                messages.append({
+                    "role": "tool",
+                    "tool_name": deferred_name,
+                    "content": json.dumps({
+                        "error": f"Tool call denied: the per-step limit is {self.MAX_TOOL_CALLS_PER_STEP}."
+                    }),
+                })
 
         record("limit_reached", f"Stopped at the configured {self.max_steps}-step limit.")
         return finish("step_limit", "Execution stopped at the maximum step limit. Review the trace and continue with a new task.", self.max_steps)
