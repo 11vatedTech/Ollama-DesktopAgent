@@ -8,6 +8,7 @@ import os
 import platform
 import shutil
 import subprocess
+from datetime import UTC, datetime
 from typing import Any
 
 
@@ -99,9 +100,7 @@ class SystemTelemetry:
 
     def snapshot(self) -> dict[str, Any]:
         return {
-            "captured_at": __import__("datetime").datetime.now(
-                __import__("datetime").UTC
-            ).isoformat(),
+            "captured_at": datetime.now(UTC).isoformat(),
             "os": platform.platform(),
             "machine": platform.machine(),
             "processor": platform.processor() or "unknown",
