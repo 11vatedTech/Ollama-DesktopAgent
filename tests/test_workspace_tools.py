@@ -1,11 +1,12 @@
 import sys
 import time
+from io import StringIO
 from pathlib import Path
 from threading import Event, Thread
 
 import pytest
 
-from ollama_workstation.agents.tools import ToolError, WorkspaceTools
+from ollama_workstation.agents.tools import ToolError, WorkspaceTools, _BoundedPipeCapture
 
 
 def test_workspace_write_read_and_list(tmp_path: Path) -> None:
@@ -186,3 +187,11 @@ def test_command_stdout_and_approval_metadata_redact_tokens(tmp_path: Path) -> N
     assert secret not in result["command"][1]
     assert secret not in approval_prompts[0]
     assert result["secrets_redacted"] >= 1
+
+
+
+def test_subprocess_pipe_capture_retains_a_bounded_tail() -> None:
+    capture = _BoundedPipeCapture(max_chars=10)
+    capture.drain(StringIO("0123456789abcdefghijklmnop"))
+    assert capture.value() == "ghijklmnop"
+    assert len(capture.value()) == 10
