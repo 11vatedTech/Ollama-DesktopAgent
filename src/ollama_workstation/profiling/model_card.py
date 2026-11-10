@@ -95,14 +95,23 @@ def extract_model_card_dossier(card: dict[str, Any]) -> ModelCardDossier:
         if not isinstance(model_entry, dict):
             continue
         model_name = str(model_entry.get("name") or repo_id or "publisher model")
-        for result in model_entry.get("results", [])[:30]:
+        raw_results = model_entry.get("results") or []
+        if not isinstance(raw_results, list):
+            continue
+        for result in raw_results[:30]:
             if not isinstance(result, dict):
                 continue
             dataset = result.get("dataset") or {}
             task = result.get("task") or {}
+            if not isinstance(dataset, dict):
+                dataset = {}
+            if not isinstance(task, dict):
+                task = {}
             dataset_name = str(dataset.get("name") or dataset.get("type") or "unspecified dataset")
             task_name = str(task.get("name") or task.get("type") or "unspecified task")
             metrics = result.get("metrics") or []
+            if not isinstance(metrics, list):
+                metrics = []
             metric_text = ", ".join(
                 f"{metric.get('name', 'metric')}={metric.get('value', 'n/a')}"
                 for metric in metrics[:10] if isinstance(metric, dict)
