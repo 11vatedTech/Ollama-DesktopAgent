@@ -39,6 +39,7 @@ The core is provider/harness/UI separated. The desktop shell does not duplicate 
 | Native tool-call loop | Implemented |
 | Structured/guided tool catalogue and action contracts | Implemented; host validation required before execution |
 | Streaming cancellation and command cleanup | Desktop closes active Ollama streams; commands use best-effort process-group/taskkill cleanup, not OS isolation |
+| Agent execution budgets | Max 8 tool calls per step, 64 per run, reject batches over 32, serialized-context accounting, and 256 KB bounded stdout/stderr capture |
 | Durable run journal and Run History UI | Ordered SQLite events are written during execution; desktop history shows completed and crash-interrupted runs |
 | Structured JSON action fallback and guided text action fallback | Implemented |
 | Workspace-scoped file tools | Implemented with containment, size limits, host schemas, credential-path denial and heuristic secret-value redaction before model context |
