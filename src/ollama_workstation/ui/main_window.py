@@ -4,9 +4,9 @@ import html
 from pathlib import Path
 from PySide6.QtCore import QThreadPool
 from PySide6.QtWidgets import (
-    QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
-    QListWidget, QMainWindow, QMessageBox, QPushButton, QPlainTextEdit,
-    QProgressBar, QSplitter, QTabWidget, QTextBrowser, QVBoxLayout, QWidget,
+    QApplication, QCheckBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
+    QListWidget, QMainWindow, QMessageBox, QPushButton, QPlainTextEdit, QInputDialog,
+    QProgressBar, QSpinBox, QSplitter, QTabWidget, QTextBrowser, QVBoxLayout, QWidget,
 )
 from ollama_workstation.agents.runtime import AgentRuntime
 from ollama_workstation.agents.tools import WorkspaceTools
@@ -14,6 +14,7 @@ from ollama_workstation.config import AppPaths, load_settings, save_settings
 from ollama_workstation.models.schemas import ModelProfile
 from ollama_workstation.ollama.client import OllamaClient
 from ollama_workstation.profiling.profiler import ModelProfiler
+from ollama_workstation.profiling.research import HuggingFaceResearcher, attach_model_card_evidence
 from ollama_workstation.storage.repository import Repository
 from ollama_workstation.ui.workers import FunctionWorker
 
@@ -44,6 +45,8 @@ class MainWindow(QMainWindow):
         self.repository = Repository(self.paths.database_file)
         self.pool = QThreadPool.globalInstance()
         self.models: list[str] = []
+        self.selected_model = ""
+        self.research_model_name = ""
         self._build()
         self.refresh_models()
 
@@ -105,6 +108,16 @@ class MainWindow(QMainWindow):
         self.profile_button.setEnabled(False)
         row.addWidget(refresh)
         row.addWidget(self.profile_button)
+        row.addWidget(QLabel("Trials"))
+        self.profile_repeats = QSpinBox()
+        self.profile_repeats.setRange(1, 5)
+        self.profile_repeats.setValue(3)
+        self.profile_repeats.setToolTip("Repeated smoke probes improve repeatability but are not certification.")
+        row.addWidget(self.profile_repeats)
+        self.research_button = QPushButton("Research model origin")
+        self.research_button.clicked.connect(self.research_selected)
+        self.research_button.setEnabled(self.settings.enable_remote_model_research)
+        row.addWidget(self.research_button)
         layout.addLayout(row)
         split = QSplitter()
         self.model_list = QListWidget()
@@ -161,6 +174,9 @@ class MainWindow(QMainWindow):
         self.endpoint = QLineEdit(self.settings.ollama_base_url)
         layout.addWidget(QLabel("Ollama endpoint"))
         layout.addWidget(self.endpoint)
+        self.remote_research = QCheckBox("Enable public Hugging Face model-card research (network access)")
+        self.remote_research.setChecked(self.settings.enable_remote_model_research)
+        layout.addWidget(self.remote_research)
         save = QPushButton("Save settings")
         save.clicked.connect(self.save)
         layout.addWidget(save)
@@ -184,6 +200,7 @@ class MainWindow(QMainWindow):
 
     def select_model(self, name: str) -> None:
         self.profile_button.setEnabled(bool(name))
+        self.selected_model = name
         profile = next((p for p in self.repository.list_profiles() if p.model_name == name), None)
         self.profile_view.setHtml(self.render_profile(profile) if profile else
                                   f"<h2>{html.escape(name)}</h2><p>No profile saved yet.</p>")
@@ -195,7 +212,7 @@ class MainWindow(QMainWindow):
         name = item.text()
         self.profile_button.setEnabled(False)
         self.profile_progress.show()
-        worker = FunctionWorker(self.profiler.profile, name)
+        worker = FunctionWorker(self.profiler.profile, name, True, None, self.profile_repeats.value())
         worker.signals.progress.connect(self.status.setText)
         worker.signals.result.connect(self.profile_ready)
         worker.signals.error.connect(self.show_error)
@@ -211,16 +228,102 @@ class MainWindow(QMainWindow):
     def render_profile(profile: ModelProfile) -> str:
         table = "".join(
             f"<tr><td>{html.escape(x.capability)}</td><td>{html.escape(x.status)}</td>"
-            f"<td>{'—' if x.score is None else f'{x.score:.0f}/100'}</td></tr>"
+            f"<td>{'—' if x.score is None else f'{x.score:.1f}/100'}</td>"
+            f"<td>{x.passed}/{x.attempts}</td><td>{x.confidence:.2f}</td></tr>"
             for x in profile.capabilities)
-        evidence = "".join(f"<li>{html.escape(x.claim)}: {html.escape(x.value)} [{html.escape(x.level)}]</li>"
-                           for x in profile.origin_evidence)
+        evidence = "".join(
+            f"<li><b>{html.escape(x.claim)}</b>: {html.escape(x.value)} "
+            f"[{html.escape(x.level)}] "
+            f"{f'<a href={html.escape(x.source_url, quote=True)}>source</a>' if x.source_url else ''}"
+            f"</li>" for x in profile.origin_evidence)
+        roles = ", ".join(profile.recommended_roles) or "Not established"
+        limitations = "".join(f"<li>{html.escape(item)}</li>" for item in profile.known_limitations)
+        operational = html.escape(__import__("json").dumps(profile.operational, indent=2, ensure_ascii=False))
+        rationale = "".join(f"<li>{html.escape(item)}</li>" for item in profile.identity_rationale)
         return (f"<h1>{html.escape(profile.professional_title)}</h1>"
                 f"<h3>{html.escape(profile.model_name)}</h3>"
                 f"<p>{html.escape(profile.primary_specialization)}</p>"
-                f"<p>Agentability: {html.escape(profile.agentability_mode)} / {html.escape(profile.agentability_status)}</p>"
-                f"<h2>Capabilities</h2><table border='1' cellpadding='5'>{table}</table>"
-                f"<h2>Origin evidence</h2><ul>{evidence}</ul>")
+                f"<p><b>Publisher-declared purpose:</b> {html.escape(profile.declared_purpose)}</p>"
+                f"<p><b>Identity confidence:</b> {profile.identity_confidence:.2f} "
+                f"(provisional profile; not certification)</p>"
+                f"<p><b>Agentability:</b> {html.escape(profile.agentability_mode)} / "
+                f"{html.escape(profile.agentability_status)}</p>"
+                f"<p><b>Recommended roles:</b> {html.escape(roles)}</p>"
+                f"<h2>Why this identity?</h2><ul>{rationale}</ul>"
+                f"<h2>Capability evidence</h2><table border='1' cellpadding='5'>"
+                f"<tr><th>Capability</th><th>Status</th><th>Score</th><th>Passes</th><th>Confidence</th></tr>"
+                f"{table}</table>"
+                f"<h2>Origin and publisher evidence</h2><ul>{evidence}</ul>"
+                f"<h2>Known limitations</h2><ul>{limitations or '<li>None recorded.</li>'}</ul>"
+                f"<h2>Operational profile</h2><pre>{operational}</pre>")
+
+    def research_selected(self) -> None:
+        if not self.settings.enable_remote_model_research:
+            QMessageBox.information(
+                self, "Remote research disabled",
+                "Enable public model-card research in Settings before searching Hugging Face."
+            )
+            return
+        item = self.model_list.currentItem()
+        if item is None:
+            return
+        self.research_model_name = item.text()
+        self.research_button.setEnabled(False)
+        self.profile_progress.show()
+        worker = FunctionWorker(HuggingFaceResearcher().search_candidates, self.research_model_name)
+        worker.signals.result.connect(self.research_candidates_ready)
+        worker.signals.error.connect(self.show_error)
+        worker.signals.finished.connect(lambda: (
+            self.research_button.setEnabled(True), self.profile_progress.hide()
+        ))
+        self.pool.start(worker)
+
+    def research_candidates_ready(self, candidates: list[object]) -> None:
+        if not candidates:
+            QMessageBox.information(self, "No model-card matches", "No Hugging Face candidates were found.")
+            return
+        labels = [
+            f"{candidate.repository_id} · {candidate.pipeline_tag or 'task undisclosed'} · "
+            f"{candidate.downloads:,} downloads"
+            for candidate in candidates
+        ]
+        selected, accepted = QInputDialog.getItem(
+            self, "Confirm upstream model identity",
+            "Select the exact publisher repository for this Ollama model. "
+            "Candidates are suggestions, not verified matches:",
+            labels, 0, False
+        )
+        if not accepted:
+            return
+        candidate = candidates[labels.index(selected)]
+        self.profile_progress.show()
+        worker = FunctionWorker(HuggingFaceResearcher().fetch_model_card, candidate.repository_id)
+        worker.signals.result.connect(self.model_card_ready)
+        worker.signals.error.connect(self.show_error)
+        worker.signals.finished.connect(self.profile_progress.hide)
+        self.pool.start(worker)
+
+    def model_card_ready(self, card: dict[str, object]) -> None:
+        profile = next(
+            (item for item in self.repository.list_profiles()
+             if item.model_name == self.research_model_name), None
+        )
+        if profile is None:
+            QMessageBox.warning(self, "Profile required", "Profile this model before attaching its model card.")
+            return
+        attach_model_card_evidence(profile, card)
+        self.repository.save_profile(profile)
+        safe = self.research_model_name.replace("/", "_").replace(":", "_")
+        markdown = str(card.get("model_card_markdown") or "")
+        (self.paths.profiles_dir / f"{safe}.model-card.md").write_text(markdown, encoding="utf-8")
+        if self.selected_model == self.research_model_name:
+            self.profile_view.setHtml(self.render_profile(profile))
+        self.status.setText(f"Publisher dossier attached: {profile.professional_title}")
+        QMessageBox.information(
+            self, "Model dossier updated",
+            "Publisher disclosures, source provenance and model-card hash were attached. "
+            "Empirical capability scores were not changed."
+        )
 
     def choose_workspace(self) -> None:
         selected = QFileDialog.getExistingDirectory(self, "Choose agent workspace", str(self.paths.workspaces_dir))
@@ -251,6 +354,8 @@ class MainWindow(QMainWindow):
 
     def save(self) -> None:
         self.settings.ollama_base_url = self.endpoint.text().strip().rstrip("/")
+        self.settings.enable_remote_model_research = self.remote_research.isChecked()
+        self.research_button.setEnabled(self.settings.enable_remote_model_research)
         save_settings(self.paths.config_file, self.settings)
         self.client = OllamaClient(self.settings.ollama_base_url, self.settings.request_timeout_seconds)
         self.profiler = ModelProfiler(self.client, self.settings.keep_alive)
