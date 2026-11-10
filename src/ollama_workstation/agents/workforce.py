@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from ollama_workstation.models.schemas import ModelProfile
 
 
+
 ROLE_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "software_engineering": ("code_generation", "instruction_following"),
     "repository_analysis": ("code_comprehension", "long_context"),
