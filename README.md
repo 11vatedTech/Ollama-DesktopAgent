@@ -42,7 +42,7 @@ The core is provider/harness/UI separated. The desktop shell does not duplicate 
 | Structured JSON action fallback and guided text action fallback | Implemented |
 | Workspace-scoped file tools | Implemented with path containment, size limits, host-side JSON argument validation and default credential/private-key path denial |
 | Optional allow-listed command tool | Implemented but disabled by default; configured executable resolution and human approval required; not a sandbox |
-| SQLite profile, conversation, run and scoped-memory persistence | Implemented; project notes support explicit capture, lexical retrieval, listing and archive; no embeddings or automatic memory writes |
+| SQLite profile, conversation, run and scoped-memory persistence | Implemented; scoped notes support explicit capture, lexical retrieval, listing and archive. Agent events are durably journaled as they occur; run resume/checkpointing and embeddings remain open |
 | PySide6 desktop shell and headless CLI | Implemented; Windows desktop import passes in CI; full GUI workflow QA on supported hardware remains |
 | Evidence-based workforce ranking primitive | Implemented for software, repository, workflow, research, visual, quantitative, data, creative, multilingual and planning roles; qualification is explicit |
 | Full MCP client/server ecosystem, browser/computer-use adapters, durable resumable runs, dynamic multi-agent scheduler, specialist benchmark adapters and role/agent certification | Roadmap |
