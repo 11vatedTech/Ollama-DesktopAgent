@@ -158,7 +158,50 @@ class WorkspaceTools:
                 "parameters": {"type": "object", "properties": properties,
                                "required": required, "additionalProperties": False}}}
 
+    def _validate_arguments(self, name: str, arguments: dict[str, Any]) -> None:
+        """Validate model-generated arguments against the host-owned tool schema."""
+        definition = next(
+            (item for item in self.definitions()
+             if item["function"]["name"] == name), None
+        )
+        if definition is None:
+            raise ToolError(f"Tool is not registered or enabled: {name}")
+        schema = definition["function"]["parameters"]
+        properties = schema.get("properties", {})
+        required = set(schema.get("required", []))
+        missing = required - set(arguments)
+        if missing:
+            raise ToolError(f"Missing required argument(s) for {name}: {', '.join(sorted(missing))}")
+        if schema.get("additionalProperties") is False:
+            extra = set(arguments) - set(properties)
+            if extra:
+                raise ToolError(f"Unexpected argument(s) for {name}: {', '.join(sorted(extra))}")
+        for key, value in arguments.items():
+            property_schema = properties.get(key, {})
+            expected = property_schema.get("type")
+            valid = (
+                expected is None
+                or expected == "string" and isinstance(value, str)
+                or expected == "object" and isinstance(value, dict)
+                or expected == "array" and isinstance(value, list)
+                or expected == "integer" and isinstance(value, int) and not isinstance(value, bool)
+                or expected == "number" and isinstance(value, (int, float)) and not isinstance(value, bool)
+                or expected == "boolean" and isinstance(value, bool)
+            )
+            if not valid:
+                raise ToolError(f"Argument {key!r} for {name} must be {expected}")
+            if expected == "array":
+                item_type = property_schema.get("items", {}).get("type")
+                if item_type == "string" and not all(isinstance(item, str) for item in value):
+                    raise ToolError(f"Every item in {key!r} for {name} must be a string")
+            allowed = property_schema.get("enum")
+            if allowed is not None and value not in allowed:
+                raise ToolError(f"Argument {key!r} for {name} is outside its allowed values")
+
     def invoke(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(arguments, dict):
+            raise ToolError("Tool arguments must be a JSON object")
+        self._validate_arguments(name, arguments)
         actions = {
             "list_files": lambda: self.list_files(str(arguments.get("path", "."))),
             "read_file": lambda: self.read_file(str(arguments["path"])),
