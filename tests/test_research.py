@@ -1,6 +1,7 @@
 from ollama_workstation.models.schemas import ModelProfile
 from ollama_workstation.profiling.research import attach_model_card_evidence
 
+
 def test_model_card_evidence_preserves_origin_and_training_unknown() -> None:
     profile = ModelProfile(model_name="example:latest", digest="abc", generated_at="now")
     card = {
