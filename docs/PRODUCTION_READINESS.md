@@ -114,7 +114,7 @@ Objective → plan → permission check → action proposal → host validation 
 
 Required runtime properties:
 - Durable state and resumable runs.
-- Cancellation and process-tree cleanup.
+- Cooperative cancellation between provider/tool operations is implemented in the desktop runtime; preemption of an in-flight request/subprocess and process-tree cleanup remain G4 requirements.
 - Per-run deadlines and bounded steps.
 - Typed tools with JSON Schema validation.
 - Idempotency keys for retryable operations.
@@ -207,7 +207,7 @@ These are research references, not approved runtime dependencies. For every prop
 | G1 — Model dossier | Publisher fields, source links, explicit match confirmation, hash, unknown handling | v0.2 increment implemented; needs CI and live model-card validation |
 | G2 — Empirical profiling | Repeated tests, host/GPU telemetry, expanded task suites, repeatability, confidence and resource metrics | Partial; repeated smoke probes and best-effort telemetry implemented, specialist suites remain |
 | G3 — Agentification | Protocol adapters, strict host-side tool argument validation, bounded recovery and digest binding | Partial; native/structured/guided paths and workspace tool schema validation implemented |
-| G4 — Safe execution | OS sandbox, permission broker, cancellation, audit and cleanup | Not production-ready |
+| G4 — Safe execution | OS sandbox, permission broker, cancellation, audit and cleanup | Not production-ready; desktop has cooperative boundary cancellation, but in-flight operation interruption and process-tree cleanup are not implemented |
 | G5 — Durable agents | Checkpointing, resumable runs, scoped memory retrieval and event store | Partial; scoped SQLite memory with explicit project-note capture/archive and lexical retrieval is implemented; vector retrieval, automatic consolidation, run checkpoint/resume and crash recovery remain incomplete |
 | G6 — Multi-agent workforce | Delegation, shared state, scheduling, budgets and least privilege | Not complete |
 | G7 — Interoperability | MCP client/server, ACP and browser/computer adapters | Not complete |
