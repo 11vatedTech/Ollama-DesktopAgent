@@ -13,6 +13,7 @@ from typing import Any
 
 @dataclass(slots=True)
 class ModelCardDossier:
+    """Structured facts explicitly disclosed in a selected upstream model card."""
     repository_id: str = ""
     pipeline_tag: str = ""
     license: str = ""
@@ -31,10 +32,12 @@ class ModelCardDossier:
     model_card_url: str = ""
 
     def to_dict(self) -> dict[str, Any]:
+        """Convert the publisher dossier into a serializable dictionary."""
         return asdict(self)
 
 
 def _strings(value: Any) -> list[str]:
+    """Normalize a scalar or collection of publisher metadata values."""
     if value is None:
         return []
     values = value if isinstance(value, (list, tuple, set)) else [value]
@@ -61,6 +64,7 @@ def _sections(markdown: str) -> dict[str, str]:
 
 
 def _section(sections: dict[str, str], *needles: str) -> str:
+    """Return the first non-empty section whose heading matches a known label."""
     for heading, body in sections.items():
         if any(needle in heading for needle in needles) and body.strip():
             return body.strip()[:6000]
@@ -68,6 +72,7 @@ def _section(sections: dict[str, str], *needles: str) -> str:
 
 
 def _tag_value(tags: list[str], prefix: str) -> list[str]:
+    """Extract values from namespaced metadata tags such as language:en."""
     return [tag.split(":", 1)[1] for tag in tags if tag.lower().startswith(prefix)]
 
 
