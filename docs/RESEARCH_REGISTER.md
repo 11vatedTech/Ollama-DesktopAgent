@@ -141,3 +141,35 @@ Every benchmark run must record:
 - Full sanitized event trace, tool I/O, patch/diff, validation output and result artifact hashes.
 
 No result is production certification unless the run is reproducible, independently scored and passed on the declared supported hardware/software matrix.
+
+
+## 7. Model Context Protocol — current interoperability baseline
+
+**Protocol source:** [MCP 2026-07-28 specification announcement](https://blog.modelcontextprotocol.io/posts/2026-07-28/)  
+**Official Python SDK:** [MCP Python SDK v2 documentation](https://py.sdk.modelcontextprotocol.io/)  
+**Client lifecycle/API:** [Official client guide](https://py.sdk.modelcontextprotocol.io/client/)  
+**Transport contract:** [Official client transport guide](https://py.sdk.modelcontextprotocol.io/client/transports/)  
+**Authorization requirements:** [MCP authorization specification](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2026-07-28/basic/authorization/index.mdx)
+
+The official Python SDK documentation identifies v2 as its current stable line, supports Python 3.11+, and provides a first-class asynchronous `Client` for stdio and Streamable HTTP (as well as SSE). The 2026-07-28 protocol revision includes a stateless request/response core, cacheable list/read results and strengthened HTTP authorization requirements. These sources are the basis for using the official SDK rather than implementing a custom JSON-RPC transport.
+
+### Implemented subset in this branch
+
+- Optional `mcp` package extra; local Ollama use does not require it when no MCP server is enabled.
+- User-configured stdio and Streamable HTTP endpoints; all servers default to disabled.
+- Exact server-side tool-name allow-list; wildcard grants are rejected.
+- Server-advertised JSON Schema validation occurs inside the host before tool invocation.
+- Per-call deadlines, cancellation, bounded tool/result counts and gateway connection cleanup.
+- Credential redaction and untrusted-metadata handling before tool results enter model context.
+- Stdio child processes receive only the SDK's allow-listed environment plus explicit `env_refs`; settings store environment variable names, not secret values.
+- Plain HTTP is restricted to loopback/private IP endpoints; remote endpoints require HTTPS.
+
+### Explicit exclusions and adoption risks
+
+This increment does **not** implement OAuth 2.1 / protected-resource discovery, custom HTTP authorization headers, resource or prompt subscriptions, sampling, elicitation, notifications, progress events, roots, a general MCP server, or ACP. The official authorization specification defines a security-sensitive OAuth flow for HTTP transports; merely using HTTPS does not authenticate the caller. The current Streamable HTTP client therefore must not be used with protected remote servers or treated as an authenticated deployment.
+
+A stdio MCP server is a separately launched local process. Exact tool grants limit what the model can request through this host, but do not sandbox the server process itself. Only enable packages from trusted publishers, review their executable/arguments and declared tool schemas, restrict their environment and filesystem access externally, and keep the workstation's OS sandbox release gate open.
+
+### Architecture decision
+
+Use the official SDK's transport and protocol implementation, but keep the workstation's policy gateway authoritative. MCP tool descriptions, schema annotations, and result content remain untrusted. A server does not grant itself access merely by advertising a capability. Tool authorization is per server and exact name; approval to connect a server is separate from approval of each tool. Continue to bind the MCP server list, tool grants and transport type to the run's event trace and certification manifest before production certification.
