@@ -154,6 +154,46 @@ class Repository:
             "access_count": row["access_count"],
         } for row in rows]
 
+    def search_memories(
+        self, scopes: list[tuple[str, str]], terms: list[str], limit: int = 500
+    ) -> list[dict[str, Any]]:
+        """Search terms inside requested scopes before applying the candidate limit."""
+        if not scopes or not terms:
+            return self.list_memories(scopes, limit)
+        bounded = max(1, min(int(limit), 2_000))
+        scope_where = " OR ".join("(scope=? AND scope_id=?)" for _ in scopes)
+        term_clauses: list[str] = []
+        term_parameters: list[str] = []
+        for term in dict.fromkeys(item.casefold().strip() for item in terms if item.strip()):
+            escaped = term.replace("!", "!!").replace("%", "!%").replace("_", "!_")
+            pattern = f"%{escaped}%"
+            term_clauses.append(
+                "(LOWER(content) LIKE ? ESCAPE '!' OR LOWER(tags_json) LIKE ? ESCAPE '!')"
+            )
+            term_parameters.extend((pattern, pattern))
+        if not term_clauses:
+            return self.list_memories(scopes, limit)
+        query = (
+            "SELECT memory_id,scope,scope_id,category,content,tags_json,source,confidence,"
+            "created_at,updated_at,last_accessed_at,access_count "
+            f"FROM agent_memories WHERE archived=0 AND ({scope_where}) "
+            f"AND ({' OR '.join(term_clauses)}) "
+            "ORDER BY updated_at DESC LIMIT ?"
+        )
+        parameters: list[Any] = [value for pair in scopes for value in pair]
+        parameters.extend(term_parameters)
+        parameters.append(bounded)
+        with self._connection() as db:
+            rows = db.execute(query, parameters).fetchall()
+        return [{
+            "memory_id": row["memory_id"], "scope": row["scope"], "scope_id": row["scope_id"],
+            "category": row["category"], "content": row["content"],
+            "tags": json.loads(row["tags_json"]), "source": row["source"],
+            "confidence": row["confidence"], "created_at": row["created_at"],
+            "updated_at": row["updated_at"], "last_accessed_at": row["last_accessed_at"],
+            "access_count": row["access_count"],
+        } for row in rows]
+
     def touch_memories(self, memory_ids: list[str], accessed_at: str) -> None:
         if not memory_ids:
             return
