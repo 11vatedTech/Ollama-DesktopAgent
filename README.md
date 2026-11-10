@@ -107,6 +107,47 @@ The profile probe suite makes several model calls and loads the selected model. 
 
 Read [SECURITY.md](SECURITY.md) before enabling command execution or using sensitive workspaces. The desktop stop button closes the active streamed Ollama request and is checked between tool operations. Command termination is best-effort; this does not replace OS-level run isolation.
 
+## Optional MCP tool servers
+
+The workstation includes an optional, deny-by-default MCP **client** integration. It uses the official Python SDK v2 and currently supports stdio child processes and Streamable HTTP endpoints. Install the extra only when MCP is required:
+
+```powershell
+python -m pip install -e ".[desktop,mcp]"
+```
+
+Configure servers under **Settings → MCP servers (JSON)**. Example:
+
+```json
+[
+  {
+    "name": "project_files",
+    "transport": "stdio",
+    "enabled": false,
+    "command": "npx",
+    "args": [
+      "-y",
+      "@modelcontextprotocol/server-filesystem",
+      "C:/Users/YourUser/Projects"
+    ],
+    "approved_tools": [
+      "list_allowed_directories",
+      "list_directory",
+      "read_file"
+    ],
+    "env_refs": {},
+    "call_timeout_seconds": 45
+  }
+]
+```
+
+Every server is disabled by default. Set `enabled` only after reviewing the exact executable/package, source, permissions and transport. The host exposes only tool names explicitly listed in `approved_tools`; wildcard grants are rejected. JSON arguments are validated against the server's advertised schema, calls are bounded/cancellable, and MCP output is passed through credential redaction before it reaches the model. The model cannot grant itself additional tools.
+
+For stdio servers, `env_refs` maps a child-process environment name to a variable already present in the workstation process, for example `{"SERVICE_TOKEN":"11VATED_MCP_SERVICE_TOKEN"}`. Only the variable names are written to settings; never paste a secret value into the JSON editor. The SDK uses a restricted child-process environment and configured references are passed explicitly.
+
+For Streamable HTTP, use HTTPS for remote servers. Plain HTTP is accepted only for loopback/private IP endpoints. **OAuth, custom authorization headers, protected-resource discovery, MCP resources/prompts subscriptions, and an MCP server implementation are not part of this increment.** Do not configure a protected remote endpoint or treat TLS alone as authorization. A stdio MCP server is a local child process: this integration does not sandbox that process. Use only trusted servers and keep high-risk tools disabled.
+
+The CLI uses the same saved `mcp_servers` configuration as the desktop. With all entries disabled or an empty list, ordinary local-agent execution does not require the MCP extra.
+
 ## Development
 
 ```powershell
