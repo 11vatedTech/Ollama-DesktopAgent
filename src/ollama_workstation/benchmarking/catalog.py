@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from ollama_workstation.benchmarking.models import BenchmarkCase, BenchmarkSuite
 
-
 CORE_SUITE = BenchmarkSuite(
     suite_id="11vated-core",
     version="1.0.0",
