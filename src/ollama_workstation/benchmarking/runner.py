@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import statistics
 import time
 import uuid
@@ -43,6 +44,34 @@ class BenchmarkRunner:
         self.telemetry = telemetry or SystemTelemetry()
 
     @staticmethod
+    def _normalize_inference_options(options: dict[str, Any] | None) -> dict[str, int | float]:
+        """Allow only numeric Ollama inference parameters, keeping reports reproducible and safe."""
+        allowed = {
+            "temperature", "seed", "top_k", "top_p", "min_p", "num_ctx",
+            "num_predict", "repeat_penalty", "repeat_last_n", "mirostat",
+            "mirostat_eta", "mirostat_tau", "num_thread", "num_gpu",
+        }
+        supplied = options if options is not None else {"temperature": 0.0}
+        if not isinstance(supplied, dict):
+            raise TypeError("Benchmark inference_options must be a dictionary")
+        unknown = set(supplied) - allowed
+        if unknown:
+            raise ValueError(
+                "Unsupported benchmark inference option(s): " + ", ".join(sorted(unknown))
+            )
+        normalized: dict[str, int | float] = {}
+        for key, value in supplied.items():
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise TypeError(f"Benchmark option {key!r} must be numeric")
+            if not math.isfinite(float(value)):
+                raise ValueError(f"Benchmark option {key!r} must be finite")
+            if key in {"seed", "top_k", "num_ctx", "num_predict", "repeat_last_n",
+                       "mirostat", "num_thread", "num_gpu"} and not isinstance(value, int):
+                raise TypeError(f"Benchmark option {key!r} must be an integer")
+            normalized[key] = value
+        return normalized
+
+    @staticmethod
     def _manifest(suite: Any, repeats: int, options: dict[str, Any] | None) -> str:
         payload = {
             "suite_id": suite.suite_id,
@@ -79,7 +108,7 @@ class BenchmarkRunner:
         suite = get_suite(suite_id)
         notify = progress or (lambda _message: None)
         started_at = datetime.now(UTC).isoformat()
-        effective_options = dict(inference_options or {"temperature": 0.0})
+        effective_options = self._normalize_inference_options(inference_options)
         try:
             ollama_version = self.client.version()
         except Exception:
