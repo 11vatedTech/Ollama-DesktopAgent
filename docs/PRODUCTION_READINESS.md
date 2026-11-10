@@ -1,7 +1,7 @@
 # Production architecture and release gates
 
 **Product:** 11vated Intelligence — Ollama Agent Workstation  
-**Architecture baseline:** 0.1.0  
+**Release baseline:** 0.2.0.dev0 (pre-release increment on the 0.1.0 foundation)  
 **Development increment:** Model Intelligence Engine v0.2  
 **Status:** Active engineering branch; not production-certified.
 
@@ -114,7 +114,7 @@ Objective → plan → permission check → action proposal → host validation 
 
 Required runtime properties:
 - Durable state and resumable runs.
-- Cooperative cancellation between provider/tool operations is implemented in the desktop runtime; preemption of an in-flight request/subprocess and process-tree cleanup remain G4 requirements.
+- Desktop cancellation now closes the active Ollama streaming response and checks cancellation between tool operations. Approved command execution accepts the same cancellation event and uses process-group/taskkill cleanup on timeout or stop. Windows descendant cleanup remains best-effort; these are not OS isolation boundaries.
 - Per-run deadlines and bounded steps.
 - Typed tools with JSON Schema validation.
 - Idempotency keys for retryable operations.
@@ -170,7 +170,7 @@ Production execution requires:
 - MCP server provenance, transport authentication and per-server grants.
 - SBOM, dependency/license scanning, vulnerability review and signed releases.
 
-The current shell allow-list is not an OS sandbox. Keep shell disabled for untrusted tasks until sandbox enforcement is implemented and independently tested. Workspace tool arguments are now checked against host-owned required fields, types, enums and additional-property rules before invocation; this is input validation, not a substitute for OS isolation.
+The current command allow-list is not an OS sandbox. Keep command execution disabled for untrusted tasks until sandbox enforcement is implemented and independently tested. Workspace tool arguments are checked against host-owned required fields, types, enums and additional-property rules. Common credential stores and private-key paths are blocked by default, with known template-file exceptions; this heuristic filter is not a complete secret scanner. Desktop cancellation closes the Ollama HTTP stream; POSIX command process groups are terminated, while Windows taskkill cleanup is best-effort and not a Job Object/AppContainer boundary.
 
 ## Competitive research register
 
