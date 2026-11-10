@@ -36,7 +36,7 @@ The core is provider/harness/UI separated. The desktop shell does not duplicate 
 | Repeatable smoke profiling | Implemented with 1–5 trials, pass-rate aggregation and confidence tracking; not a full benchmark suite |
 | Host and inference telemetry | Implemented with system RAM/CPU snapshots, best-effort NVIDIA telemetry, Ollama token counters, load timing and derived generation throughput |
 | Agent Identity Package export | Implemented |
-| Native tool-call loop | Implemented |
+| Native tool-call loop | Implemented |\n| Structured/guided tool catalogue and action contracts | Implemented; host validation required before execution |\n| Desktop cooperative stop control | Implemented at model/tool boundaries; does not interrupt in-flight requests or kill subprocess trees |
 | Structured JSON action fallback and guided text action fallback | Implemented |
 | Workspace-scoped file tools | Implemented with path containment, size limits and host-side JSON argument validation |
 | Optional allow-listed shell tool | Implemented but disabled by default; approval required |
@@ -100,7 +100,7 @@ The probe suite makes several model calls and loads the selected model. `--repea
 - Shell execution is disabled by default; when enabled it is allow-listed, approval-gated, uses no `shell=True`, and is time limited.
 - No unrestricted browser, desktop-control, network or arbitrary Python-evaluation tool is exposed in this development increment. Shell stays disabled in the desktop agent.
 
-Read [SECURITY.md](SECURITY.md) before enabling command execution or using sensitive workspaces.
+Read [SECURITY.md](SECURITY.md) before enabling command execution or using sensitive workspaces. The desktop stop button is cooperative: it is honored between provider/tool operations, not by forcibly terminating an active request or subprocess.
 
 ## Development
 
