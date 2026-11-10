@@ -1,13 +1,32 @@
 """Native desktop workstation window."""
 from __future__ import annotations
+
 import html
 import json
 from pathlib import Path
+
 from PySide6.QtCore import QThreadPool
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QInputDialog,
-    QLineEdit, QListWidget, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar,
-    QPushButton, QSpinBox, QSplitter, QTabWidget, QTextBrowser, QVBoxLayout, QWidget,
+    QApplication,
+    QCheckBox,
+    QFileDialog,
+    QFrame,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QMainWindow,
+    QMessageBox,
+    QPlainTextEdit,
+    QProgressBar,
+    QPushButton,
+    QSpinBox,
+    QSplitter,
+    QTabWidget,
+    QTextBrowser,
+    QVBoxLayout,
+    QWidget,
 )
 from ollama_workstation.agents.runtime import AgentRuntime
 from ollama_workstation.agents.tools import WorkspaceTools
