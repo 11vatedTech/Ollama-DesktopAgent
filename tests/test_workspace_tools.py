@@ -1,4 +1,7 @@
 from pathlib import Path
+import sys
+from threading import Event, Thread
+import time
 
 import pytest
 
@@ -35,3 +38,26 @@ def test_command_execution_requires_allowlist_and_approval(tmp_path: Path) -> No
     allowed = WorkspaceTools(tmp_path, allow_shell=True, allowed_commands=("python",), approval=lambda _: True)
     result = allowed.run_command("python", ["--version"])
     assert result["return_code"] == 0
+
+
+
+def test_command_rejects_model_supplied_executable_paths(tmp_path: Path) -> None:
+    tools = WorkspaceTools(
+        tmp_path, allow_shell=True, allowed_commands=("python",), approval=lambda _: True
+    )
+    with pytest.raises(ToolError, match="not allow-listed"):
+        tools.run_command(sys.executable, ["--version"])
+
+
+def test_command_cancellation_stops_the_running_process(tmp_path: Path) -> None:
+    cancelled = Event()
+    tools = WorkspaceTools(
+        tmp_path, allow_shell=True, allowed_commands=("python",),
+        approval=lambda _: True, cancel_event=cancelled,
+    )
+    trigger = Thread(target=lambda: (time.sleep(0.4), cancelled.set()), daemon=True)
+    trigger.start()
+    with pytest.raises(ToolError, match="cancelled"):
+        tools.run_command("python", ["-c", "import time; time.sleep(30)"])
+    trigger.join(timeout=2)
+    assert cancelled.is_set()
