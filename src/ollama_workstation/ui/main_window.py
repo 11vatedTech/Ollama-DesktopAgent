@@ -4,6 +4,7 @@ from __future__ import annotations
 import html
 import json
 from pathlib import Path
+from collections.abc import Callable
 
 from PySide6.QtCore import QThreadPool
 from PySide6.QtWidgets import (
@@ -29,6 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ollama_workstation.agents.binding import validate_installed_model_binding
 from ollama_workstation.agents.memory import MemoryStore
 from ollama_workstation.agents.runtime import AgentRuntime
 from ollama_workstation.agents.tools import WorkspaceTools
@@ -54,6 +56,16 @@ QProgressBar::chunk { background:#4b91e2; border-radius:4px; }
 """
 
 
+def _search_candidates_for_model(model_name: str) -> tuple[str, list[object]]:
+    """Search publisher candidates and retain the originating local model name."""
+    return model_name, HuggingFaceResearcher().search_candidates(model_name)
+
+
+def _fetch_card_for_model(model_name: str, repository_id: str) -> tuple[str, dict[str, object]]:
+    """Fetch a model card together with the model name that initiated the request."""
+    return model_name, HuggingFaceResearcher().fetch_model_card(repository_id)
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -69,7 +81,6 @@ class MainWindow(QMainWindow):
         self.pool = QThreadPool.globalInstance()
         self.models: list[str] = []
         self.selected_model = ""
-        self.research_model_name = ""
         self._build()
         self.refresh_models()
 
@@ -148,6 +159,7 @@ class MainWindow(QMainWindow):
         split.addWidget(self.model_list)
         self.profile_view = QTextBrowser()
         self.profile_view.setHtml("<h2>No model selected</h2>")
+        self.profile_view.setOpenExternalLinks(True)
         split.addWidget(self.profile_view)
         split.setStretchFactor(1, 3)
         layout.addWidget(split, 1)
@@ -174,8 +186,8 @@ class MainWindow(QMainWindow):
         choose = QPushButton("Choose workspace")
         choose.clicked.connect(self.choose_workspace)
         self.workspace = QLabel(str(self.paths.workspaces_dir))
-        run = QPushButton("Run agent")
-        run.clicked.connect(self.run_agent)
+        self.run_agent_button = QPushButton("Run agent")
+        self.run_agent_button.clicked.connect(self.run_agent)
         remember = QPushButton("Add project memory")
         remember.clicked.connect(self.add_project_memory)
         manage_memory = QPushButton("Manage memory")
@@ -184,7 +196,7 @@ class MainWindow(QMainWindow):
         row.addWidget(self.workspace, 1)
         row.addWidget(remember)
         row.addWidget(manage_memory)
-        row.addWidget(run)
+        row.addWidget(self.run_agent_button)
         layout.addLayout(row)
         self.agent_output = QTextBrowser()
         layout.addWidget(self.agent_output, 1)
@@ -263,7 +275,7 @@ class MainWindow(QMainWindow):
         evidence = "".join(
             f"<li><b>{html.escape(x.claim)}</b>: {html.escape(x.value)} "
             f"[{html.escape(x.level)}] "
-            f"{f'<a href={html.escape(x.source_url, quote=True)}>source</a>' if x.source_url else ''}"
+            f"{f'<a href=\"{html.escape(x.source_url, quote=True)}\">source</a>' if x.source_url else ''}"
             f"</li>" for x in profile.origin_evidence)
         roles = ", ".join(profile.recommended_roles) or "Not established"
         limitations = "".join(f"<li>{html.escape(item)}</li>" for item in profile.known_limitations)
@@ -287,6 +299,7 @@ class MainWindow(QMainWindow):
                 f"<h2>Operational profile</h2><pre>{operational}</pre>")
 
     def research_selected(self) -> None:
+        """Start opt-in model-card lookup for the exact model currently selected."""
         if not self.settings.enable_remote_model_research:
             QMessageBox.information(
                 self, "Remote research disabled",
@@ -296,19 +309,26 @@ class MainWindow(QMainWindow):
         item = self.model_list.currentItem()
         if item is None:
             return
-        self.research_model_name = item.text()
+        model_name = item.text()
         self.research_button.setEnabled(False)
         self.profile_progress.show()
-        worker = FunctionWorker(HuggingFaceResearcher().search_candidates, self.research_model_name)
+        worker = FunctionWorker(_search_candidates_for_model, model_name)
         worker.signals.result.connect(self.research_candidates_ready)
-        worker.signals.error.connect(self.show_error)
-        worker.signals.finished.connect(lambda: (
-            self.research_button.setEnabled(True), self.profile_progress.hide()
-        ))
+        worker.signals.error.connect(self.research_failed)
+        worker.signals.finished.connect(self.profile_progress.hide)
         self.pool.start(worker)
 
-    def research_candidates_ready(self, candidates: list[object]) -> None:
+    def research_failed(self, message: str) -> None:
+        """Report a failed research operation and restore its controls."""
+        self.research_button.setEnabled(self.settings.enable_remote_model_research)
+        self.profile_progress.hide()
+        self.show_error(message)
+
+    def research_candidates_ready(self, result: tuple[str, list[object]]) -> None:
+        """Ask the user to confirm an upstream repository for the captured model."""
+        model_name, candidates = result
         if not candidates:
+            self.research_button.setEnabled(self.settings.enable_remote_model_research)
             QMessageBox.information(self, "No model-card matches", "No Hugging Face candidates were found.")
             return
         labels = [
@@ -318,34 +338,40 @@ class MainWindow(QMainWindow):
         ]
         selected, accepted = QInputDialog.getItem(
             self, "Confirm upstream model identity",
-            "Select the exact publisher repository for this Ollama model. "
+            f"Select the exact publisher repository for {model_name}. "
             "Candidates are suggestions, not verified matches:",
             labels, 0, False
         )
         if not accepted:
+            self.research_button.setEnabled(self.settings.enable_remote_model_research)
             return
         candidate = candidates[labels.index(selected)]
         self.profile_progress.show()
-        worker = FunctionWorker(HuggingFaceResearcher().fetch_model_card, candidate.repository_id)
+        worker = FunctionWorker(_fetch_card_for_model, model_name, candidate.repository_id)
         worker.signals.result.connect(self.model_card_ready)
-        worker.signals.error.connect(self.show_error)
-        worker.signals.finished.connect(self.profile_progress.hide)
+        worker.signals.error.connect(self.research_failed)
+        worker.signals.finished.connect(lambda: (
+            self.profile_progress.hide(),
+            self.research_button.setEnabled(self.settings.enable_remote_model_research),
+        ))
         self.pool.start(worker)
 
-    def model_card_ready(self, card: dict[str, object]) -> None:
+    def model_card_ready(self, result: tuple[str, dict[str, object]]) -> None:
+        """Attach a retrieved publisher card to the profile for its captured model."""
+        model_name, card = result
         profile = next(
             (item for item in self.repository.list_profiles()
-             if item.model_name == self.research_model_name), None
+             if item.model_name == model_name), None
         )
         if profile is None:
             QMessageBox.warning(self, "Profile required", "Profile this model before attaching its model card.")
             return
         attach_model_card_evidence(profile, card)
         self.repository.save_profile(profile)
-        safe = self.research_model_name.replace("/", "_").replace(":", "_")
+        safe = model_name.replace("/", "_").replace(":", "_")
         markdown = str(card.get("model_card_markdown") or "")
         (self.paths.profiles_dir / f"{safe}.model-card.md").write_text(markdown, encoding="utf-8")
-        if self.selected_model == self.research_model_name:
+        if self.selected_model == model_name:
             self.profile_view.setHtml(self.render_profile(profile))
         self.status.setText(f"Publisher dossier attached: {profile.professional_title}")
         QMessageBox.information(
@@ -411,24 +437,55 @@ class MainWindow(QMainWindow):
             self.status.setText(f"Archived memory: {record.memory_id[:8]}")
 
     def run_agent(self) -> None:
+        """Run a profile-bound agent off the UI thread with live, timestamped events."""
         model = self.agent_model.text().strip()
         task = self.task.toPlainText().strip()
         profile = next((p for p in self.repository.list_profiles() if p.model_name == model), None)
         if not task or profile is None:
             QMessageBox.warning(self, "Profile required", "Enter a task and profile the selected model first.")
             return
-        workspace = Path(self.workspace.text())
-        tools = WorkspaceTools(workspace, allow_shell=False)
-        runtime = AgentRuntime(self.client, max_steps=self.settings.max_agent_steps,
-                               keep_alive=self.settings.keep_alive, repository=self.repository,
-                               memory_store=self.memory_store)
+        workspace = Path(self.workspace.text()).expanduser().resolve()
+        self.run_agent_button.setEnabled(False)
         self.agent_progress.show()
-        worker = FunctionWorker(runtime.run, model, profile, task, tools)
-        worker.signals.progress.connect(lambda event: self.agent_output.append(html.escape(str(event))))
+        self.agent_output.clear()
+        worker = FunctionWorker(
+            lambda: self._run_agent_task(
+                model, profile, task, workspace,
+                lambda message: worker.signals.progress.emit(message),
+            )
+        )
+        worker.signals.progress.connect(
+            lambda message: self.agent_output.append(html.escape(message))
+        )
         worker.signals.result.connect(self.agent_finished)
         worker.signals.error.connect(self.show_error)
-        worker.signals.finished.connect(self.agent_progress.hide)
+        worker.signals.finished.connect(lambda: (
+            self.agent_progress.hide(), self.run_agent_button.setEnabled(True)
+        ))
         self.pool.start(worker)
+
+    def _run_agent_task(
+        self, model: str, profile: ModelProfile, task: str,
+        workspace: Path, progress: Callable[[str], None],
+    ) -> object:
+        """Validate the live model digest and run the bounded agent with local memory."""
+        installed = next(
+            (item for item in ModelProfiler(self.client).inventory() if item.name == model),
+            None,
+        )
+        if installed is None:
+            raise ValueError(f"Model {model!r} is not installed in the configured Ollama instance.")
+        validate_installed_model_binding(profile, installed)
+        tools = WorkspaceTools(workspace, allow_shell=False)
+        runtime = AgentRuntime(
+            self.client, max_steps=self.settings.max_agent_steps,
+            keep_alive=self.settings.keep_alive, repository=self.repository,
+            memory_store=self.memory_store,
+        )
+        return runtime.run(
+            model, profile, task, tools,
+            event=lambda item: progress(f"[{item.kind}] {item.message}"),
+        )
 
     def agent_finished(self, result: object) -> None:
         self.agent_output.append(f"<b>{html.escape(result.status)}</b><p>{html.escape(result.final_message)}</p>")
