@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -53,7 +54,7 @@ class MemoryStore:
             raise ValueError("Memory scope_id cannot be empty")
         if category not in MEMORY_CATEGORIES:
             raise ValueError(f"Unsupported memory category: {category}")
-        if not 0.0 <= confidence <= 1.0:
+        if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
             raise ValueError("Memory confidence must be between 0 and 1")
         now = datetime.now(UTC).isoformat()
         record = MemoryRecord(
