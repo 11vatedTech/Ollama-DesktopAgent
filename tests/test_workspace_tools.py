@@ -166,3 +166,23 @@ def test_search_and_command_output_redact_sensitive_values(tmp_path: Path) -> No
     safe_stdout, count = tools.redact_sensitive_text("PASSWORD=command-secret-value")
     assert count == 1
     assert "command-secret-value" not in safe_stdout
+
+
+
+def test_command_stdout_and_approval_metadata_redact_tokens(tmp_path: Path) -> None:
+    approval_prompts: list[str] = []
+    tools = WorkspaceTools(
+        tmp_path,
+        allow_shell=True,
+        allowed_commands=("python",),
+        approval=lambda prompt: approval_prompts.append(prompt) or True,
+    )
+    secret = "run-secret-value-123456"
+    result = tools.run_command(
+        "python", ["-c", f"print('API_TOKEN={secret}')"]
+    )
+    assert result["return_code"] == 0
+    assert secret not in result["stdout"]
+    assert secret not in result["command"][1]
+    assert secret not in approval_prompts[0]
+    assert result["secrets_redacted"] >= 1
