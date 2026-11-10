@@ -1,6 +1,9 @@
 from pathlib import Path
+
 import pytest
+
 from ollama_workstation.agents.tools import ToolError, WorkspaceTools
+
 
 def test_workspace_write_read_and_list(tmp_path: Path) -> None:
     tools = WorkspaceTools(tmp_path)
