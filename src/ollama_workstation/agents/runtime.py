@@ -52,10 +52,33 @@ class AgentRuntime:
         emit = event or (lambda _item: None)
         run_id = str(uuid.uuid4())
         trace: list[AgentEvent] = []
+        persistence_warning_reported = False
 
         def record(kind: str, message: str, **data: Any) -> None:
+            nonlocal persistence_warning_reported
             item = AgentEvent(kind, message, data)
             trace.append(item)
+            if self.repository is not None:
+                try:
+                    self.repository.append_run_event(
+                        run_id, model, profile.professional_title, task,
+                        {
+                            "kind": item.kind,
+                            "message": item.message,
+                            "data": item.data,
+                            "timestamp": item.timestamp,
+                        },
+                    )
+                except Exception as exc:
+                    if not persistence_warning_reported:
+                        persistence_warning_reported = True
+                        warning = AgentEvent(
+                            "persistence_error",
+                            "Live event journaling failed; the final in-memory trace may still be saved.",
+                            {"error_type": type(exc).__name__},
+                        )
+                        trace.append(warning)
+                        emit(warning)
             emit(item)
 
         def finish(status: str, final_message: str, steps: int) -> AgentResult:
