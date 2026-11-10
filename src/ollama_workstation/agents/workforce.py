@@ -58,10 +58,13 @@ class WorkforceMatcher:
             fit = sum(adjusted_scores) / len(adjusted_scores)
             completeness = len(observed) / len(requirements)
             fit *= 0.7 + 0.3 * completeness
-            certified_evidence = not missing and all(item.confidence >= 0.7 and item.status == "passed"
-                                                     for item in observed)
+            role_qualified = (
+                profile.agentability_status == "role_qualified"
+                and not missing
+                and all(item.confidence >= 0.7 and item.status == "passed" for item in observed)
+            )
             matches.append(RoleMatch(
                 profile.model_name, profile.professional_title, role, round(fit, 1),
-                len(observed), missing, "evidence-backed" if certified_evidence else "provisional",
+                len(observed), missing, "role-qualified" if role_qualified else "provisional",
             ))
         return sorted(matches, key=lambda item: (item.fit_score, item.evidence_count), reverse=True)
