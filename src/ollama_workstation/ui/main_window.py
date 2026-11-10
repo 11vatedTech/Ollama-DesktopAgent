@@ -35,8 +35,9 @@ from ollama_workstation.agents.binding import validate_installed_model_binding
 from ollama_workstation.agents.memory import MemoryStore
 from ollama_workstation.agents.runtime import AgentRuntime
 from ollama_workstation.agents.tools import WorkspaceTools
+from ollama_workstation.benchmarking.runner import BenchmarkRunner
 from ollama_workstation.config import AppPaths, load_settings, save_settings
-from ollama_workstation.models.schemas import ModelProfile
+from ollama_workstation.models.schemas import ModelProfile, ModelRef
 from ollama_workstation.ollama.client import OllamaClient
 from ollama_workstation.profiling.profiler import ModelProfiler
 from ollama_workstation.profiling.research import HuggingFaceResearcher, attach_model_card_evidence
@@ -82,6 +83,7 @@ class MainWindow(QMainWindow):
         self.pool = QThreadPool.globalInstance()
         self.agent_cancel_event: Event | None = None
         self.models: list[str] = []
+        self.model_refs: dict[str, ModelRef] = {}
         self.selected_model = ""
         self.run_history_data: list[dict[str, object]] = []
         self._build()
@@ -147,8 +149,12 @@ class MainWindow(QMainWindow):
         self.profile_button = QPushButton("Profile selected model")
         self.profile_button.clicked.connect(self.profile_selected)
         self.profile_button.setEnabled(False)
+        self.benchmark_button = QPushButton("Run core benchmark")
+        self.benchmark_button.clicked.connect(self.benchmark_selected)
+        self.benchmark_button.setEnabled(False)
         row.addWidget(refresh)
         row.addWidget(self.profile_button)
+        row.addWidget(self.benchmark_button)
         row.addWidget(QLabel("Trials"))
         self.profile_repeats = QSpinBox()
         self.profile_repeats.setRange(1, 5)
@@ -337,15 +343,20 @@ class MainWindow(QMainWindow):
 
     def models_loaded(self, models: list[object]) -> None:
         self.models = [str(item.name) for item in models]
+        self.model_refs = {
+            str(item.name): item for item in models if isinstance(item, ModelRef)
+        }
         self.model_list.clear()
         self.model_list.addItems(self.models)
         self.profile_button.setEnabled(bool(self.models))
+        self.benchmark_button.setEnabled(bool(self.models))
         self.agent_model.setText(self.models[0] if self.models else "")
         self.status.setText(f"Ollama connected · {len(self.models)} installed models")
         self.overview.setHtml(f"<h2>Ollama connected</h2><p>{len(self.models)} local model(s) discovered.</p>")
 
     def select_model(self, name: str) -> None:
         self.profile_button.setEnabled(bool(name))
+        self.benchmark_button.setEnabled(bool(name) and name in self.model_refs)
         self.selected_model = name
         profile = next((p for p in self.repository.list_profiles() if p.model_name == name), None)
         self.profile_view.setHtml(self.render_profile(profile) if profile else
@@ -364,6 +375,77 @@ class MainWindow(QMainWindow):
         worker.signals.error.connect(self.show_error)
         worker.signals.finished.connect(lambda: (self.profile_button.setEnabled(True), self.profile_progress.hide()))
         self.pool.start(worker)
+
+    def benchmark_selected(self) -> None:
+        item = self.model_list.currentItem()
+        if item is None:
+            return
+        name = item.text()
+        model_ref = self.model_refs.get(name)
+        if model_ref is None:
+            QMessageBox.warning(
+                self, "Model inventory unavailable",
+                "Refresh the Ollama inventory and select an installed model before benchmarking.",
+            )
+            return
+        self.benchmark_button.setEnabled(False)
+        self.profile_progress.show()
+        runner = BenchmarkRunner(self.client, keep_alive=self.settings.keep_alive)
+        worker = FunctionWorker(
+            runner.run, name,
+            model_digest=model_ref.digest,
+            suite_id="core",
+            repeats=self.profile_repeats.value(),
+            progress=lambda message: worker.signals.progress.emit(message),
+        )
+        worker.signals.progress.connect(self.status.setText)
+        worker.signals.result.connect(self.benchmark_ready)
+        worker.signals.error.connect(self.show_error)
+        worker.signals.finished.connect(lambda: (
+            self.benchmark_button.setEnabled(True), self.profile_progress.hide()
+        ))
+        self.pool.start(worker)
+
+    def benchmark_ready(self, report: object) -> None:
+        try:
+            destination = (
+                self.paths.profiles_dir / "benchmarks"
+                / f"{report.model_name.replace('/', '_').replace(':', '_')}-{report.run_id[:8]}.json"
+            )
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(
+                json.dumps(report.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+            rows = "".join(
+                "<tr>"
+                f"<td>{html.escape(case.capability)}</td>"
+                f"<td>{case.passed}/{case.attempts}</td>"
+                f"<td>{case.score:.1f}/100</td>"
+                f"<td>{case.wilson_95_low:.2f}–{case.wilson_95_high:.2f}</td>"
+                f"<td>{'—' if case.median_latency_ms is None else f'{case.median_latency_ms:.0f} ms'}</td>"
+                "</tr>"
+                for case in report.cases
+            )
+            safe_model = html.escape(report.model_name)
+            self.profile_view.setHtml(
+                f"<h1>11vated Core Benchmark</h1><h3>{safe_model}</h3>"
+                f"<p><b>Suite:</b> {html.escape(report.suite_id)}@{html.escape(report.suite_version)}"
+                f" · <b>Digest:</b> {html.escape(report.model_digest or 'unknown')}</p>"
+                f"<h2>{report.score:.1f}/100</h2>"
+                f"<p>{report.total_passed}/{report.total_attempts} trial(s) passed across "
+                f"{len(report.cases)} deterministic cases. Results are diagnostic, not certification.</p>"
+                "<table border='1' cellpadding='5'>"
+                "<tr><th>Capability</th><th>Passes</th><th>Score</th><th>Wilson 95% interval</th>"
+                f"<th>Median latency</th></tr>{rows}</table>"
+                f"<p><b>Manifest SHA-256:</b> {html.escape(report.manifest_sha256)}</p>"
+                f"<p><b>Report:</b> {html.escape(str(destination))}</p>"
+            )
+            self.status.setText(
+                f"Benchmark completed · {report.score:.1f}/100 · "
+                f"{report.total_passed}/{report.total_attempts} attempts passed"
+            )
+        except (OSError, TypeError, ValueError, AttributeError) as exc:
+            self.show_error(f"Benchmark completed but report rendering failed: {exc}")
 
     def profile_ready(self, profile: ModelProfile) -> None:
         self.repository.save_profile(profile)
