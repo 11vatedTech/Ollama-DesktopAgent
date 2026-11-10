@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import re
-from difflib import SequenceMatcher
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from difflib import SequenceMatcher
 from typing import Any
 
 import httpx
