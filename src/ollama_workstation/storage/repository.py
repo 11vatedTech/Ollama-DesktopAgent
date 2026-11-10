@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from collections.abc import Iterator
@@ -320,7 +321,7 @@ class Repository:
         payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
         if len(payload_json.encode("utf-8")) > 1_000_000:
             raise ValueError("Agent run checkpoint exceeds the 1 MB persistence limit")
-        payload_sha256 = __import__("hashlib").sha256(payload_json.encode("utf-8")).hexdigest()
+        payload_sha256 = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
         with self._connection() as db:
             db.execute(
                 """INSERT INTO agent_run_checkpoints(
@@ -353,8 +354,6 @@ class Repository:
             ).fetchone()
         if row is None:
             return None
-        import hashlib
-
         encoded = str(row["payload_json"])
         digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
         if digest != row["payload_sha256"]:
