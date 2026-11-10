@@ -135,7 +135,7 @@ def test_workspace_search_never_returns_secrets(tmp_path: Path) -> None:
 def test_text_outputs_redact_credentials_before_model_context(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    source = "\\n".join([
+    source = "\n".join([
         "API_KEY=plain-api-secret",
         '{"client_secret": "json-client-secret", "mode": "local"}',
         "Authorization: Bearer bearer-token-value-123456789",
