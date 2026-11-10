@@ -1,5 +1,6 @@
 from ollama_workstation.profiling.profiler import ModelProfiler
 
+
 class FakeOllama:
     def list_models(self):
         return [{"name": "example:latest", "size": 123, "digest": "sha256:abc",
