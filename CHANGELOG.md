@@ -14,8 +14,10 @@ Development increment on the 0.1.0 foundation. This is a pre-release engineering
 ### Agent runtime
 - Explicit host tool catalogue and response contracts for native function calls, structured JSON actions and guided ACTION/FINAL output.
 - Host-owned tool-schema validation rejects missing/extra parameters, type mismatches and disabled tools. Credential/private-key paths are denied by default, with common environment-template exceptions.
-- SQLite scoped project/user/agent memory with explicit notes, lexical recall, tags, archive semantics and untrusted-context handling.
+- SQLite scoped project/user/agent memory with explicit notes, lexical recall, tags, archive semantics and untrusted-context handling. Credential-like values are redacted before saving memory.
 - Desktop cancellation closes active streamed Ollama chat requests and is checked between tool operations. Approved commands receive the cancellation event and attempt process-tree cleanup (POSIX process groups; Windows taskkill best-effort). This is not an OS sandbox.
+- Agent run events are committed incrementally to a durable SQLite journal; interrupted runs retain a crash-visible running state and ordered event history. The desktop includes a Run History view.
+- Credential-like values are redacted from workspace/search/command output, persisted run objectives and event payloads, and final CLI/desktop responses. This is heuristic filtering, not complete DLP.
 - Model-card research callbacks are bound to the initiating model, avoiding cross-model result races.
 
 ### Desktop, CLI and operations
