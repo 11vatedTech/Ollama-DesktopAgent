@@ -70,7 +70,9 @@ def _effective_score(result: CapabilityResult | None) -> float | None:
 def _title_for(role_key: str, profile: ModelProfile, score: float) -> str:
     comprehension = _effective_score(_cap(profile, "code_comprehension"))
     generation = _effective_score(_cap(profile, "code_generation"))
-    if role_key in {"software_engineering", "repository_analysis"}:
+    if role_key == "repository_analysis":
+        return "Repository Cartographer"
+    if role_key == "software_engineering":
         if (comprehension is not None and generation is not None
                 and comprehension >= generation + 10):
             return "Repository Cartographer"
