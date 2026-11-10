@@ -160,7 +160,7 @@ class ModelProfiler:
         attempts = len(outcomes)
         status = "passed" if passed == attempts else "partial" if passed else "failed"
         scored = [item.score for item in outcomes if item.score is not None]
-        score = (passed / attempts * 100.0) if scored else None
+        score = (sum(scored) / len(scored)) if scored else None
         durations = [item.duration_ms for item in outcomes if item.duration_ms is not None]
         evidence = [f"Trial {index + 1}: " + "; ".join(item.evidence)
                     for index, item in enumerate(outcomes) if item.evidence]
