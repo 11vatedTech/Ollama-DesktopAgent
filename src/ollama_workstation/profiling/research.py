@@ -9,6 +9,9 @@ from typing import Any
 
 import httpx
 
+from ollama_workstation.models.schemas import Evidence
+from ollama_workstation.profiling.model_card import extract_model_card_dossier
+
 
 @dataclass(slots=True)
 class ModelCardCandidate:
@@ -40,7 +43,7 @@ class HuggingFaceResearcher:
                 params={"search": term, "limit": max(1, min(limit, 20)),
                         "sort": "downloads", "direction": "-1"},
                 timeout=self.timeout,
-                headers={"User-Agent": "11vated-Ollama-Workstation/0.1.0"},
+                headers={"User-Agent": "11vated-Ollama-Workstation/0.2.0"},
             )
             response.raise_for_status()
             data = response.json()
@@ -80,52 +83,72 @@ class HuggingFaceResearcher:
 
 def attach_model_card_evidence(profile: Any, card: dict[str, Any]) -> Any:
     """Attach a user-selected upstream card without inventing undisclosed training facts."""
-    from ollama_workstation.models.schemas import Evidence
-
-    metadata = card.get("metadata") or {}
-    card_data = metadata.get("cardData") or {}
-    tags = metadata.get("tags") or []
-    repo_id = str(metadata.get("id") or "")
-    url = f"https://huggingface.co/{repo_id}" if repo_id else str(card.get("model_card_url") or "")
-    if not repo_id or not url:
+    dossier = extract_model_card_dossier(card)
+    if not dossier.repository_id:
         raise ValueError("Selected model card is missing a canonical repository identifier")
-    profile.origin_evidence.append(Evidence(
-        "User-selected upstream repository", repo_id, "documented", "Hugging Face Model Hub", url,
-        notes="Repository selected explicitly by the user; identity match is not independently guaranteed."))
-    pipeline = metadata.get("pipeline_tag") or card_data.get("pipeline_tag")
-    if pipeline:
-        profile.origin_evidence.append(Evidence(
-            "Publisher pipeline tag", str(pipeline), "documented", "Hugging Face Model Hub", url))
-    license_name = card_data.get("license")
-    if not license_name:
-        license_name = next((str(tag).split(":", 1)[1] for tag in tags
-                             if str(tag).startswith("license:")), None)
-    if license_name:
-        profile.origin_evidence.append(Evidence(
-            "Model-card license declaration", str(license_name), "documented", "Hugging Face Model Hub", url,
-            notes="Verify full license text and restrictions before redistribution."))
-    datasets = card_data.get("datasets")
-    if datasets:
-        profile.origin_evidence.append(Evidence(
-            "Model-card dataset disclosure", ", ".join(str(x) for x in datasets),
-            "documented", "Hugging Face model card", url,
-            notes="Publisher-declared metadata; not an independently verified complete corpus."))
-    else:
-        profile.origin_evidence.append(Evidence(
-            "Training dataset disclosure", "No structured dataset disclosure found",
-            "unknown", "Hugging Face model card", url,
-            notes="Absence of metadata does not establish absence of training data."))
-    base_model = card_data.get("base_model")
-    if base_model:
-        values = base_model if isinstance(base_model, list) else [base_model]
-        profile.origin_evidence.append(Evidence(
-            "Publisher-declared base model", ", ".join(str(x) for x in values),
-            "documented", "Hugging Face model card", url))
-    card_text = str(card.get("model_card_markdown") or "")
-    profile.origin_evidence.append(Evidence(
-        "Model card content hash",
-        str(card.get("model_card_sha256") or hashlib.sha256(card_text.encode("utf-8")).hexdigest()),
-        "observed", "Hugging Face public model-card content",
-        str(card.get("model_card_url") or url),
-        notes="Hash binds the local dossier to the retrieved model-card text."))
+
+    # Re-attaching an updated card replaces the previous card-derived claims.
+    card_claims = {
+        "User-selected upstream repository", "Publisher pipeline tag",
+        "Model-card license declaration", "Model-card dataset disclosure",
+        "Training dataset disclosure", "Publisher-declared base model",
+        "Publisher-declared languages", "Publisher intended use",
+        "Publisher training details", "Publisher evaluation disclosure",
+        "Publisher-disclosed limitations", "Model card content hash",
+    }
+    profile.origin_evidence = [
+        item for item in profile.origin_evidence if item.claim not in card_claims
+    ]
+    url = dossier.model_card_url or f"https://huggingface.co/{dossier.repository_id}"
+
+    def add(claim: str, value: str, *, level: str = "documented", notes: str = "") -> None:
+        if value:
+            profile.origin_evidence.append(Evidence(
+                claim, value, level, "User-selected Hugging Face model card", url, notes=notes
+            ))
+
+    add("User-selected upstream repository", dossier.repository_id,
+        notes="Repository selected explicitly by the user; the Ollama-to-upstream identity match is not independently guaranteed.")
+    add("Publisher pipeline tag", dossier.pipeline_tag)
+    add("Model-card license declaration", dossier.license,
+        notes="Verify the full license text and restrictions before redistribution.")
+    add("Model-card dataset disclosure", ", ".join(dossier.datasets),
+        notes="Publisher-declared metadata; not an independently verified or necessarily complete training corpus.")
+    if not dossier.datasets:
+        add("Training dataset disclosure", "No structured dataset disclosure found",
+            level="unknown",
+            notes="Absence of disclosure does not establish absence of training data.")
+    add("Publisher-declared base model", ", ".join(dossier.base_models))
+    add("Publisher-declared languages", ", ".join(dossier.languages))
+    add("Publisher intended use", dossier.intended_use)
+    add("Publisher training details", dossier.training_details)
+    add("Publisher evaluation disclosure", dossier.evaluation_details)
+    add("Publisher-disclosed limitations", dossier.limitations,
+        notes="Publisher disclosure; independent limitations require empirical evaluation.")
+    add("Model card content hash", dossier.model_card_sha256, level="observed",
+        notes="SHA-256 binds this dossier to the retrieved model-card text.")
+
+    # A publisher's explicit task tag/section enriches declared purpose, never empirical scores.
+    purpose_parts = []
+    if dossier.pipeline_tag:
+        purpose_parts.append(f"Publisher pipeline: {dossier.pipeline_tag}.")
+    if dossier.intended_use:
+        purpose_parts.append("Publisher-stated intended use: " + dossier.intended_use[:1200])
+    if purpose_parts:
+        profile.declared_purpose = " ".join(purpose_parts)
+
+    profile.operational["upstream_model_card"] = {
+        "repository_id": dossier.repository_id,
+        "metadata_url": dossier.metadata_url,
+        "model_card_url": dossier.model_card_url,
+        "sha256": dossier.model_card_sha256,
+        "retrieved_at": __import__("datetime").datetime.now(
+            __import__("datetime").UTC
+        ).isoformat(),
+        "publisher_tags": dossier.tags,
+    }
+    if dossier.limitations:
+        limitation = "Publisher-disclosed: " + dossier.limitations[:1200]
+        if limitation not in profile.known_limitations:
+            profile.known_limitations.append(limitation)
     return profile
