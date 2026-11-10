@@ -29,6 +29,7 @@ class _BoundedPipeCapture:
         self.max_chars = max(1, max_chars)
         self._chunks: deque[str] = deque()
         self._size = 0
+        self._total_size = 0
         self._lock = Lock()
 
     def drain(self, stream: TextIO) -> None:
@@ -37,6 +38,7 @@ class _BoundedPipeCapture:
                 with self._lock:
                     self._chunks.append(chunk)
                     self._size += len(chunk)
+                    self._total_size += len(chunk)
                     while self._size > self.max_chars and self._chunks:
                         excess = self._size - self.max_chars
                         first = self._chunks[0]
@@ -48,6 +50,11 @@ class _BoundedPipeCapture:
                             self._size -= excess
         finally:
             stream.close()
+
+    @property
+    def truncated(self) -> bool:
+        with self._lock:
+            return self._total_size > self._size
 
     def value(self) -> str:
         with self._lock:
@@ -402,14 +409,21 @@ class WorkspaceTools:
             raise ToolError("Command execution was cancelled and its process tree was stopped")
         if timed_out:
             raise ToolError("Command exceeded the 90-second execution limit; its process tree was stopped")
-        safe_stdout, stdout_redactions = self.redact_sensitive_text(stdout_capture.value()[-12000:])
-        safe_stderr, stderr_redactions = self.redact_sensitive_text(stderr_capture.value()[-12000:])
+        stdout_value = stdout_capture.value()
+        stderr_value = stderr_capture.value()
+        output_truncated = (
+            stdout_capture.truncated or stderr_capture.truncated
+            or len(stdout_value) > 12_000 or len(stderr_value) > 12_000
+        )
+        safe_stdout, stdout_redactions = self.redact_sensitive_text(stdout_value[-12_000:])
+        safe_stderr, stderr_redactions = self.redact_sensitive_text(stderr_value[-12_000:])
         return {
             "command": safe_argv,
             "return_code": process.returncode,
             "stdout": safe_stdout,
             "stderr": safe_stderr,
             "secrets_redacted": stdout_redactions + stderr_redactions,
+            "output_truncated": output_truncated,
         }
 
     def definitions(self) -> list[dict[str, Any]]:
