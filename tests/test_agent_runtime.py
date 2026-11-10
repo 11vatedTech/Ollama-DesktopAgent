@@ -1,8 +1,10 @@
 from pathlib import Path
+
 from ollama_workstation.agents.runtime import AgentRuntime
 from ollama_workstation.agents.tools import WorkspaceTools
 from ollama_workstation.models.schemas import ModelProfile
 from ollama_workstation.storage.repository import Repository
+
 
 class FakeClient:
     def __init__(self, responses):
