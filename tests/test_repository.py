@@ -1,6 +1,8 @@
 from pathlib import Path
+
 from ollama_workstation.models.schemas import CapabilityResult, ModelProfile
 from ollama_workstation.storage.repository import Repository
+
 
 def test_profiles_round_trip(tmp_path: Path) -> None:
     repository = Repository(tmp_path / "state.sqlite3")
