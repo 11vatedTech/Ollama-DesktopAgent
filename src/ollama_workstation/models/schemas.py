@@ -46,6 +46,7 @@ class CapabilityResult:
     method: str = ""
     evidence: list[str] = field(default_factory=list)
     limitations: list[str] = field(default_factory=list)
+    metrics: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
