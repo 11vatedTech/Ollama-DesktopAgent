@@ -1,4 +1,5 @@
 from pathlib import Path
+from threading import Event
 
 from ollama_workstation.agents.runtime import AgentRuntime
 from ollama_workstation.agents.tools import WorkspaceTools
@@ -94,3 +95,52 @@ def test_structured_action_harness_receives_json_protocol_and_tool_schema(tmp_pa
     assert "Return exactly one JSON action object" in system_prompt
     assert '"name": "list_files"' in system_prompt
     assert client.payloads[0]["output_format"]["properties"]["action"]["enum"] == ["tool", "final"]
+
+
+
+def test_pre_cancelled_agent_persists_cancelled_run_without_model_call(tmp_path: Path) -> None:
+    client = FakeClient([])
+    profile = ModelProfile(
+        model_name="fake:latest", digest="abc", generated_at="now",
+        professional_title="General Intelligence Associate", agentability_mode="guided",
+    )
+    repository = Repository(tmp_path / "cancel.sqlite3")
+    cancel_event = Event()
+    cancel_event.set()
+    result = AgentRuntime(client, repository=repository).run(
+        "fake:latest", profile, "Do not start", WorkspaceTools(tmp_path / "workspace"),
+        cancel_event=cancel_event,
+    )
+    assert result.status == "cancelled"
+    assert result.steps == 0
+    assert client.messages == []
+    assert repository.list_runs()[0]["status"] == "cancelled"
+
+
+def test_cancellation_after_model_response_prevents_tool_side_effect(tmp_path: Path) -> None:
+    cancel_event = Event()
+
+    class CancelAfterResponse(FakeClient):
+        def chat(self, model, messages, **kwargs):
+            response = super().chat(model, messages, **kwargs)
+            cancel_event.set()
+            return response
+
+    workspace = tmp_path / "workspace"
+    client = CancelAfterResponse([
+        {"message": {"role": "assistant", "content": "", "tool_calls": [
+            {"function": {"name": "write_file",
+                          "arguments": {"path": "new.txt", "content": "must not be written"}}}
+        ]}},
+    ])
+    profile = ModelProfile(
+        model_name="fake:latest", digest="abc", generated_at="now",
+        professional_title="Native Tool Operations Specialist", agentability_mode="native_tools",
+    )
+    result = AgentRuntime(client).run(
+        "fake:latest", profile, "Write a file", WorkspaceTools(workspace),
+        cancel_event=cancel_event,
+    )
+    assert result.status == "cancelled"
+    assert not (workspace / "new.txt").exists()
+    assert not any(event.kind == "tool_completed" for event in result.trace)
