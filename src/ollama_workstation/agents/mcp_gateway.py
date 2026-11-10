@@ -60,15 +60,24 @@ class MCPServerSpec:
                 "Unsupported MCP server configuration field(s): " + ", ".join(sorted(extra))
             )
         try:
+            raw_args = payload.get("args", [])
+            raw_env_refs = payload.get("env_refs", {})
+            raw_approved = payload.get("approved_tools", [])
+            if not isinstance(raw_args, list) or not all(isinstance(item, str) for item in raw_args):
+                raise MCPConfigurationError("MCP args must be a JSON array of strings.")
+            if not isinstance(raw_env_refs, dict):
+                raise MCPConfigurationError("MCP env_refs must be a JSON object.")
+            if not isinstance(raw_approved, list) or not all(isinstance(item, str) for item in raw_approved):
+                raise MCPConfigurationError("MCP approved_tools must be a JSON array of exact tool-name strings.")
             spec = cls(
                 name=str(payload.get("name") or ""),
                 transport=str(payload.get("transport") or ""),
                 enabled=payload.get("enabled", False),
                 command=str(payload.get("command") or ""),
-                args=tuple(payload.get("args") or ()),
+                args=tuple(raw_args),
                 url=str(payload.get("url") or ""),
-                env_refs=dict(payload.get("env_refs") or {}),
-                approved_tools=tuple(payload.get("approved_tools") or ()),
+                env_refs=dict(raw_env_refs),
+                approved_tools=tuple(raw_approved),
                 call_timeout_seconds=float(payload.get("call_timeout_seconds", 45.0)),
             )
         except (TypeError, ValueError) as exc:
