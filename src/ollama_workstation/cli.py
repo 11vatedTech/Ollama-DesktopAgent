@@ -1,10 +1,12 @@
 """Command-line entry point for inventory, profiling and agent execution."""
 from __future__ import annotations
+
 import argparse
 import json
 import sys
 from pathlib import Path
 from typing import Any
+
 from ollama_workstation import __version__
 from ollama_workstation.agents.identity_package import export_identity_package
 from ollama_workstation.agents.runtime import AgentRuntime
