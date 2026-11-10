@@ -11,11 +11,11 @@ from typing import Any
 from ollama_workstation import __version__
 from ollama_workstation.agents.binding import validate_installed_model_binding
 from ollama_workstation.agents.identity_package import export_identity_package
-from ollama_workstation.agents.memory import MemoryStore
 from ollama_workstation.agents.mcp_gateway import CompositeToolRegistry, MCPToolGateway
-from ollama_workstation.benchmarking.runner import BenchmarkRunner
+from ollama_workstation.agents.memory import MemoryStore
 from ollama_workstation.agents.runtime import AgentRuntime
 from ollama_workstation.agents.tools import WorkspaceTools
+from ollama_workstation.benchmarking.runner import BenchmarkRunner
 from ollama_workstation.config import AppPaths, load_settings
 from ollama_workstation.ollama.client import OllamaClient, OllamaError
 from ollama_workstation.profiling.profiler import ModelProfiler
