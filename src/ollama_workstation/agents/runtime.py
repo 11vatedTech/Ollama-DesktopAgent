@@ -71,6 +71,8 @@ class AgentRuntime:
 
         tool_specs = tools.definitions()
         tool_names = [entry["function"]["name"] for entry in tool_specs]
+        native_tools = profile.agentability_mode == "native_tools"
+        structured = profile.agentability_mode == "structured_actions"
         memories: list[MemoryRecord] = []
         if self.memory_store is not None:
             try:
@@ -86,11 +88,11 @@ class AgentRuntime:
             except Exception as exc:
                 record("memory_unavailable", f"Local memory retrieval failed: {type(exc).__name__}.")
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": self._system_prompt(profile, memories)},
+            {"role": "system", "content": self._system_prompt(
+                profile, memories, tool_specs, profile.agentability_mode
+            )},
             {"role": "user", "content": task},
         ]
-        native_tools = profile.agentability_mode == "native_tools"
-        structured = profile.agentability_mode == "structured_actions"
         record("started", f"Agent started as {profile.professional_title}.",
                model=model, mode=profile.agentability_mode, workspace=str(tools.workspace))
 
@@ -172,18 +174,55 @@ class AgentRuntime:
         return finish("step_limit", "Execution stopped at the maximum step limit. Review the trace and continue with a new task.", self.max_steps)
 
     @staticmethod
-    def _system_prompt(profile: ModelProfile, memories: list[MemoryRecord] | None = None) -> str:
+    def _system_prompt(
+        profile: ModelProfile,
+        memories: list[MemoryRecord] | None = None,
+        tool_specs: list[dict[str, Any]] | None = None,
+        harness_mode: str = "guided",
+    ) -> str:
+        """Build a model-specific contract with the exact host-approved tool catalogue."""
         prompt = (
             f"You are {profile.professional_title}. Your assigned specialization is: "
             f"{profile.primary_specialization}\n\n"
             "You are operating inside a controlled local agent workstation. Complete the user's "
-            "objective using only the provided tools and assigned workspace. Inspect before editing. "
+            "objective using only the listed host tools and assigned workspace. Inspect before editing. "
             "Do not claim actions were completed unless tool results establish that fact. If a tool "
             "fails, inspect the error and choose a safe recovery. Never attempt to bypass permissions, "
             "read outside the workspace, access secrets, or invent tool results. Ask for clarification "
             "when an irreversible or ambiguous action is required. Finish with a concise report of "
             "changes, tests and remaining limitations."
         )
+        catalogue = [
+            {
+                "name": entry.get("function", {}).get("name", ""),
+                "description": entry.get("function", {}).get("description", ""),
+                "parameters": entry.get("function", {}).get("parameters", {}),
+            }
+            for entry in (tool_specs or [])
+        ]
+        if catalogue:
+            prompt += "\n\nHOST-APPROVED TOOL CATALOGUE (authoritative):\n"
+            prompt += json.dumps(catalogue, ensure_ascii=False)
+            if harness_mode == "native_tools":
+                prompt += (
+                    "\nUse native tool calls for these tools. Do not imitate tool calls in prose. "
+                    "The host validates every call and may deny it."
+                )
+            elif harness_mode == "structured_actions":
+                prompt += (
+                    "\nReturn exactly one JSON action object per response. For a tool call use "
+                    '{"action":"tool","name":"EXACT_TOOL_NAME","arguments":{...}}. '
+                    'For a final answer use {"action":"final","message":"..."} . '
+                    "Tool arguments must match the selected tool's parameter schema. Do not add "
+                    "unlisted properties or place extra prose outside the JSON object."
+                )
+            else:
+                prompt += (
+                    "\nWhen a tool is required, return only this form: "
+                    'ACTION: {"name":"EXACT_TOOL_NAME","arguments":{...}} . '
+                    "When finished, return only this form: FINAL: your concise result. "
+                    "Do not invent tool names, arguments, results or permission grants."
+                )
         if memories:
             notes = [
                 {"category": item.category, "source": item.source,
