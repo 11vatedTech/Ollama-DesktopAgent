@@ -115,7 +115,8 @@ Objective → plan → permission check → action proposal → host validation 
 Required runtime properties:
 - Durable state and resumable runs.
 - Desktop cancellation now closes the active Ollama streaming response and checks cancellation between tool operations. Approved command execution accepts the same cancellation event and uses process-group/taskkill cleanup on timeout or stop. Windows descendant cleanup remains best-effort; these are not OS isolation boundaries.
-- Per-run deadlines and bounded steps.
+- Per-run deadlines and bounded steps. Current runtime adds a maximum of 8 tool calls per step, 64 per run, rejects an oversized response batch above 32 calls, and counts serialized tool-call JSON in the conversation budget.
+- Approved command pipes are drained concurrently into bounded 256 KB tail buffers; only the final 12 KB per stream is exposed to the agent, with truncation reported. This bounds captured output memory, not the process's own memory or CPU.
 - Typed tools with JSON Schema validation.
 - Idempotency keys for retryable operations.
 - Context compaction with retained task invariants.
@@ -207,7 +208,7 @@ These are research references, not approved runtime dependencies. For every prop
 | G1 — Model dossier | Publisher fields, source links, explicit match confirmation, hash, unknown handling | v0.2 increment implemented; needs CI and live model-card validation |
 | G2 — Empirical profiling | Repeated tests, host/GPU telemetry, expanded task suites, repeatability, confidence and resource metrics | Partial; repeated smoke probes and best-effort telemetry implemented, specialist suites remain |
 | G3 — Agentification | Protocol adapters, strict host-side tool argument validation, bounded recovery and digest binding | Partial; native/structured/guided paths and workspace tool schema validation implemented |
-| G4 — Safe execution | OS sandbox, permission broker, cancellation, audit and cleanup | Partial; active streamed Ollama requests are cancellable, commands attempt best-effort process cleanup, host tools deny common credential paths and redact common credential values. OS sandbox, Windows Job Objects/AppContainer, complete quotas and tamper-resistant audit remain open |
+| G4 — Safe execution | OS sandbox, permission broker, cancellation, audit and cleanup | Partial; active streamed Ollama requests are cancellable, commands use bounded pipe capture and best-effort process cleanup, tool budgets and secret filtering are host-enforced. OS sandbox, Windows Job Objects/AppContainer, CPU/RAM/process quotas and tamper-resistant audit remain open |
 | G5 — Durable agents | Checkpointing, resumable runs, scoped memory retrieval and event store | Partial; scoped SQLite memory, credential-redacted memory writes, ordered per-event journaling and a desktop Run History view are implemented. Interrupted runs remain visible with a running status and their last events. Checkpoint/resume, restart recovery, vector retrieval and automatic memory consolidation remain incomplete |
 | G6 — Multi-agent workforce | Delegation, shared state, scheduling, budgets and least privilege | Not complete |
 | G7 — Interoperability | MCP client/server, ACP and browser/computer adapters | Not complete |
