@@ -5,6 +5,7 @@ import html
 import json
 from collections.abc import Callable
 from pathlib import Path
+from threading import Event
 
 from PySide6.QtCore import QThreadPool
 from PySide6.QtWidgets import (
@@ -79,6 +80,7 @@ class MainWindow(QMainWindow):
         self.repository = Repository(self.paths.database_file)
         self.memory_store = MemoryStore(self.repository)
         self.pool = QThreadPool.globalInstance()
+        self.agent_cancel_event: Event | None = None
         self.models: list[str] = []
         self.selected_model = ""
         self._build()
@@ -188,6 +190,9 @@ class MainWindow(QMainWindow):
         self.workspace = QLabel(str(self.paths.workspaces_dir))
         self.run_agent_button = QPushButton("Run agent")
         self.run_agent_button.clicked.connect(self.run_agent)
+        self.cancel_agent_button = QPushButton("Stop agent")
+        self.cancel_agent_button.clicked.connect(self.cancel_agent)
+        self.cancel_agent_button.setEnabled(False)
         remember = QPushButton("Add project memory")
         remember.clicked.connect(self.add_project_memory)
         manage_memory = QPushButton("Manage memory")
@@ -197,6 +202,7 @@ class MainWindow(QMainWindow):
         row.addWidget(remember)
         row.addWidget(manage_memory)
         row.addWidget(self.run_agent_button)
+        row.addWidget(self.cancel_agent_button)
         layout.addLayout(row)
         self.agent_output = QTextBrowser()
         layout.addWidget(self.agent_output, 1)
@@ -443,7 +449,7 @@ class MainWindow(QMainWindow):
             self.status.setText(f"Archived memory: {record.memory_id[:8]}")
 
     def run_agent(self) -> None:
-        """Run a profile-bound agent off the UI thread with live, timestamped events."""
+        """Run a profile-bound agent off the UI thread with cooperative cancellation."""
         model = self.agent_model.text().strip()
         task = self.task.toPlainText().strip()
         profile = next((p for p in self.repository.list_profiles() if p.model_name == model), None)
@@ -451,12 +457,15 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Profile required", "Enter a task and profile the selected model first.")
             return
         workspace = Path(self.workspace.text()).expanduser().resolve()
+        cancel_event = Event()
+        self.agent_cancel_event = cancel_event
         self.run_agent_button.setEnabled(False)
+        self.cancel_agent_button.setEnabled(True)
         self.agent_progress.show()
         self.agent_output.clear()
         worker = FunctionWorker(
             lambda: self._run_agent_task(
-                model, profile, task, workspace,
+                model, profile, task, workspace, cancel_event,
                 lambda message: worker.signals.progress.emit(message),
             )
         )
@@ -466,13 +475,27 @@ class MainWindow(QMainWindow):
         worker.signals.result.connect(self.agent_finished)
         worker.signals.error.connect(self.show_error)
         worker.signals.finished.connect(lambda: (
-            self.agent_progress.hide(), self.run_agent_button.setEnabled(True)
+            self.agent_progress.hide(),
+            self.run_agent_button.setEnabled(True),
+            self.cancel_agent_button.setEnabled(False),
+            setattr(self, "agent_cancel_event", None),
         ))
         self.pool.start(worker)
 
+    def cancel_agent(self) -> None:
+        """Request cooperative cancellation of the active agent run."""
+        if self.agent_cancel_event is None:
+            return
+        self.agent_cancel_event.set()
+        self.cancel_agent_button.setEnabled(False)
+        self.status.setText(
+            "Stop requested. The active Ollama request or tool operation may finish before it is honored."
+        )
+        self.agent_output.append("Stop requested; waiting for the current operation boundary.")
+
     def _run_agent_task(
         self, model: str, profile: ModelProfile, task: str,
-        workspace: Path, progress: Callable[[str], None],
+        workspace: Path, cancel_event: Event, progress: Callable[[str], None],
     ) -> object:
         """Validate the live model digest and run the bounded agent with local memory."""
         installed = next(
@@ -491,6 +514,7 @@ class MainWindow(QMainWindow):
         return runtime.run(
             model, profile, task, tools,
             event=lambda item: progress(f"[{item.kind}] {item.message}"),
+            cancel_event=cancel_event,
         )
 
     def agent_finished(self, result: object) -> None:
