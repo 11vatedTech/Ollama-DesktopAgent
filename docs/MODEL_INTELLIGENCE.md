@@ -8,9 +8,11 @@ Turn an Ollama model tag into an evidence-backed operational profile and reusabl
 
 ### Origin dossier
 
+The v0.2 model-card parser lives in `profiling/model_card.py`. It extracts structured publisher metadata and clearly labelled Markdown sections from a repository explicitly selected by the user. Search candidates are ranked using transparent lexical similarity hints, but the user must confirm the upstream repository. Re-attaching a refreshed card replaces previous card-derived evidence rather than duplicating it.
+
 Collect, when available: exact Ollama tag/digest, parameter size, quantization, family, architecture metadata, context metadata, declared capabilities, publisher, canonical model-card URL, base model/lineage, disclosed datasets, fine-tuning approach, published evaluations, intended uses, limitations and license.
 
-The local Ollama API cannot reveal undisclosed training data. A model name, architecture or tokenizer must never be used to invent a training corpus. Multiple plausible upstream matches are candidates; the user explicitly links the correct repository.
+The local Ollama API cannot reveal undisclosed training data. A model name, architecture or tokenizer must never be used to invent a training corpus. Multiple plausible upstream matches are candidates; the user explicitly links the correct repository. Model-card extraction records description, intended use, limitations, training/evaluation sections, declared datasets, base model, languages, license, tags, retrieval timestamp and content hash. Publisher disclosures remain distinct from observed behavior.
 
 ### Empirical capability map
 
@@ -37,7 +39,7 @@ Record cold/warm load time, prompt and generation throughput, token counts, VRAM
 
 ## Professional identity
 
-A title describes an operational specialty, not intrinsic model personality. It is generated from observed capability dimensions, with evidence rationale and confidence. Examples: Repository Cartographer, Precision Implementation Engineer, Native Tool Operations Specialist, Structured Workflow Operator, Evidence Synthesis Analyst, Quantitative Reasoning Specialist and Visual Intelligence Inspector.
+A title describes an operational specialty, not intrinsic model personality. It is generated from observed capability dimensions, with evidence rationale and confidence. The expanded role taxonomy includes Repository Cartographer, Precision Implementation Engineer, Native Tool Operations Specialist, Structured Workflow Operator, Evidence Synthesis Analyst, Precision Data Extraction Specialist, Creative Narrative Architect, Multilingual Communication Specialist, Strategic Workflow Planner, Quantitative Reasoning Specialist and Visual Intelligence Inspector.
 
 A role recommendation includes supporting capabilities, evidence count/coverage, confidence, provisional/certified state, missing assessments, exact model tag and digest. Unknown dimensions are neither zero nor 100.
 
