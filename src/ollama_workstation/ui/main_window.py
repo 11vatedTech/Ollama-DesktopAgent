@@ -1,6 +1,7 @@
 """Native desktop workstation window."""
 from __future__ import annotations
 import html
+import json
 from pathlib import Path
 from PySide6.QtCore import QThreadPool
 from PySide6.QtWidgets import (
@@ -212,7 +213,7 @@ class MainWindow(QMainWindow):
         name = item.text()
         self.profile_button.setEnabled(False)
         self.profile_progress.show()
-        worker = FunctionWorker(self.profiler.profile, name, True, None, self.profile_repeats.value())
+        worker = FunctionWorker(self.profiler.profile, name, True, lambda message: worker.signals.progress.emit(message), self.profile_repeats.value())
         worker.signals.progress.connect(self.status.setText)
         worker.signals.result.connect(self.profile_ready)
         worker.signals.error.connect(self.show_error)
@@ -238,7 +239,7 @@ class MainWindow(QMainWindow):
             f"</li>" for x in profile.origin_evidence)
         roles = ", ".join(profile.recommended_roles) or "Not established"
         limitations = "".join(f"<li>{html.escape(item)}</li>" for item in profile.known_limitations)
-        operational = html.escape(__import__("json").dumps(profile.operational, indent=2, ensure_ascii=False))
+        operational = html.escape(json.dumps(profile.operational, indent=2, ensure_ascii=False))
         rationale = "".join(f"<li>{html.escape(item)}</li>" for item in profile.identity_rationale)
         return (f"<h1>{html.escape(profile.professional_title)}</h1>"
                 f"<h3>{html.escape(profile.model_name)}</h3>"
