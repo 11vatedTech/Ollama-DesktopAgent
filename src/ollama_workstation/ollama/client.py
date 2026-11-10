@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from threading import Event, Thread
 from typing import Any
 
