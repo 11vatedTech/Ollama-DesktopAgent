@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import time
-from threading import Event
+from threading import Event, Thread
 
 import httpx
 import pytest
@@ -93,9 +93,7 @@ def test_streaming_chat_closes_response_when_cancelled(monkeypatch: pytest.Monke
 
     monkeypatch.setattr(httpx, "stream", fake_stream)
     client = OllamaClient(timeout=30)
-    import threading
-
-    trigger = threading.Thread(
+    trigger = Thread(
         target=lambda: (time.sleep(0.15), cancelled.set()), daemon=True
     )
     trigger.start()
