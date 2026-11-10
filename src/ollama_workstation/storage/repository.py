@@ -54,6 +54,15 @@ class Repository:
                     conversation_id TEXT PRIMARY KEY, model_name TEXT NOT NULL, title TEXT NOT NULL,
                     updated_at TEXT NOT NULL, messages_json TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS agent_memories (
+                    memory_id TEXT PRIMARY KEY, scope TEXT NOT NULL, scope_id TEXT NOT NULL,
+                    category TEXT NOT NULL, content TEXT NOT NULL, tags_json TEXT NOT NULL,
+                    source TEXT NOT NULL, confidence REAL NOT NULL, created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL, last_accessed_at TEXT,
+                    access_count INTEGER NOT NULL DEFAULT 0, archived INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE INDEX IF NOT EXISTS idx_agent_memories_scope
+                    ON agent_memories(scope, scope_id, archived, updated_at DESC);
             """)
 
     def save_profile(self, profile: ModelProfile) -> None:
@@ -105,3 +114,61 @@ class Repository:
             "task": row[3], "status": row[4], "created_at": row[5],
             "completed_at": row[6], "trace": json.loads(row[7]),
         } for row in rows]
+
+
+    def save_memory(self, memory: dict[str, Any]) -> None:
+        with self._connection() as db:
+            db.execute(
+                """INSERT OR REPLACE INTO agent_memories(
+                    memory_id,scope,scope_id,category,content,tags_json,source,confidence,
+                    created_at,updated_at,last_accessed_at,access_count,archived
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,0)""",
+                (memory["memory_id"], memory["scope"], memory["scope_id"],
+                 memory["category"], memory["content"],
+                 json.dumps(memory.get("tags", []), ensure_ascii=False),
+                 memory.get("source", "user"), float(memory.get("confidence", 1.0)),
+                 memory["created_at"], memory["updated_at"],
+                 memory.get("last_accessed_at"), int(memory.get("access_count", 0))),
+            )
+
+    def list_memories(self, scopes: list[tuple[str, str]], limit: int = 100) -> list[dict[str, Any]]:
+        if not scopes:
+            return []
+        bounded = max(1, min(int(limit), 500))
+        where = " OR ".join("(scope=? AND scope_id=?)" for _ in scopes)
+        parameters: list[Any] = [value for pair in scopes for value in pair]
+        parameters.append(bounded)
+        with self._connection() as db:
+            rows = db.execute(
+                "SELECT memory_id,scope,scope_id,category,content,tags_json,source,confidence,"
+                "created_at,updated_at,last_accessed_at,access_count "
+                f"FROM agent_memories WHERE archived=0 AND ({where}) "
+                "ORDER BY updated_at DESC LIMIT ?", parameters
+            ).fetchall()
+        return [{
+            "memory_id": row["memory_id"], "scope": row["scope"], "scope_id": row["scope_id"],
+            "category": row["category"], "content": row["content"],
+            "tags": json.loads(row["tags_json"]), "source": row["source"],
+            "confidence": row["confidence"], "created_at": row["created_at"],
+            "updated_at": row["updated_at"], "last_accessed_at": row["last_accessed_at"],
+            "access_count": row["access_count"],
+        } for row in rows]
+
+    def touch_memories(self, memory_ids: list[str], accessed_at: str) -> None:
+        if not memory_ids:
+            return
+        placeholders = ",".join("?" for _ in memory_ids)
+        with self._connection() as db:
+            db.execute(
+                f"UPDATE agent_memories SET last_accessed_at=?, access_count=access_count+1 "
+                f"WHERE archived=0 AND memory_id IN ({placeholders})",
+                [accessed_at, *memory_ids],
+            )
+
+    def archive_memory(self, memory_id: str) -> bool:
+        with self._connection() as db:
+            cursor = db.execute(
+                "UPDATE agent_memories SET archived=1, updated_at=datetime('now') "
+                "WHERE memory_id=? AND archived=0", (memory_id,)
+            )
+            return cursor.rowcount > 0
