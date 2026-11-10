@@ -213,14 +213,22 @@ class WorkspaceTools:
             raise ToolError("Command execution was cancelled before launch")
         if not self.approval("Run approved executable: " + json.dumps(argv)):
             raise ToolError("Command execution was not approved")
-        creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0
+        process_options: dict[str, Any] = {
+            "cwd": working_directory,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "text": True,
+            "encoding": "utf-8",
+            "errors": "replace",
+            "shell": False,
+            "env": self._command_environment(executable),
+        }
+        if os.name == "nt":
+            process_options["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        else:
+            process_options["start_new_session"] = True
         try:
-            process = subprocess.Popen(
-                argv, cwd=working_directory, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, encoding="utf-8", errors="replace", shell=False,
-                env=self._command_environment(executable),
-                creationflags=creationflags, start_new_session=(os.name != "nt"),
-            )
+            process = subprocess.Popen(argv, **process_options)
         except OSError as exc:
             raise ToolError(f"Unable to launch approved executable: {exc}") from exc
 
