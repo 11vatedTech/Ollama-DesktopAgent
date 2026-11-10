@@ -44,7 +44,9 @@ class HuggingFaceResearcher:
         """Return a lexical candidate hint, never an automatic identity decision."""
         local_name = ollama_name.split(":", 1)[0].lower()
         upstream_name = repository_id.rsplit("/", 1)[-1].lower()
-        normalize = lambda value: re.sub(r"[^a-z0-9]+", "", value)
+        def normalize(value: str) -> str:
+            return re.sub(r"[^a-z0-9]+", "", value)
+
         local_normalized = normalize(local_name)
         upstream_normalized = normalize(upstream_name)
         sequence_score = SequenceMatcher(None, local_normalized, upstream_normalized).ratio()
@@ -78,14 +80,14 @@ class HuggingFaceResearcher:
         for item in data if isinstance(data, list) else []:
             repo_id = str(item.get("id") or "")
             if repo_id:
+                match_score, match_reasons = self.candidate_match(ollama_name, repo_id)
                 result.append(ModelCardCandidate(
                     repository_id=repo_id, pipeline_tag=item.get("pipeline_tag"),
                     downloads=int(item.get("downloads") or 0), likes=int(item.get("likes") or 0),
                     tags=[str(tag) for tag in item.get("tags", [])[:50]],
                     last_modified=item.get("lastModified"),
                     model_card_url=f"https://huggingface.co/{repo_id}",
-                    match_score=self.candidate_match(ollama_name, repo_id)[0],
-                    match_reasons=self.candidate_match(ollama_name, repo_id)[1],
+                    match_score=match_score, match_reasons=match_reasons,
                 ))
         result.sort(key=lambda candidate: (candidate.match_score, candidate.downloads), reverse=True)
         return result
