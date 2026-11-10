@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -21,12 +21,18 @@ class Settings:
     allowed_commands: tuple[str, ...] = ("git", "python", "pytest", "ruff")
     workspace_root: str = ""
     keep_alive: str = "5m"
+    mcp_servers: list[dict[str, Any]] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Settings:
         allowed = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
         if "allowed_commands" in allowed:
             allowed["allowed_commands"] = tuple(str(x) for x in allowed["allowed_commands"])
+        if "mcp_servers" in allowed:
+            servers = allowed["mcp_servers"]
+            if not isinstance(servers, list) or not all(isinstance(item, dict) for item in servers):
+                raise ValueError("mcp_servers must be a list of JSON objects")
+            allowed["mcp_servers"] = [dict(item) for item in servers]
         return cls(**allowed)
 
 
