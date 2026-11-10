@@ -62,6 +62,14 @@ class SystemTelemetry:
         return {"total_bytes": None, "available_bytes": None, "used_bytes": None}
 
     @staticmethod
+    def _optional_int(value: str) -> int | None:
+        """Parse one NVIDIA telemetry value without invalidating the remaining fields."""
+        try:
+            return int(value.strip())
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
     def _nvidia_gpus() -> list[dict[str, Any]]:
         executable = shutil.which("nvidia-smi")
         if not executable:
@@ -84,18 +92,18 @@ class SystemTelemetry:
         for row in csv.reader(io.StringIO(result.stdout)):
             if len(row) != 6:
                 continue
-            try:
-                gpus.append({
-                    "name": row[0].strip(),
-                    "memory_total_mib": int(row[1].strip()),
-                    "memory_used_mib": int(row[2].strip()),
-                    "memory_free_mib": int(row[3].strip()),
-                    "utilization_percent": int(row[4].strip()),
-                    "temperature_c": int(row[5].strip()),
-                    "source": "nvidia-smi",
-                })
-            except ValueError:
+            numeric = [SystemTelemetry._optional_int(value) for value in row[1:]]
+            if not any(value is not None for value in numeric):
                 continue
+            gpus.append({
+                "name": row[0].strip(),
+                "memory_total_mib": numeric[0],
+                "memory_used_mib": numeric[1],
+                "memory_free_mib": numeric[2],
+                "utilization_percent": numeric[3],
+                "temperature_c": numeric[4],
+                "source": "nvidia-smi",
+            })
         return gpus
 
     def snapshot(self) -> dict[str, Any]:
