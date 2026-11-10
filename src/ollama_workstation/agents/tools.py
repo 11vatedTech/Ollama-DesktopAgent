@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -119,13 +120,50 @@ class WorkspaceTools:
                 break
         return {"path": path, "entries": items}
 
+    @staticmethod
+    def redact_sensitive_text(content: str) -> tuple[str, int]:
+        """Redact common credential value patterns before text reaches model context."""
+        patterns = (
+            re.compile(
+                r'(?i)(\\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|'
+                r'password|passwd|secret|private[_-]?key|refresh[_-]?token|'
+                r'aws[_-]?secret[_-]?access[_-]?key|database[_-]?url)\\b\\s*[:=]\\s*)(["\']?)([^"\'\\s,;#}]+)'
+            ),
+            re.compile(r"(?i)(\\bBearer\\s+)[A-Za-z0-9._~+/-]{10,}"),
+            re.compile(r"\\bAKIA[0-9A-Z]{16}\\b"),
+            re.compile(r"\\bgh[pousr]_[A-Za-z0-9_]{20,}\\b"),
+            re.compile(r"\\bgithub_pat_[A-Za-z0-9_]{20,}\\b"),
+            re.compile(r"\\bAIza[0-9A-Za-z_-]{30,}\\b"),
+            re.compile(r"\\beyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\b"),
+            re.compile(
+                r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----",
+                re.DOTALL,
+            ),
+        )
+        redacted = content
+        count = 0
+        for index, pattern in enumerate(patterns):
+            if index == 0:
+                redacted, replacements = pattern.subn(
+                    lambda match: match.group(1) + match.group(2) + "[REDACTED]",
+                    redacted,
+                )
+            elif index == 1:
+                redacted, replacements = pattern.subn(r"\\1[REDACTED]", redacted)
+            else:
+                redacted, replacements = pattern.subn("[REDACTED]", redacted)
+            count += replacements
+        return redacted, count
+
     def read_file(self, path: str) -> dict[str, Any]:
         target = self._path(path)
         if not target.is_file():
             raise ToolError("File does not exist")
         if target.stat().st_size > self.MAX_READ_BYTES:
             raise ToolError(f"File exceeds {self.MAX_READ_BYTES} byte read limit")
-        return {"path": path, "content": target.read_text(encoding="utf-8", errors="replace")}
+        content = target.read_text(encoding="utf-8", errors="replace")
+        safe_content, count = self.redact_sensitive_text(content)
+        return {"path": path, "content": safe_content, "secrets_redacted": count}
 
     def write_file(self, path: str, content: str) -> dict[str, Any]:
         target = self._path(path)
@@ -172,8 +210,13 @@ class WorkspaceTools:
                 continue
             for number, line in enumerate(lines, 1):
                 if pattern.casefold() in line.casefold():
-                    matches.append({"path": str(file.relative_to(self.workspace)), "line": number,
-                                    "text": line[:500]})
+                    safe_line, redacted_count = self.redact_sensitive_text(line[:500])
+                    matches.append({
+                        "path": str(file.relative_to(self.workspace)),
+                        "line": number,
+                        "text": safe_line,
+                        "secrets_redacted": redacted_count,
+                    })
                     if len(matches) >= self.MAX_RESULTS:
                         return {"matches": matches, "truncated": True}
         return {"matches": matches, "truncated": False}
@@ -288,8 +331,15 @@ class WorkspaceTools:
                 break
             except subprocess.TimeoutExpired:
                 continue
-        return {"command": argv, "return_code": process.returncode,
-                "stdout": stdout[-12000:], "stderr": stderr[-12000:]}
+        safe_stdout, stdout_redactions = self.redact_sensitive_text(stdout[-12000:])
+        safe_stderr, stderr_redactions = self.redact_sensitive_text(stderr[-12000:])
+        return {
+            "command": argv,
+            "return_code": process.returncode,
+            "stdout": safe_stdout,
+            "stderr": safe_stderr,
+            "secrets_redacted": stdout_redactions + stderr_redactions,
+        }
 
     def definitions(self) -> list[dict[str, Any]]:
         definitions = [
