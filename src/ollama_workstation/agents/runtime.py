@@ -20,7 +20,7 @@ def _sanitize_event_value(value: Any, key: str = "") -> Any:
     """Remove credential-like values and bound event payload size before persistence."""
     normalized_key = re.sub(r"[^a-z0-9]+", "_", key.casefold()).strip("_")
     sensitive_key = re.search(
-        r"(?:^|_)(?:api_?key|api_?token|access_?key|access_?token|auth_?token|client_?secret|password|passwd|"
+        r"(?:^|_)(?:api_?key|api_?token|access_?key|access_?token|auth_?token|oauth_?token|session_?token|token|client_?secret|password|passwd|"
         r"secret|credential|private_?key|authorization)(?:$|_)",
         normalized_key,
     )
