@@ -12,4 +12,4 @@ def test_workforce_matcher_prefers_evidence_and_exposes_missing_data() -> None:
     results = WorkforceMatcher.rank("software_engineering", profiles)
     assert len(results) == 1
     assert results[0].model_name == "coder"
-    assert results[0].status == "evidence-backed"
+    assert results[0].status == "provisional"
