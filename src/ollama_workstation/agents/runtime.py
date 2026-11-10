@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -13,6 +14,31 @@ from ollama_workstation.agents.memory import MemoryRecord, MemoryStore
 from ollama_workstation.agents.tools import ToolError, WorkspaceTools
 from ollama_workstation.models.schemas import ModelProfile, utc_now
 from ollama_workstation.ollama.client import OllamaClient
+
+
+def _sanitize_event_value(value: Any, key: str = "") -> Any:
+    """Remove credential-like values and bound event payload size before persistence."""
+    normalized_key = re.sub(r"[^a-z0-9]+", "_", key.casefold()).strip("_")
+    sensitive_key = re.search(
+        r"(?:^|_)(?:api_?key|access_?token|auth_?token|client_?secret|password|passwd|"
+        r"secret|credential|private_?key|authorization)(?:$|_)",
+        normalized_key,
+    )
+    if sensitive_key:
+        return "[REDACTED]"
+    if isinstance(value, str):
+        safe, _ = WorkspaceTools.redact_sensitive_text(value)
+        return safe if len(safe) <= 8_000 else safe[:8_000] + "…[TRUNCATED]"
+    if isinstance(value, dict):
+        return {
+            str(child_key)[:120]: _sanitize_event_value(child_value, str(child_key))
+            for child_key, child_value in list(value.items())[:100]
+        }
+    if isinstance(value, (list, tuple)):
+        return [_sanitize_event_value(item) for item in list(value)[:100]]
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return str(value)[:2_000]
 
 
 @dataclass(slots=True)
@@ -56,7 +82,8 @@ class AgentRuntime:
 
         def record(kind: str, message: str, **data: Any) -> None:
             nonlocal persistence_warning_reported
-            item = AgentEvent(kind, message, data)
+            safe_data = _sanitize_event_value(data)
+            item = AgentEvent(kind, message, safe_data)
             trace.append(item)
             if self.repository is not None:
                 try:
