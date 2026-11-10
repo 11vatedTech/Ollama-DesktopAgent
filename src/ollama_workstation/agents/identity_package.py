@@ -37,7 +37,7 @@ def build_identity_package(profile: ModelProfile) -> dict[str, Any]:
             "capabilities": [
                 {"name": item.capability, "status": item.status, "score": item.score,
                  "confidence": item.confidence, "method": item.method,
-                 "evidence": item.evidence, "limitations": item.limitations}
+                 "metrics": item.metrics, "evidence": item.evidence, "limitations": item.limitations}
                 for item in profile.capabilities
             ],
         },
