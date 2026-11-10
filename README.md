@@ -31,7 +31,10 @@ The core is provider/harness/UI separated. The desktop shell does not duplicate 
 | Ollama health, model inventory, model metadata and loaded-model inspection | Implemented |
 | Local model smoke probes | Implemented; not a full benchmark suite |
 | Evidence-backed professional title and expanded role taxonomy | Implemented; provisional pending role qualification |
-| Opt-in Hugging Face model-card research | Implemented in CLI and desktop; explicit repository selection required; lexical match is only a hint |\n| Structured publisher dossier | Implemented for model description, intended use, limitations, training/evaluation disclosures, datasets, base model, languages, license and provenance hash |\n| Repeatable smoke profiling | Implemented with 1–5 trials, pass-rate aggregation and confidence tracking; not a full benchmark suite |\n| Host and inference telemetry | Implemented with system RAM/CPU snapshots, best-effort NVIDIA telemetry, Ollama token counters, load timing and derived generation throughput |
+| Opt-in Hugging Face model-card research | Implemented in CLI and desktop; explicit repository selection required; lexical match is only a hint |
+| Structured publisher dossier | Implemented for model description, intended use, limitations, training/evaluation disclosures, datasets, base model, languages, license and provenance hash |
+| Repeatable smoke profiling | Implemented with 1–5 trials, pass-rate aggregation and confidence tracking; not a full benchmark suite |
+| Host and inference telemetry | Implemented with system RAM/CPU snapshots, best-effort NVIDIA telemetry, Ollama token counters, load timing and derived generation throughput |
 | Agent Identity Package export | Implemented |
 | Native tool-call loop | Implemented |
 | Structured JSON action fallback and guided text action fallback | Implemented |
