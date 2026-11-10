@@ -272,7 +272,7 @@ class AgentRuntime:
                 else:
                     total_tool_calls += 1
                     try:
-                        record("tool_started", f"Executing {name}.", tool=name, arguments=arguments)
+                        record("tool_started", f"Executing {name}.", tool=name, argument_keys=list(arguments))
                         output = tools.invoke(name, arguments)
                         record("tool_completed", f"Completed {name}.", tool=name, result=output)
                     except ToolError as exc:
