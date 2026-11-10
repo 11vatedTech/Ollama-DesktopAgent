@@ -96,3 +96,36 @@ def test_command_timeout_kills_descendant_after_parent_exits(tmp_path: Path) -> 
             break
         time.sleep(0.05)
     assert state in (None, "Z")
+
+
+
+def test_workspace_blocks_credentials_and_private_key_material(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("API_TOKEN=secret-value", encoding="utf-8")
+    (tmp_path / ".env.example").write_text("API_TOKEN=replace-me", encoding="utf-8")
+    ssh_dir = tmp_path / ".ssh"
+    ssh_dir.mkdir()
+    (ssh_dir / "id_ed25519").write_text("PRIVATE KEY", encoding="utf-8")
+    (tmp_path / "service.pem").write_text("PRIVATE CERTIFICATE BUNDLE", encoding="utf-8")
+    tools = WorkspaceTools(tmp_path)
+
+    with pytest.raises(ToolError, match="credential or private-key"):
+        tools.read_file(".env")
+    with pytest.raises(ToolError, match="credential or private-key"):
+        tools.read_file(".ssh/id_ed25519")
+    with pytest.raises(ToolError, match="credential or private-key"):
+        tools.write_file(".env", "SHOULD_NOT_WRITE=true")
+    with pytest.raises(ToolError, match="credential or private-key"):
+        tools.list_files(".ssh")
+    assert tools.read_file(".env.example")["content"] == "API_TOKEN=replace-me"
+    visible_names = {item["name"] for item in tools.list_files()["entries"]}
+    assert ".env" not in visible_names
+    assert ".ssh" not in visible_names
+    assert "service.pem" not in visible_names
+
+
+def test_workspace_search_never_returns_secrets(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("TOP_SECRET=do-not-read", encoding="utf-8")
+    (tmp_path / "notes.txt").write_text("ordinary project note", encoding="utf-8")
+    tools = WorkspaceTools(tmp_path)
+    result = tools.search_text("TOP_SECRET")
+    assert result["matches"] == []
