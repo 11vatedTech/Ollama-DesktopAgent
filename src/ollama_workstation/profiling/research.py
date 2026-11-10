@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from datetime import UTC, datetime
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -120,6 +121,7 @@ def attach_model_card_evidence(profile: Any, card: dict[str, Any]) -> Any:
             notes="Absence of disclosure does not establish absence of training data.")
     add("Publisher-declared base model", ", ".join(dossier.base_models))
     add("Publisher-declared languages", ", ".join(dossier.languages))
+    add("Publisher model description", dossier.model_description)
     add("Publisher intended use", dossier.intended_use)
     add("Publisher training details", dossier.training_details)
     add("Publisher evaluation disclosure", dossier.evaluation_details)
@@ -134,6 +136,8 @@ def attach_model_card_evidence(profile: Any, card: dict[str, Any]) -> Any:
         purpose_parts.append(f"Publisher pipeline: {dossier.pipeline_tag}.")
     if dossier.intended_use:
         purpose_parts.append("Publisher-stated intended use: " + dossier.intended_use[:1200])
+    elif dossier.model_description:
+        purpose_parts.append("Publisher model description: " + dossier.model_description[:1200])
     if purpose_parts:
         profile.declared_purpose = " ".join(purpose_parts)
 
@@ -142,9 +146,7 @@ def attach_model_card_evidence(profile: Any, card: dict[str, Any]) -> Any:
         "metadata_url": dossier.metadata_url,
         "model_card_url": dossier.model_card_url,
         "sha256": dossier.model_card_sha256,
-        "retrieved_at": __import__("datetime").datetime.now(
-            __import__("datetime").UTC
-        ).isoformat(),
+        "retrieved_at": datetime.now(UTC).isoformat(),
         "publisher_tags": dossier.tags,
     }
     if dossier.limitations:
