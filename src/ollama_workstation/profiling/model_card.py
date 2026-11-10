@@ -20,6 +20,7 @@ class ModelCardDossier:
     datasets: list[str] = field(default_factory=list)
     languages: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
+    model_description: str = ""
     intended_use: str = ""
     limitations: str = ""
     training_details: str = ""
@@ -96,6 +97,7 @@ def extract_model_card_dossier(card: dict[str, Any]) -> ModelCardDossier:
         datasets=datasets,
         languages=languages,
         tags=tags[:100],
+        model_description=_section(sections, "model description", "model overview", "description"),
         intended_use=_section(sections, "intended use", "use cases", "intended purpose", "uses"),
         limitations=_section(sections, "limitations", "risks", "bias"),
         training_details=_section(sections, "training details", "training procedure", "training data"),
