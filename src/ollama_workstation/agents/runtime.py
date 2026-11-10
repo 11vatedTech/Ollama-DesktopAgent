@@ -6,6 +6,7 @@ import json
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from threading import Event
 from typing import Any
 
 from ollama_workstation.agents.memory import MemoryRecord, MemoryStore
@@ -45,7 +46,9 @@ class AgentRuntime:
         self.memory_store = memory_store
 
     def run(self, model: str, profile: ModelProfile, task: str, tools: WorkspaceTools,
-            *, event: Callable[[AgentEvent], None] | None = None) -> AgentResult:
+            *, event: Callable[[AgentEvent], None] | None = None,
+            cancel_event: Event | None = None) -> AgentResult:
+        """Execute a bounded agent loop and honor cancellation at safe boundaries."""
         emit = event or (lambda _item: None)
         run_id = str(uuid.uuid4())
         trace: list[AgentEvent] = []
@@ -97,6 +100,9 @@ class AgentRuntime:
                model=model, mode=profile.agentability_mode, workspace=str(tools.workspace))
 
         for step in range(1, self.max_steps + 1):
+            if cancel_event is not None and cancel_event.is_set():
+                record("cancelled", "Agent cancellation acknowledged before the next provider request.")
+                return finish("cancelled", "Execution was cancelled by the user.", step - 1)
             current_size = sum(len(str(message.get("content") or "")) for message in messages)
             if current_size > self.MAX_CONVERSATION_CHARS:
                 messages = [messages[0], messages[1], *messages[-8:]]
@@ -117,6 +123,9 @@ class AgentRuntime:
                 record("error", f"Ollama request failed: {exc}")
                 return finish("failed", str(exc), step - 1)
 
+            if cancel_event is not None and cancel_event.is_set():
+                record("cancelled", "Agent cancellation acknowledged after the provider response.")
+                return finish("cancelled", "Execution was cancelled by the user.", step)
             assistant = response.get("message") or {}
             messages.append({"role": "assistant", **assistant})
             calls = assistant.get("tool_calls") or []
@@ -142,6 +151,9 @@ class AgentRuntime:
                 return finish("completed", final, step)
 
             for call in calls:
+                if cancel_event is not None and cancel_event.is_set():
+                    record("cancelled", "Agent cancellation acknowledged before the next tool operation.")
+                    return finish("cancelled", "Execution was cancelled by the user.", step)
                 function = call.get("function") or {}
                 name = str(function.get("name") or "")
                 arguments = function.get("arguments") or {}
