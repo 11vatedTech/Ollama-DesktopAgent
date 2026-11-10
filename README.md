@@ -22,7 +22,7 @@ Ollama supplies local inference. This workstation provides the operational syste
 
 `Desktop / CLI → Application services → Ollama provider + Model Intelligence Engine → Universal Agentification Engine → Agent runtime → Policy-enforced tools → Verification and evidence → SQLite`
 
-The core is provider/harness/UI separated. The desktop shell does not duplicate inference or tool policy. Read [Architecture](docs/ARCHITECTURE.md), [Model Intelligence](docs/MODEL_INTELLIGENCE.md), [Production Readiness](docs/PRODUCTION_READINESS.md) and the dated [Research Register](docs/RESEARCH_REGISTER.md).
+The core is provider/harness/UI separated. The desktop shell does not duplicate inference or tool policy. Read [Architecture](docs/ARCHITECTURE.md), [Model Intelligence](docs/MODEL_INTELLIGENCE.md), [Production Readiness](docs/PRODUCTION_READINESS.md), the dated [Research Register](docs/RESEARCH_REGISTER.md) and the [Changelog](CHANGELOG.md).
 
 ## Implemented in the current development branch (pre-release v0.2)
 
