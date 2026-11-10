@@ -26,7 +26,7 @@ class ModelProfiler:
                 for item in self.client.list_models()]
 
     def profile(self, model_name: str, run_probes: bool = True,
-                progress: Callable[[str], None] | None = None) -> ModelProfile:
+                progress: Callable[[str], None] | None = None, repeats: int = 1) -> ModelProfile:
         notify = progress or (lambda _message: None)
         model = next((item for item in self.inventory() if item.name == model_name), ModelRef(model_name))
         show = self.client.show_model(model_name)
@@ -78,14 +78,19 @@ class ModelProfiler:
                 ("reasoning", lambda: self._probe_reasoning(model_name)),
                 ("mathematics", lambda: self._probe_math(model_name)),
             ]
+            repeat_count = max(1, min(int(repeats), 5))
+            profile.operational["probe_repeats"] = repeat_count
             for name, probe in probes:
-                notify("Testing " + name.replace("_", " ") + "…")
-                try:
-                    profile.capabilities.append(probe())
-                except Exception as exc:
-                    profile.capabilities.append(CapabilityResult(
-                        name, "failed", method="local smoke probe v1",
-                        limitations=[type(exc).__name__ + ": " + str(exc)]))
+                outcomes: list[CapabilityResult] = []
+                for attempt in range(repeat_count):
+                    notify(f"Testing {name.replace('_', ' ')} (attempt {attempt + 1}/{repeat_count})…")
+                    try:
+                        outcomes.append(probe())
+                    except Exception as exc:
+                        outcomes.append(CapabilityResult(
+                            name, "failed", attempts=1, method="local smoke probe v1",
+                            limitations=[type(exc).__name__ + ": " + str(exc)]))
+                profile.capabilities.append(self._aggregate(name, outcomes))
             for name in ("long_context", "research", "creative_writing", "multilingual",
                          "data_extraction", "planning", "error_recovery", "audio"):
                 profile.capabilities.append(CapabilityResult(
@@ -139,6 +144,41 @@ class ModelProfiler:
             100.0 if passed else 0.0, 0.2, 1, int(passed), metrics.get("duration_ms"),
             method, [evidence],
             [] if passed else ["Single-item smoke test failed; broad capability remains unestablished."])
+
+    @staticmethod
+    def _aggregate(name: str, outcomes: list[CapabilityResult]) -> CapabilityResult:
+        """Aggregate repeated smoke probes without promoting them to certification."""
+        if not outcomes:
+            return CapabilityResult(name, "not_assessed", method="No probe outcomes")
+        if all(item.status == "unsupported" for item in outcomes):
+            return CapabilityResult(
+                name, "unsupported", confidence=0.0, attempts=len(outcomes),
+                method="Repeated local smoke probe",
+                limitations=[note for item in outcomes for note in item.limitations],
+            )
+        passed = sum(item.status == "passed" for item in outcomes)
+        attempts = len(outcomes)
+        status = "passed" if passed == attempts else "partial" if passed else "failed"
+        scored = [item.score for item in outcomes if item.score is not None]
+        score = (passed / attempts * 100.0) if scored else None
+        durations = [item.duration_ms for item in outcomes if item.duration_ms is not None]
+        evidence = [f"Trial {index + 1}: " + "; ".join(item.evidence)
+                    for index, item in enumerate(outcomes) if item.evidence]
+        limitations = list(dict.fromkeys(
+            note for item in outcomes for note in item.limitations
+        ))
+        if passed < attempts:
+            limitations.append(
+                f"Passed {passed}/{attempts} repeated smoke probes; broader qualification is not established."
+            )
+        return CapabilityResult(
+            name, status, score,
+            confidence=min(0.8, 0.2 + 0.15 * (attempts - 1)),
+            attempts=attempts, passed=passed,
+            duration_ms=(sum(durations) / len(durations)) if durations else None,
+            method=f"Repeated local smoke probe ({attempts} trial(s))",
+            evidence=evidence, limitations=list(dict.fromkeys(limitations)),
+        )
 
     def _probe_instruction(self, model: str) -> CapabilityResult:
         text, metrics = self._ask(model, "Return exactly this token and nothing else: VIOLET-73.")
