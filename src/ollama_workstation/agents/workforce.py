@@ -4,20 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ollama_workstation.models.identity import ROLE_DEFINITIONS
 from ollama_workstation.models.schemas import ModelProfile
 
 ROLE_REQUIREMENTS: dict[str, tuple[str, ...]] = {
-    "software_engineering": ("code_generation", "instruction_following"),
-    "repository_analysis": ("code_comprehension", "long_context"),
-    "workflow_operations": ("tool_calling", "structured_actions"),
-    "research": ("structured_output", "instruction_following", "long_context"),
-    "visual_analysis": ("vision",),
-    "quantitative_analysis": ("mathematics", "reasoning"),
-    "data_extraction": ("data_extraction", "structured_output", "instruction_following"),
-    "creative": ("creative_writing", "instruction_following"),
-    "multilingual": ("multilingual", "instruction_following"),
-    "planning": ("planning", "reasoning", "instruction_following"),
-    "general_assistance": ("instruction_following",),
+    definition.key: definition.capabilities for definition in ROLE_DEFINITIONS
 }
 
 
