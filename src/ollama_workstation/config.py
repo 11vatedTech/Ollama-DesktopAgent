@@ -23,7 +23,7 @@ class Settings:
     keep_alive: str = "5m"
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Settings":
+    def from_dict(cls, data: dict[str, Any]) -> Settings:
         allowed = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
         if "allowed_commands" in allowed:
             allowed["allowed_commands"] = tuple(str(x) for x in allowed["allowed_commands"])
@@ -40,7 +40,7 @@ class AppPaths:
     logs_dir: Path
 
     @classmethod
-    def default(cls) -> "AppPaths":
+    def default(cls) -> AppPaths:
         root = Path(user_data_dir("11vated-Ollama-Workstation", "11vatedTech"))
         return cls(root, root / "settings.json", root / "workstation.sqlite3",
                    root / "workspaces", root / "profiles", root / "logs")
