@@ -72,11 +72,12 @@ def test_wilson_interval_bounds_observed_success_rate() -> None:
 
 
 def test_benchmark_runner_is_repeatable_and_records_a_hashed_manifest() -> None:
-    outputs = [
+    per_case_outputs = [
         "ORBIT-17", "323", "2",
         '{"name":"Ada Lovelace","role":"mathematician","year":1815}',
         "8", "1. inspect, 2. test, 3. deploy",
-    ] * 2
+    ]
+    outputs = [output for output in per_case_outputs for _ in range(2)]
     client = FakeClient(outputs)
     runner = BenchmarkRunner(client, telemetry=FakeTelemetry())  # type: ignore[arg-type]
     report = runner.run("fake:latest", model_digest="sha256:local", repeats=2)
