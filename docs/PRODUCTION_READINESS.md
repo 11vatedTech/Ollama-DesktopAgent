@@ -206,13 +206,13 @@ These are research references, not approved runtime dependencies. For every prop
 |---|---|---|
 | G0 — Repository foundation | CI, typed boundaries, install and launch | Implemented baseline; CI must be green |
 | G1 — Model dossier | Publisher fields, source links, explicit match confirmation, hash, unknown handling | v0.2 increment implemented; needs CI and live model-card validation |
-| G2 — Empirical profiling | Repeated tests, host/GPU telemetry, expanded task suites, repeatability, confidence and resource metrics | Partial; repeated smoke probes and best-effort telemetry implemented, specialist suites remain |
+| G2 — Empirical profiling | Repeated tests, host/GPU telemetry, expanded task suites, repeatability, confidence and resource metrics | Partial; repeated smoke probes and a six-case deterministic 11vated-core runner with host-side scoring, per-trial evidence and a hashed manifest are implemented. Specialist/held-out suites and role thresholds remain open |
 | G3 — Agentification | Protocol adapters, strict host-side tool argument validation, bounded recovery and digest binding | Partial; native/structured/guided paths and workspace tool schema validation implemented |
 | G4 — Safe execution | OS sandbox, permission broker, cancellation, audit and cleanup | Partial; active streamed Ollama requests are cancellable, commands use bounded pipe capture and best-effort process cleanup, tool budgets and secret filtering are host-enforced. OS sandbox, Windows Job Objects/AppContainer, CPU/RAM/process quotas and tamper-resistant audit remain open |
 | G5 — Durable agents | Checkpointing, resumable runs, scoped memory retrieval and event store | Partial; scoped SQLite memory, credential-redacted memory writes, ordered per-event journaling and a desktop Run History view are implemented. Interrupted runs remain visible with a running status and their last events. Checkpoint/resume, restart recovery, vector retrieval and automatic memory consolidation remain incomplete |
 | G6 — Multi-agent workforce | Delegation, shared state, scheduling, budgets and least privilege | Not complete |
 | G7 — Interoperability | MCP client/server, ACP and browser/computer adapters | Not complete |
-| G8 — Certification | Version-pinned benchmark adapters, audited tasks, controlled comparisons and regression gates | Not complete; research register establishes selection policy, no full benchmark adapter or role/agent certification yet |
+| G8 — Certification | Version-pinned benchmark adapters, audited tasks, controlled comparisons and regression gates | Partial foundation; the six-case local core runner is versioned and independently scored. External benchmark adapters, audited specialist task banks, controlled multi-harness comparisons, role/agent certification and release regression thresholds remain incomplete |
 | G9 — Distribution | Signed installer, SBOM, dependency audit, upgrade/uninstall and recovery | Partial |
 
 A release may not be called production-certified until all applicable gates pass on the supported Windows hardware/software matrix. Feature presence alone is not proof of production readiness.
