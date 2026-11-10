@@ -22,6 +22,17 @@ class ToolError(RuntimeError):
 
 class WorkspaceTools:
     MAX_READ_BYTES = 64_000
+    SENSITIVE_DIRECTORIES = {
+        ".ssh", ".aws", ".azure", ".kube", ".gnupg", ".secrets",
+        "secrets", "credentials", "private",
+    }
+    SENSITIVE_FILENAMES = {
+        ".netrc", ".npmrc", ".pypirc", "credentials", "credentials.json",
+        "secrets.json", "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa",
+        "authorized_keys", "service-account.json", "service_account.json",
+    }
+    SENSITIVE_SUFFIXES = {".pem", ".key", ".p12", ".pfx", ".p7b", ".p7c", ".jks", ".keystore"}
+    SAFE_ENV_TEMPLATES = {".env.example", ".env.sample", ".env.template"}
     MAX_WRITE_BYTES = 1_000_000
     MAX_RESULTS = 200
 
@@ -31,12 +42,14 @@ class WorkspaceTools:
     def __init__(self, workspace: Path, *, allow_shell: bool = False,
                  allowed_commands: tuple[str, ...] = (),
                  approval: Callable[[str], bool] | None = None,
-                 cancel_event: Event | None = None) -> None:
+                 cancel_event: Event | None = None,
+                 allow_sensitive_files: bool = False) -> None:
         self.workspace = workspace.expanduser().resolve()
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.allow_shell = allow_shell
         self.approval = approval or (lambda _description: False)
         self.cancel_event = cancel_event
+        self.allow_sensitive_files = allow_sensitive_files
         self.allowed_command_paths: dict[str, Path] = {}
         for configured in allowed_commands:
             configured_path = Path(configured).expanduser()
@@ -56,12 +69,35 @@ class WorkspaceTools:
             self.allowed_command_paths[alias] = resolved
             self.allowed_command_paths.setdefault(resolved.name.lower(), resolved)
 
+    def _is_sensitive_path(self, path: Path) -> bool:
+        """Identify conventional credential stores and private-key material."""
+        try:
+            parts = tuple(part.casefold() for part in path.relative_to(self.workspace).parts)
+        except ValueError:
+            return True
+        if not parts:
+            return False
+        if any(part in self.SENSITIVE_DIRECTORIES for part in parts[:-1]):
+            return True
+        filename = parts[-1]
+        if filename in self.SAFE_ENV_TEMPLATES:
+            return False
+        if filename == ".env" or filename.startswith(".env."):
+            return True
+        if filename in self.SENSITIVE_FILENAMES:
+            return True
+        return Path(filename).suffix.casefold() in self.SENSITIVE_SUFFIXES
+
     def _path(self, relative: str) -> Path:
         candidate = (self.workspace / relative).resolve()
         try:
             candidate.relative_to(self.workspace)
         except ValueError as exc:
             raise ToolError("Path is outside the assigned workspace") from exc
+        if not self.allow_sensitive_files and self._is_sensitive_path(candidate):
+            raise ToolError(
+                "Access to credential or private-key paths is blocked by the workspace security policy"
+            )
         return candidate
 
     def list_files(self, path: str = ".") -> dict[str, Any]:
@@ -71,8 +107,11 @@ class WorkspaceTools:
         items = []
         for child in sorted(directory.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower())):
             try:
-                child.resolve().relative_to(self.workspace)
-            except ValueError:
+                resolved_child = child.resolve()
+                resolved_child.relative_to(self.workspace)
+            except (OSError, ValueError):
+                continue
+            if not self.allow_sensitive_files and self._is_sensitive_path(resolved_child):
                 continue
             items.append({"name": child.name, "type": "directory" if child.is_dir() else "file",
                           "size": child.stat().st_size if child.is_file() else None})
@@ -117,6 +156,8 @@ class WorkspaceTools:
         matches: list[dict[str, Any]] = []
         files = [root] if root.is_file() else root.rglob("*")
         for file in files:
+            if not self.allow_sensitive_files and self._is_sensitive_path(file.resolve()):
+                continue
             if not file.is_file() or file.stat().st_size > self.MAX_READ_BYTES:
                 continue
             if any(part in {".git", ".venv", "node_modules", "__pycache__"} for part in file.parts):
@@ -253,9 +294,9 @@ class WorkspaceTools:
         definitions = [
             self._function("list_files", "List files and directories in the assigned workspace.",
                            {"path": {"type": "string", "default": "."}}, []),
-            self._function("read_file", "Read a UTF-8 text file from the assigned workspace.",
+            self._function("read_file", "Read a UTF-8 workspace file; credential stores and private-key paths are blocked by policy.",
                            {"path": {"type": "string"}}, ["path"]),
-            self._function("write_file", "Write a UTF-8 file inside the workspace. Existing-file overwrites require approval.",
+            self._function("write_file", "Write a UTF-8 file inside the workspace. Credential/private-key paths are blocked; existing-file overwrites require approval.",
                            {"path": {"type": "string"}, "content": {"type": "string"}}, ["path", "content"]),
             self._function("search_text", "Search workspace text files for a literal phrase.",
                            {"pattern": {"type": "string"}, "path": {"type": "string", "default": "."}}, ["pattern"]),
