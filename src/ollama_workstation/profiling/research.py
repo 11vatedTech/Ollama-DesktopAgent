@@ -123,7 +123,8 @@ def attach_model_card_evidence(profile: Any, card: dict[str, Any]) -> Any:
         "Model-card license declaration", "Model-card dataset disclosure",
         "Training dataset disclosure", "Publisher-declared base model",
         "Publisher-declared languages", "Publisher model description", "Publisher intended use",
-        "Publisher training details", "Publisher evaluation disclosure",\n        "Publisher structured benchmark results",
+        "Publisher training details", "Publisher evaluation disclosure",
+        "Publisher structured benchmark results",
         "Publisher-disclosed limitations", "Model card content hash",
     }
     profile.origin_evidence = [
@@ -154,7 +155,8 @@ def attach_model_card_evidence(profile: Any, card: dict[str, Any]) -> Any:
     add("Publisher intended use", dossier.intended_use)
     add("Publisher training details", dossier.training_details)
     add("Publisher evaluation disclosure", dossier.evaluation_details)
-    add("Publisher structured benchmark results", "; ".join(dossier.published_evaluations))\n    add("Publisher-disclosed limitations", dossier.limitations,
+    add("Publisher structured benchmark results", "; ".join(dossier.published_evaluations))
+    add("Publisher-disclosed limitations", dossier.limitations,
         notes="Publisher disclosure; independent limitations require empirical evaluation.")
     add("Model card content hash", dossier.model_card_sha256, level="observed",
         notes="SHA-256 binds this dossier to the retrieved model-card text.")
