@@ -20,6 +20,10 @@ Development increment on the 0.1.0 foundation. This is a pre-release engineering
 - Credential-like values are redacted from workspace/search/command output, persisted run objectives and event payloads, and final CLI/desktop responses. This is heuristic filtering, not complete DLP.
 - Model-card research callbacks are bound to the initiating model, avoiding cross-model result races.
 
+### Benchmarking
+- Added the versioned six-case 11vated-core local benchmark runner with independent host-side exact, numeric, JSON-schema and ordered-term scoring, repeated trials, Wilson confidence intervals, latency/throughput metrics and model/manifest digest binding.
+- Added CLI benchmark reports with redacted output previews; this is a local diagnostic suite, not external benchmark certification.
+
 ### Desktop, CLI and operations
 - Desktop model-card research, repeated profiling, model dossier view, scoped project memory management, cooperative stop control and runtime digest verification.
 - CLI repeated profiling and memory-aware agent runtime.
