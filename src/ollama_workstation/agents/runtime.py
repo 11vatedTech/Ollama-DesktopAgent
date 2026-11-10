@@ -7,8 +7,9 @@ import re
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from threading import Event
-from typing import Any
+from typing import Any, Protocol
 
 from ollama_workstation.agents.memory import MemoryRecord, MemoryStore
 from ollama_workstation.agents.tools import ToolError, WorkspaceTools
@@ -39,6 +40,17 @@ def _sanitize_event_value(value: Any, key: str = "") -> Any:
     if value is None or isinstance(value, (bool, int, float)):
         return value
     return str(value)[:2_000]
+
+
+class AgentToolRegistry(Protocol):
+    """Structural contract implemented by local and composite tool registries."""
+
+    @property
+    def workspace(self) -> Path: ...
+
+    def definitions(self) -> list[dict[str, Any]]: ...
+
+    def invoke(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]: ...
 
 
 @dataclass(slots=True)
@@ -74,7 +86,7 @@ class AgentRuntime:
         self.repository = repository
         self.memory_store = memory_store
 
-    def run(self, model: str, profile: ModelProfile, task: str, tools: WorkspaceTools,
+    def run(self, model: str, profile: ModelProfile, task: str, tools: AgentToolRegistry,
             *, event: Callable[[AgentEvent], None] | None = None,
             cancel_event: Event | None = None) -> AgentResult:
         """Execute a bounded agent loop and honor cancellation at safe boundaries."""
