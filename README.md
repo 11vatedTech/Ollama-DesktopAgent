@@ -35,11 +35,11 @@ The core is provider/harness/UI separated. The desktop shell does not duplicate 
 | Agent Identity Package export | Implemented |
 | Native tool-call loop | Implemented |
 | Structured JSON action fallback and guided text action fallback | Implemented |
-| Workspace-scoped file tools | Implemented with path containment and size limits |
+| Workspace-scoped file tools | Implemented with path containment, size limits and host-side JSON argument validation |
 | Optional allow-listed shell tool | Implemented but disabled by default; approval required |
 | SQLite profile, conversation and run persistence | Implemented |
 | PySide6 desktop shell and headless CLI | Implemented; actual Windows/Qt runtime validation remains |
-| Evidence-based workforce ranking primitive | Implemented |
+| Evidence-based workforce ranking primitive | Implemented for software, repository, workflow, research, visual, quantitative, data, creative, multilingual and planning roles; qualification is explicit |
 | Full MCP client/server ecosystem, browser/computer-use adapters, durable multi-agent scheduler, memory retrieval, full benchmark adapters and model-card provenance automation | Roadmap |
 
 ## Requirements
