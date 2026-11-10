@@ -135,14 +135,14 @@ def test_workspace_search_never_returns_secrets(tmp_path: Path) -> None:
 def test_text_outputs_redact_credentials_before_model_context(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    (workspace / "config.txt").write_text(
-        'API_KEY=plain-api-secret\\n'
-        '{"client_secret": "json-client-secret", "mode": "local"}\\n'
-        'Authorization: Bearer bearer-token-value-123456789\\n'
-        'AWS_ACCESS_KEY_ID=AKIA1234567890ABCDEF\\n'
-        'github=ghp_123456789012345678901234567890123456\\n',
-        encoding="utf-8",
-    )
+    source = "\\n".join([
+        "API_KEY=plain-api-secret",
+        '{"client_secret": "json-client-secret", "mode": "local"}',
+        "Authorization: Bearer bearer-token-value-123456789",
+        "AWS_ACCESS_KEY_ID=AKIA1234567890ABCDEF",
+        "github=ghp_123456789012345678901234567890123456",
+    ])
+    (workspace / "config.txt").write_text(source, encoding="utf-8")
     tools = WorkspaceTools(workspace)
     result = tools.read_file("config.txt")
     assert result["secrets_redacted"] >= 5
