@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 
 from ollama_workstation.agents.binding import validate_installed_model_binding
 from ollama_workstation.agents.memory import MemoryStore
+from ollama_workstation.agents.mcp_gateway import CompositeToolRegistry, MCPServerSpec, MCPToolGateway
 from ollama_workstation.agents.runtime import AgentRuntime
 from ollama_workstation.agents.tools import WorkspaceTools
 from ollama_workstation.benchmarking.runner import BenchmarkRunner
@@ -329,6 +330,19 @@ class MainWindow(QMainWindow):
         self.remote_research = QCheckBox("Enable public Hugging Face model-card research (network access)")
         self.remote_research.setChecked(self.settings.enable_remote_model_research)
         layout.addWidget(self.remote_research)
+        layout.addWidget(QLabel(
+            "MCP servers (JSON). Disabled by default. Only exact names in approved_tools "
+            "are exposed. Use env_refs for environment-held secrets; never store secret values here."
+        ))
+        self.mcp_config = QPlainTextEdit()
+        self.mcp_config.setPlaceholderText(
+            '[{"name":"filesystem","transport":"stdio","enabled":false,'
+            '"command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","C:/workspace"],'
+            '"approved_tools":["read_file","list_directory"]}]'
+        )
+        self.mcp_config.setPlainText(json.dumps(self.settings.mcp_servers, indent=2, ensure_ascii=False))
+        self.mcp_config.setMinimumHeight(180)
+        layout.addWidget(self.mcp_config)
         save = QPushButton("Save settings")
         save.clicked.connect(self.save)
         layout.addWidget(save)
@@ -686,17 +700,23 @@ class MainWindow(QMainWindow):
         if installed is None:
             raise ValueError(f"Model {model!r} is not installed in the configured Ollama instance.")
         validate_installed_model_binding(profile, installed)
-        tools = WorkspaceTools(workspace, allow_shell=False, cancel_event=cancel_event)
-        runtime = AgentRuntime(
-            self.client, max_steps=self.settings.max_agent_steps,
-            keep_alive=self.settings.keep_alive, repository=self.repository,
-            memory_store=self.memory_store,
-        )
-        return runtime.run(
-            model, profile, task, tools,
-            event=lambda item: progress(f"[{item.kind}] {item.message}"),
-            cancel_event=cancel_event,
-        )
+        workspace_tools = WorkspaceTools(workspace, allow_shell=False, cancel_event=cancel_event)
+        with MCPToolGateway(
+            self.settings.mcp_servers, cancel_event=cancel_event
+        ) as mcp_gateway:
+            tools = CompositeToolRegistry(workspace_tools, mcp_gateway)
+            runtime = AgentRuntime(
+                self.client, max_steps=self.settings.max_agent_steps,
+                keep_alive=self.settings.keep_alive, repository=self.repository,
+                memory_store=self.memory_store,
+            )
+            if mcp_gateway.routes:
+                progress(f"MCP connected: {len(mcp_gateway.routes)} explicitly approved tool(s).")
+            return runtime.run(
+                model, profile, task, tools,
+                event=lambda item: progress(f"[{item.kind}] {item.message}"),
+                cancel_event=cancel_event,
+            )
 
     def agent_finished(self, result: object) -> None:
         safe_message, redacted_count = WorkspaceTools.redact_sensitive_text(result.final_message)
@@ -710,8 +730,20 @@ class MainWindow(QMainWindow):
         self.refresh_runs()
 
     def save(self) -> None:
+        try:
+            raw_servers = json.loads(self.mcp_config.toPlainText() or "[]")
+            if not isinstance(raw_servers, list) or not all(isinstance(item, dict) for item in raw_servers):
+                raise ValueError("MCP server configuration must be a JSON array of objects.")
+            validated_servers = [MCPServerSpec.from_dict(item) for item in raw_servers]
+            names = [item.name for item in validated_servers]
+            if len(set(names)) != len(names):
+                raise ValueError("MCP server names must be unique.")
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            QMessageBox.warning(self, "Invalid MCP configuration", str(exc))
+            return
         self.settings.ollama_base_url = self.endpoint.text().strip().rstrip("/")
         self.settings.enable_remote_model_research = self.remote_research.isChecked()
+        self.settings.mcp_servers = raw_servers
         self.research_button.setEnabled(self.settings.enable_remote_model_research)
         save_settings(self.paths.config_file, self.settings)
         self.client = OllamaClient(self.settings.ollama_base_url, self.settings.request_timeout_seconds)
