@@ -16,12 +16,15 @@ from ollama_workstation.models.schemas import (
     utc_now,
 )
 from ollama_workstation.ollama.client import OllamaClient
+from ollama_workstation.profiling.telemetry import SystemTelemetry
 
 
 class ModelProfiler:
-    def __init__(self, client: OllamaClient, keep_alive: str = "5m") -> None:
+    def __init__(self, client: OllamaClient, keep_alive: str = "5m",
+                 telemetry: SystemTelemetry | None = None) -> None:
         self.client = client
         self.keep_alive = keep_alive
+        self.telemetry = telemetry or SystemTelemetry()
 
     def inventory(self) -> list[ModelRef]:
         return [ModelRef(name=str(item.get("name") or item.get("model") or "unknown"),
@@ -34,6 +37,10 @@ class ModelProfiler:
     def profile(self, model_name: str, run_probes: bool = True,
                 progress: Callable[[str], None] | None = None, repeats: int = 1) -> ModelProfile:
         notify = progress or (lambda _message: None)
+        try:
+            host_before = self.telemetry.snapshot()
+        except Exception:
+            host_before = {}
         model = next((item for item in self.inventory() if item.name == model_name), ModelRef(model_name))
         show = self.client.show_model(model_name)
         details = dict(show.get("details") or {})
@@ -115,6 +122,21 @@ class ModelProfiler:
         profile.known_limitations = [limitation for item in profile.capabilities
                                      for limitation in item.limitations]
         profile.overall_reliability = None
+        try:
+            profile.operational["host_before"] = host_before
+            profile.operational["host_after"] = self.telemetry.snapshot()
+        except Exception as exc:
+            profile.operational["host_telemetry_error"] = type(exc).__name__
+        try:
+            running = self.client.running_models()
+            profile.operational["loaded_model"] = next(
+                (item for item in running
+                 if str(item.get("name") or item.get("model") or "") == model_name),
+                None,
+            )
+        except Exception:
+            profile.operational["loaded_model"] = None
+        profile.operational["performance_summary"] = self._performance_summary(profile.capabilities)
         assign_identity(profile)
         return profile
 
@@ -141,7 +163,13 @@ class ModelProfiler:
         return str(message.get("content") or ""), {
             "message": message, "duration_ms": (time.perf_counter() - started) * 1000,
             "eval_count": response.get("eval_count"), "eval_duration_ns": response.get("eval_duration"),
-            "load_duration_ns": response.get("load_duration")}
+            "load_duration_ns": response.get("load_duration"),
+            "prompt_eval_count": response.get("prompt_eval_count"),
+            "prompt_eval_duration_ns": response.get("prompt_eval_duration"),
+            "generation_tokens_per_second": (
+                float(response["eval_count"]) / (float(response["eval_duration"]) / 1_000_000_000)
+                if response.get("eval_count") and response.get("eval_duration") else None
+            )}
 
     @staticmethod
     def _result(name: str, passed: bool, metrics: dict[str, Any],
@@ -149,7 +177,8 @@ class ModelProfiler:
         return CapabilityResult(name, "passed" if passed else "partial",
             100.0 if passed else 0.0, 0.2, 1, int(passed), metrics.get("duration_ms"),
             method, [evidence],
-            [] if passed else ["Single-item smoke test failed; broad capability remains unestablished."])
+            [] if passed else ["Single-item smoke test failed; broad capability remains unestablished."],
+            metrics=metrics)
 
     @staticmethod
     def _aggregate(name: str, outcomes: list[CapabilityResult]) -> CapabilityResult:
@@ -185,7 +214,39 @@ class ModelProfiler:
             duration_ms=(sum(durations) / len(durations)) if durations else None,
             method=f"Repeated local smoke probe ({attempts} trial(s))",
             evidence=evidence, limitations=list(dict.fromkeys(limitations)),
+            metrics=ModelProfiler._aggregate_metrics(outcomes),
         )
+
+    @staticmethod
+    def _aggregate_metrics(outcomes: list[CapabilityResult]) -> dict[str, Any]:
+        keys = {key for item in outcomes for key in item.metrics}
+        aggregate: dict[str, Any] = {"trials": [item.metrics for item in outcomes if item.metrics]}
+        for key in keys:
+            values = [
+                value for item in outcomes
+                if isinstance((value := item.metrics.get(key)), (int, float))
+                and not isinstance(value, bool)
+            ]
+            if values:
+                aggregate[f"mean_{key}"] = sum(values) / len(values)
+        return aggregate
+
+    @staticmethod
+    def _performance_summary(capabilities: list[CapabilityResult]) -> dict[str, Any]:
+        metrics = [item.metrics for item in capabilities if item.metrics]
+        latencies = [
+            item.duration_ms for item in capabilities
+            if item.duration_ms is not None
+        ]
+        speeds = [
+            item["mean_generation_tokens_per_second"]
+            for item in metrics if isinstance(item.get("mean_generation_tokens_per_second"), (int, float))
+        ]
+        return {
+            "probe_count": len(capabilities),
+            "mean_probe_latency_ms": sum(latencies) / len(latencies) if latencies else None,
+            "mean_generation_tokens_per_second": sum(speeds) / len(speeds) if speeds else None,
+        }
 
     def _probe_instruction(self, model: str) -> CapabilityResult:
         text, metrics = self._ask(model, "Return exactly this token and nothing else: VIOLET-73.")
