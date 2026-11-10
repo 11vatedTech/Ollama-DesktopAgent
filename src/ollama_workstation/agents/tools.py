@@ -77,7 +77,7 @@ class WorkspaceTools:
             return True
         if not parts:
             return False
-        if any(part in self.SENSITIVE_DIRECTORIES for part in parts[:-1]):
+        if any(part in self.SENSITIVE_DIRECTORIES for part in parts):
             return True
         filename = parts[-1]
         if filename in self.SAFE_ENV_TEMPLATES:
@@ -156,18 +156,19 @@ class WorkspaceTools:
         matches: list[dict[str, Any]] = []
         files = [root] if root.is_file() else root.rglob("*")
         for file in files:
-            if not self.allow_sensitive_files and self._is_sensitive_path(file.resolve()):
-                continue
-            if not file.is_file() or file.stat().st_size > self.MAX_READ_BYTES:
-                continue
-            if any(part in {".git", ".venv", "node_modules", "__pycache__"} for part in file.parts):
-                continue
             try:
-                file.resolve().relative_to(self.workspace)
-                if file.is_symlink():
+                resolved_file = file.resolve()
+                resolved_file.relative_to(self.workspace)
+                if not self.allow_sensitive_files and self._is_sensitive_path(resolved_file):
+                    continue
+                if file.is_symlink() or not file.is_file():
+                    continue
+                if file.stat().st_size > self.MAX_READ_BYTES:
+                    continue
+                if any(part in {".git", ".venv", "node_modules", "__pycache__"} for part in resolved_file.parts):
                     continue
                 lines = file.read_text(encoding="utf-8", errors="replace").splitlines()
-            except OSError:
+            except (OSError, ValueError):
                 continue
             for number, line in enumerate(lines, 1):
                 if pattern.casefold() in line.casefold():
