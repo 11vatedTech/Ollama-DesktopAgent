@@ -5,10 +5,14 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
+import signal
 import subprocess
 import tempfile
+import time
 from collections.abc import Callable
 from pathlib import Path
+from threading import Event
 from typing import Any
 
 
@@ -21,14 +25,36 @@ class WorkspaceTools:
     MAX_WRITE_BYTES = 1_000_000
     MAX_RESULTS = 200
 
+    COMMAND_TIMEOUT_SECONDS = 90.0
+    COMMAND_TERMINATION_GRACE_SECONDS = 2.0
+
     def __init__(self, workspace: Path, *, allow_shell: bool = False,
                  allowed_commands: tuple[str, ...] = (),
-                 approval: Callable[[str], bool] | None = None) -> None:
+                 approval: Callable[[str], bool] | None = None,
+                 cancel_event: Event | None = None) -> None:
         self.workspace = workspace.expanduser().resolve()
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.allow_shell = allow_shell
-        self.allowed_commands = {Path(x).name.lower() for x in allowed_commands}
         self.approval = approval or (lambda _description: False)
+        self.cancel_event = cancel_event
+        self.allowed_command_paths: dict[str, Path] = {}
+        for configured in allowed_commands:
+            configured_path = Path(configured).expanduser()
+            if configured_path.is_absolute() or "/" in configured or "\\" in configured:
+                resolved = configured_path.resolve()
+            else:
+                located = shutil.which(configured)
+                if located is None:
+                    continue
+                resolved = Path(located).resolve()
+            if not resolved.is_file():
+                continue
+            alias = Path(configured).name.lower()
+            existing = self.allowed_command_paths.get(alias)
+            if existing is not None and existing != resolved:
+                raise ValueError(f"Ambiguous executable alias in command allow-list: {alias}")
+            self.allowed_command_paths[alias] = resolved
+            self.allowed_command_paths.setdefault(resolved.name.lower(), resolved)
 
     def _path(self, relative: str) -> Path:
         candidate = (self.workspace / relative).resolve()
@@ -110,28 +136,109 @@ class WorkspaceTools:
                         return {"matches": matches, "truncated": True}
         return {"matches": matches, "truncated": False}
 
+    @staticmethod
+    def _command_environment(executable: Path) -> dict[str, str]:
+        """Build a minimal process environment without inheriting application secrets."""
+        environment = {
+            "PATH": str(executable.parent),
+            "PYTHONUTF8": "1",
+            "PYTHONIOENCODING": "utf-8",
+            "NO_COLOR": "1",
+        }
+        if os.name == "nt":
+            for key in ("SystemRoot", "WINDIR", "TEMP", "TMP", "USERPROFILE"):
+                value = os.environ.get(key)
+                if value:
+                    environment[key] = value
+        else:
+            for key in ("HOME", "LANG", "LC_ALL"):
+                value = os.environ.get(key)
+                if value:
+                    environment[key] = value
+        return environment
+
+    def _terminate_process_tree(self, process: subprocess.Popen[str]) -> None:
+        """Best-effort process-tree termination for the dedicated command process group."""
+        if process.poll() is not None:
+            return
+        if os.name == "nt":
+            system_root = os.environ.get("SystemRoot", r"C:\Windows")
+            taskkill = Path(system_root) / "System32" / "taskkill.exe"
+            if taskkill.is_file():
+                try:
+                    subprocess.run(
+                        [str(taskkill), "/PID", str(process.pid), "/T", "/F"],
+                        capture_output=True, text=True, timeout=5, check=False,
+                        shell=False,
+                    )
+                except (OSError, subprocess.TimeoutExpired):
+                    process.kill()
+            else:
+                process.kill()
+        else:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                return
+            try:
+                process.wait(timeout=self.COMMAND_TERMINATION_GRACE_SECONDS)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        try:
+            process.wait(timeout=self.COMMAND_TERMINATION_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=self.COMMAND_TERMINATION_GRACE_SECONDS)
+
     def run_command(self, command: str, args: list[str] | None = None,
                     cwd: str = ".") -> dict[str, Any]:
-        executable = Path(command).name.lower()
-        if not self.allow_shell or executable not in self.allowed_commands:
+        """Run one exact allow-listed executable; never resolve model input as a path."""
+        alias = Path(command).name.lower()
+        if (not self.allow_shell or command != alias and command != Path(command).name
+                or alias not in self.allowed_command_paths):
             raise ToolError("Command execution is disabled or the executable is not allow-listed")
+        executable = self.allowed_command_paths[alias]
         working_directory = self._path(cwd)
         if not working_directory.is_dir():
             raise ToolError("Command working directory does not exist")
-        argv = [command, *(str(value) for value in (args or []))]
-        if not self.approval("Run approved command: " + json.dumps(argv)):
+        command_args = args or []
+        if not all(isinstance(value, str) for value in command_args):
+            raise ToolError("Every command argument must be a string")
+        argv = [str(executable), *command_args]
+        if self.cancel_event is not None and self.cancel_event.is_set():
+            raise ToolError("Command execution was cancelled before launch")
+        if not self.approval("Run approved executable: " + json.dumps(argv)):
             raise ToolError("Command execution was not approved")
+        creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if os.name == "nt" else 0
         try:
-            result = subprocess.run(
-                argv, cwd=working_directory, capture_output=True, text=True,
-                timeout=90, check=False, shell=False,
-                env={"PATH": os.environ.get("PATH", ""), "PYTHONUTF8": "1",
-                     "PYTHONIOENCODING": "utf-8", "NO_COLOR": "1"},
+            process = subprocess.Popen(
+                argv, cwd=working_directory, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, encoding="utf-8", errors="replace", shell=False,
+                env=self._command_environment(executable),
+                creationflags=creationflags, start_new_session=(os.name != "nt"),
             )
-        except subprocess.TimeoutExpired as exc:
-            raise ToolError("Command exceeded the 90-second execution limit") from exc
-        return {"command": argv, "return_code": result.returncode,
-                "stdout": result.stdout[-12000:], "stderr": result.stderr[-12000:]}
+        except OSError as exc:
+            raise ToolError(f"Unable to launch approved executable: {exc}") from exc
+
+        deadline = time.monotonic() + self.COMMAND_TIMEOUT_SECONDS
+        while True:
+            if self.cancel_event is not None and self.cancel_event.is_set():
+                self._terminate_process_tree(process)
+                raise ToolError("Command execution was cancelled and its process tree was stopped")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self._terminate_process_tree(process)
+                raise ToolError("Command exceeded the 90-second execution limit; its process tree was stopped")
+            try:
+                stdout, stderr = process.communicate(timeout=min(0.2, remaining))
+                break
+            except subprocess.TimeoutExpired:
+                continue
+        return {"command": argv, "return_code": process.returncode,
+                "stdout": stdout[-12000:], "stderr": stderr[-12000:]}
 
     def definitions(self) -> list[dict[str, Any]]:
         definitions = [
