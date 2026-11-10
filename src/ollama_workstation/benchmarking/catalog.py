@@ -34,7 +34,8 @@ CORE_SUITE = BenchmarkSuite(
             capability="reasoning",
             description="Deterministic tracing of a short program without execution.",
             prompt=(
-                "Trace this Python function for n=4. Return only the final integer.\n"
+                "Trace this Python program for n=4. Return only the final integer.\n"
+                "n = 4\n"
                 "total = 0\n"
                 "for i in range(1, n + 1):\n"
                 "    if i % 2:\n"
