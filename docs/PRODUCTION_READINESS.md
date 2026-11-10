@@ -136,9 +136,9 @@ Delegation is not a security boundary. Each child agent must receive only its ex
 | Language/model tasks | Inspect AI, LM Evaluation Harness | Controlled task accuracy and scoring |
 | Function calling | BFCL V4 plus an independent 11vated tool suite | Tool choice, argument correctness, multi-turn and agentic use |
 | Repository engineering | SWE-bench Pro V2 (pinned protocol) plus private/held-out repository tasks | Issue resolution and regression behavior |
-| Terminal operations | Terminal-Bench, TUA-Bench | Multi-step command-line work |
+| Terminal operations | TUA-Bench | 120 execution-based terminal workflow tasks; task-set revision must be pinned |
 | Computer use | OSWorld 2.0 (exact version pinned) | Desktop application operation |
-| Browser work | Browser Use benchmark | Browser task completion |
+| Browser work | Browser Use BU Bench V2.1.1 (exact dataset/runner pinned) | 200 web tasks; legacy 60-task results are not comparable |
 | Product-specific | 11Vated Agent Arena | Identity, recovery, verification, resource and autonomy behavior |
 
 Benchmark selection is version-aware. The research register documents known validity issues: do not rely on SWE-bench Verified as a headline coding measure; do not mix SWE-bench Pro v1 with V2; and treat BFCL V4 as one diagnostic signal because a September 2026 review found substantial issues in its audited sample. Every external benchmark must undergo protocol, dataset and task-quality review before it is used as a certification gate.
