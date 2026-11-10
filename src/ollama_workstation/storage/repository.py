@@ -50,6 +50,14 @@ class Repository:
                     task TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL,
                     completed_at TEXT, trace_json TEXT NOT NULL DEFAULT '[]'
                 );
+                CREATE TABLE IF NOT EXISTS agent_run_events (
+                    run_id TEXT NOT NULL, sequence INTEGER NOT NULL, kind TEXT NOT NULL,
+                    message TEXT NOT NULL, data_json TEXT NOT NULL, created_at TEXT NOT NULL,
+                    PRIMARY KEY(run_id, sequence),
+                    FOREIGN KEY(run_id) REFERENCES agent_runs(run_id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_agent_run_events_time
+                    ON agent_run_events(run_id, created_at);
                 CREATE TABLE IF NOT EXISTS conversations (
                     conversation_id TEXT PRIMARY KEY, model_name TEXT NOT NULL, title TEXT NOT NULL,
                     updated_at TEXT NOT NULL, messages_json TEXT NOT NULL
@@ -84,15 +92,76 @@ class Repository:
             rows = db.execute("SELECT profile_json FROM model_profiles ORDER BY generated_at DESC").fetchall()
         return [ModelProfile.from_dict(json.loads(row[0])) for row in rows]
 
+    def append_run_event(
+        self, run_id: str, model_name: str, agent_title: str, task: str,
+        event: dict[str, Any],
+    ) -> int:
+        """Durably append one ordered event and create a crash-visible running record."""
+        created_at = str(event.get("timestamp") or "")
+        kind = str(event.get("kind") or "event")
+        message = str(event.get("message") or "")
+        data = event.get("data") if isinstance(event.get("data"), dict) else {}
+        encoded_data = json.dumps(data, ensure_ascii=False, default=str)
+        with self._connection() as db:
+            db.execute(
+                "INSERT OR IGNORE INTO agent_runs("
+                "run_id,model_name,agent_title,task,status,created_at,completed_at,trace_json"
+                ") VALUES(?,?,?,?,?,?,NULL,'[]')",
+                (run_id, model_name, agent_title, task, "running", created_at),
+            )
+            row = db.execute(
+                "SELECT COALESCE(MAX(sequence),0)+1 FROM agent_run_events WHERE run_id=?",
+                (run_id,),
+            ).fetchone()
+            sequence = int(row[0])
+            db.execute(
+                "INSERT INTO agent_run_events(run_id,sequence,kind,message,data_json,created_at) "
+                "VALUES(?,?,?,?,?,?)",
+                (run_id, sequence, kind, message, encoded_data, created_at),
+            )
+            trace_row = db.execute(
+                "SELECT trace_json FROM agent_runs WHERE run_id=?", (run_id,)
+            ).fetchone()
+            trace = json.loads(trace_row[0]) if trace_row else []
+            trace.append({
+                "kind": kind, "message": message, "data": data, "timestamp": created_at
+            })
+            db.execute(
+                "UPDATE agent_runs SET trace_json=?, status='running' WHERE run_id=?",
+                (json.dumps(trace, ensure_ascii=False, default=str), run_id),
+            )
+        return sequence
+
+    def list_run_events(self, run_id: str) -> list[dict[str, Any]]:
+        """Read the append-only event journal in its durable sequence order."""
+        with self._connection() as db:
+            rows = db.execute(
+                "SELECT sequence,kind,message,data_json,created_at "
+                "FROM agent_run_events WHERE run_id=? ORDER BY sequence",
+                (run_id,),
+            ).fetchall()
+        return [{
+            "sequence": row["sequence"],
+            "kind": row["kind"],
+            "message": row["message"],
+            "data": json.loads(row["data_json"]),
+            "timestamp": row["created_at"],
+        } for row in rows]
+
     def save_run(self, run_id: str, model_name: str, agent_title: str, task: str,
                  status: str, created_at: str, completed_at: str | None,
                  trace: list[dict[str, Any]]) -> None:
+        """Finalize a run without replacing its append-only event history."""
         with self._connection() as db:
             db.execute(
-                "INSERT OR REPLACE INTO agent_runs(run_id,model_name,agent_title,task,status,created_at,completed_at,trace_json) "
-                "VALUES(?,?,?,?,?,?,?,?)",
+                "INSERT INTO agent_runs(run_id,model_name,agent_title,task,status,created_at,completed_at,trace_json) "
+                "VALUES(?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(run_id) DO UPDATE SET "
+                "model_name=excluded.model_name, agent_title=excluded.agent_title, "
+                "task=excluded.task, status=excluded.status, created_at=excluded.created_at, "
+                "completed_at=excluded.completed_at, trace_json=excluded.trace_json",
                 (run_id, model_name, agent_title, task, status, created_at, completed_at,
-                 json.dumps(trace, ensure_ascii=False)),
+                 json.dumps(trace, ensure_ascii=False, default=str)),
             )
 
     def save_conversation(self, conversation_id: str, model_name: str, title: str,
