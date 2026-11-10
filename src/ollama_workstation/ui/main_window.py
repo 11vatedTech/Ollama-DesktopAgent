@@ -178,9 +178,12 @@ class MainWindow(QMainWindow):
         run.clicked.connect(self.run_agent)
         remember = QPushButton("Add project memory")
         remember.clicked.connect(self.add_project_memory)
+        manage_memory = QPushButton("Manage memory")
+        manage_memory.clicked.connect(self.manage_project_memory)
         row.addWidget(choose)
         row.addWidget(self.workspace, 1)
         row.addWidget(remember)
+        row.addWidget(manage_memory)
         row.addWidget(run)
         layout.addLayout(row)
         self.agent_output = QTextBrowser()
@@ -381,6 +384,31 @@ class MainWindow(QMainWindow):
             self.status.setText(f"Saved project memory: {record.memory_id[:8]}")
         except (OSError, ValueError, RuntimeError) as exc:
             self.show_error(str(exc))
+
+    def manage_project_memory(self) -> None:
+        scope_id = str(Path(self.workspace.text()).expanduser().resolve())
+        records = self.memory_store.list([("project", scope_id)], limit=100)
+        if not records:
+            QMessageBox.information(self, "Project memory", "No saved notes exist for this workspace.")
+            return
+        labels = [
+            f"{item.memory_id[:8]} · {item.category} · {item.content[:110].replace(chr(10), ' ')}"
+            for item in records
+        ]
+        selected, accepted = QInputDialog.getItem(
+            self, "Manage project memory", "Select a note to archive:", labels, 0, False
+        )
+        if not accepted:
+            return
+        record = records[labels.index(selected)]
+        confirm = QMessageBox.question(
+            self, "Archive memory", "Archive the selected note? It will no longer be retrieved.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm == QMessageBox.StandardButton.Yes:
+            self.memory_store.forget(record.memory_id)
+            self.status.setText(f"Archived memory: {record.memory_id[:8]}")
 
     def run_agent(self) -> None:
         model = self.agent_model.text().strip()
