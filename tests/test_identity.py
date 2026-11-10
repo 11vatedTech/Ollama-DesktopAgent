@@ -1,6 +1,7 @@
 from ollama_workstation.models.identity import assign_identity
 from ollama_workstation.models.schemas import CapabilityResult, ModelProfile
 
+
 def test_identity_uses_observed_capabilities_and_selects_role() -> None:
     profile = ModelProfile(model_name="unit-test", digest="abc", generated_at="now")
     profile.capabilities = [
