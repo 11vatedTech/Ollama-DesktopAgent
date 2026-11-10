@@ -41,3 +41,23 @@ def test_aggregated_probe_retains_inference_speed_metrics() -> None:
     metrics = ModelProfiler._aggregate_metrics(outcomes)
     assert metrics["mean_generation_tokens_per_second"] == 25.0
     assert len(metrics["trials"]) == 2
+
+
+
+def test_failed_probe_trials_contribute_zero_to_capability_average() -> None:
+    result = ModelProfiler._aggregate("reasoning", [
+        CapabilityResult("reasoning", "passed", 100.0, 0.2, 1, 1),
+        CapabilityResult("reasoning", "failed", 0.0, 0.0, 1, 0),
+    ])
+    assert result.status == "partial"
+    assert result.score == 50.0
+    assert result.passed == 1
+    assert result.attempts == 2
+
+
+def test_probe_count_uses_actual_attempts_not_unassessed_capabilities() -> None:
+    summary = ModelProfiler._performance_summary([
+        CapabilityResult("reasoning", "passed", 100.0, 0.5, 3, 3),
+        CapabilityResult("long_context", "not_assessed"),
+    ])
+    assert summary["probe_count"] == 3
