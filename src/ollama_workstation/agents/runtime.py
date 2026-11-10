@@ -86,12 +86,14 @@ class AgentRuntime:
         def record(kind: str, message: str, **data: Any) -> None:
             nonlocal persistence_warning_reported
             safe_data = _sanitize_event_value(data)
-            item = AgentEvent(kind, message, safe_data)
+            safe_message = str(_sanitize_event_value(message))
+            safe_task = str(_sanitize_event_value(task))
+            item = AgentEvent(kind, safe_message, safe_data)
             trace.append(item)
             if self.repository is not None:
                 try:
                     self.repository.append_run_event(
-                        run_id, model, profile.professional_title, _sanitize_event_value(task),
+                        run_id, model, profile.professional_title, safe_task,
                         {
                             "kind": item.kind,
                             "message": item.message,
@@ -112,14 +114,23 @@ class AgentRuntime:
             emit(item)
 
         def finish(status: str, final_message: str, steps: int) -> AgentResult:
-            result = AgentResult(run_id, status, final_message, steps, trace)
+            safe_task = str(_sanitize_event_value(task))
+            safe_final_message = str(_sanitize_event_value(final_message))
+            safe_trace = [
+                {
+                    "kind": str(_sanitize_event_value(item.kind)),
+                    "message": str(_sanitize_event_value(item.message)),
+                    "data": _sanitize_event_value(item.data),
+                    "timestamp": item.timestamp,
+                }
+                for item in trace
+            ]
+            result = AgentResult(run_id, status, safe_final_message, steps, trace)
             if self.repository is not None:
                 try:
                     self.repository.save_run(
-                        run_id, model, profile.professional_title, task, status,
-                        trace[0].timestamp if trace else utc_now(), utc_now(),
-                        [{"kind": item.kind, "message": item.message, "data": item.data,
-                          "timestamp": item.timestamp} for item in trace],
+                        run_id, model, profile.professional_title, safe_task, status,
+                        trace[0].timestamp if trace else utc_now(), utc_now(), safe_trace,
                     )
                 except Exception as exc:
                     record("persistence_error", f"Execution finished but trace persistence failed: {exc}")
