@@ -195,3 +195,17 @@ def test_subprocess_pipe_capture_retains_a_bounded_tail() -> None:
     capture.drain(StringIO("0123456789abcdefghijklmnop"))
     assert capture.value() == "ghijklmnop"
     assert len(capture.value()) == 10
+
+
+
+def test_command_output_capture_reports_truncation_and_bounds_returned_text(tmp_path: Path) -> None:
+    tools = WorkspaceTools(
+        tmp_path, allow_shell=True, allowed_commands=("python",), approval=lambda _: True
+    )
+    tools.MAX_COMMAND_CAPTURE_CHARS = 64
+    result = tools.run_command(
+        "python", ["-c", "print('x' * 10000)"]
+    )
+    assert result["return_code"] == 0
+    assert result["output_truncated"] is True
+    assert len(result["stdout"]) <= 64
