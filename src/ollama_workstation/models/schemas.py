@@ -79,7 +79,7 @@ class ModelProfile:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "ModelProfile":
+    def from_dict(cls, payload: dict[str, Any]) -> ModelProfile:
         values = dict(payload)
         values["origin_evidence"] = [Evidence(**x) for x in values.get("origin_evidence", [])]
         values["capabilities"] = [CapabilityResult(**x) for x in values.get("capabilities", [])]
