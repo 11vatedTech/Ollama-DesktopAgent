@@ -8,7 +8,13 @@ from collections.abc import Callable
 from typing import Any
 
 from ollama_workstation.models.identity import assign_identity
-from ollama_workstation.models.schemas import CapabilityResult, Evidence, ModelProfile, ModelRef, utc_now
+from ollama_workstation.models.schemas import (
+    CapabilityResult,
+    Evidence,
+    ModelProfile,
+    ModelRef,
+    utc_now,
+)
 from ollama_workstation.ollama.client import OllamaClient
 
 
