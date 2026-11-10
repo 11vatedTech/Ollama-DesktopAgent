@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import re
-from datetime import UTC, datetime
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -93,7 +93,7 @@ def attach_model_card_evidence(profile: Any, card: dict[str, Any]) -> Any:
         "User-selected upstream repository", "Publisher pipeline tag",
         "Model-card license declaration", "Model-card dataset disclosure",
         "Training dataset disclosure", "Publisher-declared base model",
-        "Publisher-declared languages", "Publisher intended use",
+        "Publisher-declared languages", "Publisher model description", "Publisher intended use",
         "Publisher training details", "Publisher evaluation disclosure",
         "Publisher-disclosed limitations", "Model card content hash",
     }
