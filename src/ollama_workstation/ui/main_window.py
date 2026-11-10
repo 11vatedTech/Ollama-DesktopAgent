@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ollama_workstation.agents.memory import MemoryStore
 from ollama_workstation.agents.runtime import AgentRuntime
 from ollama_workstation.agents.tools import WorkspaceTools
 from ollama_workstation.config import AppPaths, load_settings, save_settings
@@ -64,6 +65,7 @@ class MainWindow(QMainWindow):
         self.client = OllamaClient(self.settings.ollama_base_url, self.settings.request_timeout_seconds)
         self.profiler = ModelProfiler(self.client, self.settings.keep_alive)
         self.repository = Repository(self.paths.database_file)
+        self.memory_store = MemoryStore(self.repository)
         self.pool = QThreadPool.globalInstance()
         self.models: list[str] = []
         self.selected_model = ""
@@ -174,8 +176,11 @@ class MainWindow(QMainWindow):
         self.workspace = QLabel(str(self.paths.workspaces_dir))
         run = QPushButton("Run agent")
         run.clicked.connect(self.run_agent)
+        remember = QPushButton("Add project memory")
+        remember.clicked.connect(self.add_project_memory)
         row.addWidget(choose)
         row.addWidget(self.workspace, 1)
+        row.addWidget(remember)
         row.addWidget(run)
         layout.addLayout(row)
         self.agent_output = QTextBrowser()
@@ -351,6 +356,32 @@ class MainWindow(QMainWindow):
         if selected:
             self.workspace.setText(selected)
 
+    def add_project_memory(self) -> None:
+        content, accepted = QInputDialog.getMultiLineText(
+            self, "Add project memory", "Save a durable note for this workspace:"
+        )
+        if not accepted or not content.strip():
+            return
+        categories = ["fact", "decision", "preference", "constraint", "procedure", "lesson"]
+        category, accepted = QInputDialog.getItem(
+            self, "Memory category", "Classify this note:", categories, 0, False
+        )
+        if not accepted:
+            return
+        tags_text, _ = QInputDialog.getText(
+            self, "Memory tags", "Optional comma-separated retrieval tags:"
+        )
+        try:
+            scope_id = str(Path(self.workspace.text()).expanduser().resolve())
+            record = self.memory_store.remember(
+                content, scope="project", scope_id=scope_id, category=category,
+                tags=[tag.strip() for tag in tags_text.split(",") if tag.strip()],
+                source="user",
+            )
+            self.status.setText(f"Saved project memory: {record.memory_id[:8]}")
+        except (OSError, ValueError, RuntimeError) as exc:
+            self.show_error(str(exc))
+
     def run_agent(self) -> None:
         model = self.agent_model.text().strip()
         task = self.task.toPlainText().strip()
@@ -361,7 +392,8 @@ class MainWindow(QMainWindow):
         workspace = Path(self.workspace.text())
         tools = WorkspaceTools(workspace, allow_shell=False)
         runtime = AgentRuntime(self.client, max_steps=self.settings.max_agent_steps,
-                               keep_alive=self.settings.keep_alive, repository=self.repository)
+                               keep_alive=self.settings.keep_alive, repository=self.repository,
+                               memory_store=self.memory_store)
         self.agent_progress.show()
         worker = FunctionWorker(runtime.run, model, profile, task, tools)
         worker.signals.progress.connect(lambda event: self.agent_output.append(html.escape(str(event))))
