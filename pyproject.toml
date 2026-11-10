@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "11vated-ollama-workstation"
-version = "0.1.0"
+version = "0.2.0.dev0"
 description = "A local-first desktop agent workstation that profiles Ollama models and turns them into operational agents."
 readme = "README.md"
 requires-python = ">=3.11"
