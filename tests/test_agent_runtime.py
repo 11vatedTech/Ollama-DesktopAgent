@@ -37,6 +37,10 @@ def test_native_tool_agent_inspects_workspace_and_persists_trace(tmp_path: Path)
     assert result.final_message == "The file says hello."
     assert any(event.kind == "tool_completed" for event in result.trace)
     assert repository.list_runs()[0]["status"] == "completed"
+    journal = repository.list_run_events(result.run_id)
+    assert journal[0]["kind"] == "started"
+    assert journal[-1]["kind"] == "completed"
+    assert len(journal) == len(result.trace)
     assert client.payloads[0]["tools"]
 
 def test_guided_agent_can_use_action_text_fallback(tmp_path: Path) -> None:
