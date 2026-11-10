@@ -80,7 +80,7 @@ python -m ollama_workstation
 ```powershell
 11vated models
 11vated profile qwen2.5-coder:7b --metadata-only
-11vated profile qwen2.5-coder:7b
+11vated profile qwen2.5-coder:7b --repeats 3
 11vated run qwen2.5-coder:7b .\agent-workspace "Inspect this project and summarize its architecture"
 11vated research qwen2.5-coder:7b
 11vated attach-model-card qwen2.5-coder:7b Qwen/Qwen2.5-Coder-7B-Instruct
@@ -111,11 +111,11 @@ ruff check .
 python -m compileall -q src
 ```
 
-CI is configured for Python 3.11/3.12 on Windows and Ubuntu. The latest completed matrix passed compile, Ruff, tests and Windows desktop-import jobs (**50 tests** at the validated checkpoint; later commits rerun the matrix). The Windows packaging workflow builds a PyInstaller distribution; installer signing and release certification remain open gates.
+CI is configured for Python 3.11/3.12 on Windows and Ubuntu. The latest completed matrix passed compile, Ruff, tests and Windows desktop-import jobs (the latest fully validated checkpoint is the CI run linked from PR #1; test counts are published with each run). The Windows packaging workflow builds a PyInstaller distribution; installer signing and release certification remain open gates.
 
 ## Research sources
 
-The project evaluates and benchmarks against open-source architecture candidates, including [Goose](https://github.com/aaif-goose/goose), [Interpreter Workstation](https://github.com/openinterpreter/interpreter-workstation), [OpenHands SDK](https://github.com/OpenHands/software-agent-sdk), [Codex CLI](https://github.com/openai/codex), [Grok Build](https://github.com/xai-org/grok-build), [Cline](https://github.com/cline/cline), [mini-SWE-agent](https://github.com/SWE-agent/mini-swe-agent), [Inspect AI](https://github.com/UKGovernmentBEIS/inspect_ai), [LangGraph](https://github.com/langchain-ai/langgraph), [Letta](https://github.com/letta-ai/letta), [Mem0](https://github.com/mem0ai/mem0) and [Browser Use](https://github.com/browser-use/browser-use). These are research candidates, not bundled dependencies. See [the source-level research register](docs/research/COMPETITIVE_RESEARCH.md) for findings, risks and benchmarks.
+The project evaluates and benchmarks against open-source architecture candidates, including [Goose](https://github.com/aaif-goose/goose), [Interpreter Workstation](https://github.com/openinterpreter/interpreter-workstation), [OpenHands SDK](https://github.com/OpenHands/software-agent-sdk), [Codex CLI](https://github.com/openai/codex), [Grok Build](https://github.com/xai-org/grok-build), [Cline](https://github.com/cline/cline), [mini-SWE-agent](https://github.com/SWE-agent/mini-swe-agent), [Inspect AI](https://github.com/UKGovernmentBEIS/inspect_ai), [LangGraph](https://github.com/langchain-ai/langgraph), [Letta](https://github.com/letta-ai/letta), [Mem0](https://github.com/mem0ai/mem0) and [Browser Use](https://github.com/browser-use/browser-use). These are research candidates, not bundled dependencies. See [the dated primary-source research register](docs/RESEARCH_REGISTER.md) for findings, risks and benchmarks.
 
 ## Licensing
 
