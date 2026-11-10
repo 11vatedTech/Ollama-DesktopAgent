@@ -15,7 +15,7 @@ def test_workforce_can_rank_new_specialist_roles() -> None:
     matches = WorkforceMatcher.rank("research", [analyst])
     assert len(matches) == 1
     assert matches[0].model_name == "analyst"
-    assert matches[0].status == "evidence-backed"
+    assert matches[0].status == "provisional"
 
 
 def test_unknown_specialist_capabilities_are_not_ranked_as_zero() -> None:
