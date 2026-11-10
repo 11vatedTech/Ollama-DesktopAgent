@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -9,6 +10,7 @@ from typing import Any
 
 from ollama_workstation import __version__
 from ollama_workstation.agents.binding import validate_installed_model_binding
+from ollama_workstation.benchmarking.runner import BenchmarkRunner
 from ollama_workstation.agents.identity_package import export_identity_package
 from ollama_workstation.agents.memory import MemoryStore
 from ollama_workstation.agents.runtime import AgentRuntime
@@ -38,6 +40,13 @@ def build_parser() -> argparse.ArgumentParser:
     profile.add_argument("--metadata-only", action="store_true")
     profile.add_argument("--repeats", type=int, default=1, choices=range(1, 6),
                          help="Repeat each local smoke probe 1-5 times (more reliable, slower)")
+    benchmark = commands.add_parser(
+        "benchmark", help="Run a repeatable, independently scored local benchmark suite"
+    )
+    benchmark.add_argument("model")
+    benchmark.add_argument("--suite", default="core", choices=["core", "11vated-core"])
+    benchmark.add_argument("--repeats", type=int, default=3, choices=range(1, 6))
+    benchmark.add_argument("--output", type=Path, help="Optional JSON report destination")
     research = commands.add_parser("research", help="Search public model-card candidates")
     research.add_argument("model")
     attach = commands.add_parser("attach-model-card", help="Attach a user-selected Hugging Face model card")
@@ -62,6 +71,40 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps([{"name": x.name, "size_bytes": x.size_bytes,
                                "digest": x.digest, "details": x.details}
                               for x in ModelProfiler(client).inventory()], indent=2))
+            return 0
+        if args.command == "benchmark":
+            model_ref = next(
+                (item for item in ModelProfiler(client).inventory() if item.name == args.model),
+                None,
+            )
+            if model_ref is None:
+                print(f"Model {args.model!r} is not installed in the configured Ollama instance.", file=sys.stderr)
+                return 2
+            report = BenchmarkRunner(client, keep_alive=settings.keep_alive).run(
+                args.model,
+                model_digest=model_ref.digest,
+                suite_id=args.suite,
+                repeats=args.repeats,
+                progress=lambda message: print(message, file=sys.stderr),
+            )
+            safe_model_id = hashlib.sha256(args.model.encode("utf-8")).hexdigest()[:12]
+            destination = args.output or (
+                paths.profiles_dir / "benchmarks" / f"{safe_model_id}-{report.run_id[:8]}.json"
+            )
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            payload = json.dumps(report.to_dict(), indent=2, ensure_ascii=False)
+            destination.write_text(payload, encoding="utf-8")
+            print(json.dumps({
+                "report": str(destination),
+                "run_id": report.run_id,
+                "model": report.model_name,
+                "digest": report.model_digest,
+                "suite": f"{report.suite_id}@{report.suite_version}",
+                "score": report.score,
+                "passed": report.total_passed,
+                "attempts": report.total_attempts,
+                "manifest_sha256": report.manifest_sha256,
+            }, indent=2, ensure_ascii=False))
             return 0
         if args.command == "profile":
             profile = ModelProfiler(client, settings.keep_alive).profile(
