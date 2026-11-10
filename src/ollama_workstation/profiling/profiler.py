@@ -101,7 +101,8 @@ class ModelProfiler:
                         outcomes.append(probe())
                     except Exception as exc:
                         outcomes.append(CapabilityResult(
-                            name, "failed", attempts=1, method="local smoke probe v1",
+                            name, "failed", 0.0, attempts=1, passed=0,
+                            method="local smoke probe v1",
                             limitations=[type(exc).__name__ + ": " + str(exc)]))
                 profile.capabilities.append(self._aggregate(name, outcomes))
             for name in ("long_context", "research", "creative_writing", "multilingual",
@@ -154,22 +155,49 @@ class ModelProfiler:
         return "General-purpose or undisclosed purpose; publisher research is required."
 
     def _ask(self, model: str, prompt: str, output_format: dict[str, Any] | None = None,
-             tools: list[dict[str, Any]] | None = None) -> tuple[str, dict[str, Any]]:
+             tools: list[dict[str, Any]] | None = None,
+             expected_tool_call: tuple[str, dict[str, Any]] | None = None) -> tuple[str, dict[str, Any]]:
         started = time.perf_counter()
         response = self.client.chat(model, [{"role": "user", "content": prompt}],
                                     output_format=output_format, tools=tools,
                                     keep_alive=self.keep_alive)
         message = response.get("message") or {}
-        return str(message.get("content") or ""), {
-            "message": message, "duration_ms": (time.perf_counter() - started) * 1000,
-            "eval_count": response.get("eval_count"), "eval_duration_ns": response.get("eval_duration"),
+        metrics: dict[str, Any] = {
+            "duration_ms": (time.perf_counter() - started) * 1000,
+            "eval_count": response.get("eval_count"),
+            "eval_duration_ns": response.get("eval_duration"),
             "load_duration_ns": response.get("load_duration"),
             "prompt_eval_count": response.get("prompt_eval_count"),
             "prompt_eval_duration_ns": response.get("prompt_eval_duration"),
             "generation_tokens_per_second": (
                 float(response["eval_count"]) / (float(response["eval_duration"]) / 1_000_000_000)
                 if response.get("eval_count") and response.get("eval_duration") else None
-            )}
+            ),
+        }
+        if tools is not None:
+            calls = message.get("tool_calls") or []
+            metrics["tool_call_count"] = len(calls)
+            if expected_tool_call is not None:
+                expected_name, expected_arguments = expected_tool_call
+                metrics["tool_call_valid"] = any(
+                    self._matches_tool_call(call, expected_name, expected_arguments)
+                    for call in calls
+                )
+        return str(message.get("content") or ""), metrics
+
+    @staticmethod
+    def _matches_tool_call(
+        call: dict[str, Any], expected_name: str, expected_arguments: dict[str, Any]
+    ) -> bool:
+        """Validate one expected native tool call without retaining its raw payload."""
+        function = call.get("function") or {}
+        arguments = function.get("arguments") or {}
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                return False
+        return function.get("name") == expected_name and arguments == expected_arguments
 
     @staticmethod
     def _result(name: str, passed: bool, metrics: dict[str, Any],
@@ -243,7 +271,7 @@ class ModelProfiler:
             for item in metrics if isinstance(item.get("mean_generation_tokens_per_second"), (int, float))
         ]
         return {
-            "probe_count": len(capabilities),
+            "probe_count": sum(item.attempts for item in capabilities),
             "mean_probe_latency_ms": sum(latencies) / len(latencies) if latencies else None,
             "mean_generation_tokens_per_second": sum(speeds) / len(speeds) if speeds else None,
         }
@@ -286,14 +314,15 @@ class ModelProfiler:
             "name": "probe_echo", "description": "Harmless function-call test.",
             "parameters": {"type": "object", "properties": {"value": {"type": "string"}},
                            "required": ["value"], "additionalProperties": False}}}]
-        _, metrics = self._ask(model, "Call probe_echo exactly once with value agent-ready.", tools=schema)
-        calls = metrics["message"].get("tool_calls") or []
-        valid = any((call.get("function") or {}).get("name") == "probe_echo"
-                    and (call.get("function") or {}).get("arguments", {}).get("value") == "agent-ready"
-                    for call in calls)
+        _, metrics = self._ask(
+            model, "Call probe_echo exactly once with value agent-ready.",
+            tools=schema, expected_tool_call=("probe_echo", {"value": "agent-ready"}),
+        )
+        call_count = int(metrics.get("tool_call_count", 0))
+        valid = bool(metrics.get("tool_call_valid", False))
         result = self._result("tool_calling", valid, metrics, "Native function-call probe",
-                              "Tool calls returned: " + str(len(calls)))
-        if not calls:
+                              "Tool calls returned: " + str(call_count))
+        if not call_count:
             result.status, result.score = "unsupported", None
             result.limitations.append("No native tool call; test alternative action harnesses.")
         elif not valid:
