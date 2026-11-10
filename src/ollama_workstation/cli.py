@@ -32,6 +32,8 @@ def build_parser() -> argparse.ArgumentParser:
     profile = commands.add_parser("profile", help="Run a local capability assessment")
     profile.add_argument("model")
     profile.add_argument("--metadata-only", action="store_true")
+    profile.add_argument("--repeats", type=int, default=1, choices=range(1, 6),
+                         help="Repeat each local smoke probe 1-5 times (more reliable, slower)")
     research = commands.add_parser("research", help="Search public model-card candidates")
     research.add_argument("model")
     attach = commands.add_parser("attach-model-card", help="Attach a user-selected Hugging Face model card")
@@ -60,7 +62,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "profile":
             profile = ModelProfiler(client, settings.keep_alive).profile(
                 args.model, run_probes=not args.metadata_only,
-                progress=lambda message: print(message, file=sys.stderr))
+                progress=lambda message: print(message, file=sys.stderr), repeats=args.repeats)
             repository.save_profile(profile)
             safe = args.model.replace("/", "_").replace(":", "_")
             (paths.profiles_dir / f"{safe}.json").write_text(
