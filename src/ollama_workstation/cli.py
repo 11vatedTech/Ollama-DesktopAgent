@@ -13,6 +13,7 @@ from ollama_workstation.agents.binding import validate_installed_model_binding
 from ollama_workstation.benchmarking.runner import BenchmarkRunner
 from ollama_workstation.agents.identity_package import export_identity_package
 from ollama_workstation.agents.memory import MemoryStore
+from ollama_workstation.agents.mcp_gateway import CompositeToolRegistry, MCPToolGateway
 from ollama_workstation.agents.runtime import AgentRuntime
 from ollama_workstation.agents.tools import WorkspaceTools
 from ollama_workstation.config import AppPaths, load_settings
@@ -167,12 +168,24 @@ def main(argv: list[str] | None = None) -> int:
             validate_installed_model_binding(profile, installed)
             def approve(description: str) -> bool:
                 return input(f"APPROVAL REQUIRED: {description}\nAllow? [y/N] ").strip().lower() == "y"
-            tools = WorkspaceTools(args.workspace, allow_shell=settings.allow_shell_tools,
-                                   allowed_commands=settings.allowed_commands, approval=approve)
-            result = AgentRuntime(client, max_steps=args.max_steps, keep_alive=settings.keep_alive,
-                                  repository=repository, memory_store=MemoryStore(repository)).run(
-                args.model, profile, args.task, tools,
-                event=lambda item: print(f"[{item.kind}] {item.message}", file=sys.stderr))
+            workspace_tools = WorkspaceTools(
+                args.workspace, allow_shell=settings.allow_shell_tools,
+                allowed_commands=settings.allowed_commands, approval=approve,
+            )
+            with MCPToolGateway(settings.mcp_servers) as mcp_gateway:
+                tools = CompositeToolRegistry(workspace_tools, mcp_gateway)
+                if mcp_gateway.routes:
+                    print(
+                        f"[mcp] Connected {len(mcp_gateway.routes)} explicitly approved tool(s).",
+                        file=sys.stderr,
+                    )
+                result = AgentRuntime(
+                    client, max_steps=args.max_steps, keep_alive=settings.keep_alive,
+                    repository=repository, memory_store=MemoryStore(repository),
+                ).run(
+                    args.model, profile, args.task, tools,
+                    event=lambda item: print(f"[{item.kind}] {item.message}", file=sys.stderr),
+                )
             safe_message, redacted_count = WorkspaceTools.redact_sensitive_text(result.final_message)
             if redacted_count:
                 print(f"[security] Redacted {redacted_count} credential-like value(s) from the final response.", file=sys.stderr)
