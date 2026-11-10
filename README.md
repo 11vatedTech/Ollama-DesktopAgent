@@ -85,13 +85,14 @@ python -m ollama_workstation
 11vated models
 11vated profile qwen2.5-coder:7b --metadata-only
 11vated profile qwen2.5-coder:7b --repeats 3
+11vated benchmark qwen2.5-coder:7b --suite core --repeats 3
 11vated run qwen2.5-coder:7b .\agent-workspace "Inspect this project and summarize its architecture"
 11vated research qwen2.5-coder:7b
 11vated attach-model-card qwen2.5-coder:7b Qwen/Qwen2.5-Coder-7B-Instruct
 11vated export-agent qwen2.5-coder:7b
 ```
 
-The probe suite makes several model calls and loads the selected model. `--repeats 1..5` repeats each smoke probe and records pass rate, confidence and inference metrics. It remains an initial smoke-test battery, not a substitute for independently audited specialist evaluations. Read the [Research Register](docs/RESEARCH_REGISTER.md) before interpreting public benchmark scores.
+The profile probe suite makes several model calls and loads the selected model. `--repeats 1..5` repeats each smoke probe and records pass rate, confidence and inference metrics. The separate `benchmark` command runs the versioned six-case `11vated-core` suite with independent exact, numeric, JSON-schema and ordered-term evaluators. It writes a JSON report containing the model digest, manifest SHA-256, per-case trial outcomes, Wilson intervals, latency/throughput and host snapshot. This local core suite is a deterministic diagnostic—not a leaderboard, statistical certification or substitute for SWE-bench, BFCL, OSWorld or specialist audits. Read the [Research Register](docs/RESEARCH_REGISTER.md) before interpreting public benchmark scores.
 
 ## Privacy and security
 
