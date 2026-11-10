@@ -1,3 +1,4 @@
+import os
 import sys
 import time
 from pathlib import Path
@@ -61,3 +62,38 @@ def test_command_cancellation_stops_the_running_process(tmp_path: Path) -> None:
         tools.run_command("python", ["-c", "import time; time.sleep(30)"])
     trigger.join(timeout=2)
     assert cancelled.is_set()
+
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux process-group regression test")
+def test_command_timeout_kills_descendant_after_parent_exits(tmp_path: Path) -> None:
+    pid_file = tmp_path / "child.pid"
+    tools = WorkspaceTools(
+        tmp_path, allow_shell=True, allowed_commands=("python",), approval=lambda _: True
+    )
+    tools.COMMAND_TIMEOUT_SECONDS = 0.6
+    tools.COMMAND_TERMINATION_GRACE_SECONDS = 0.1
+    child_code = (
+        "import os,sys,time; "
+        "open(sys.argv[1], 'w', encoding='utf-8').write(str(os.getpid())); "
+        "time.sleep(30)"
+    )
+    parent_code = (
+        "import subprocess,sys; "
+        "subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2]])"
+    )
+    with pytest.raises(ToolError, match="exceeded"):
+        tools.run_command("python", ["-c", parent_code, child_code, str(pid_file)])
+    assert pid_file.exists()
+    child_pid = int(pid_file.read_text(encoding="utf-8"))
+    state = None
+    for _ in range(30):
+        try:
+            with open(f"/proc/{child_pid}/stat", encoding="utf-8") as stream:
+                state = stream.read().split()[2]
+        except FileNotFoundError:
+            state = None
+        if state in (None, "Z"):
+            break
+        time.sleep(0.05)
+    assert state in (None, "Z")
