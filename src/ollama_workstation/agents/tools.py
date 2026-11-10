@@ -159,9 +159,9 @@ class WorkspaceTools:
 
     def _terminate_process_tree(self, process: subprocess.Popen[str]) -> None:
         """Best-effort process-tree termination for the dedicated command process group."""
-        if process.poll() is not None:
-            return
         if os.name == "nt":
+            if process.poll() is not None:
+                return
             system_root = os.environ.get("SystemRoot", r"C:\Windows")
             taskkill = Path(system_root) / "System32" / "taskkill.exe"
             if taskkill.is_file():
