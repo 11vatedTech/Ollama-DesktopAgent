@@ -272,11 +272,17 @@ class MainWindow(QMainWindow):
             f"<td>{'—' if x.score is None else f'{x.score:.1f}/100'}</td>"
             f"<td>{x.passed}/{x.attempts}</td><td>{x.confidence:.2f}</td></tr>"
             for x in profile.capabilities)
-        evidence = "".join(
-            f"<li><b>{html.escape(x.claim)}</b>: {html.escape(x.value)} "
-            f"[{html.escape(x.level)}] "
-            f"{f'<a href=\"{html.escape(x.source_url, quote=True)}\">source</a>' if x.source_url else ''}"
-            f"</li>" for x in profile.origin_evidence)
+        evidence_items = []
+        for item in profile.origin_evidence:
+            source_link = ""
+            if item.source_url:
+                safe_url = html.escape(item.source_url, quote=True)
+                source_link = f'<a href="{safe_url}">source</a>'
+            evidence_items.append(
+                f"<li><b>{html.escape(item.claim)}</b>: {html.escape(item.value)} "
+                f"[{html.escape(item.level)}] {source_link}</li>"
+            )
+        evidence = "".join(evidence_items)
         roles = ", ".join(profile.recommended_roles) or "Not established"
         limitations = "".join(f"<li>{html.escape(item)}</li>" for item in profile.known_limitations)
         operational = html.escape(json.dumps(profile.operational, indent=2, ensure_ascii=False))
