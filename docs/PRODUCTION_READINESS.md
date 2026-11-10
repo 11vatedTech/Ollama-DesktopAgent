@@ -207,7 +207,7 @@ These are research references, not approved runtime dependencies. For every prop
 | G2 — Empirical profiling | Repeated tests, host/GPU telemetry, expanded task suites, repeatability, confidence and resource metrics | Partial; repeated smoke probes and best-effort telemetry implemented, specialist suites remain |
 | G3 — Agentification | Protocol adapters, strict host-side tool argument validation, bounded recovery and digest binding | Partial; native/structured/guided paths and workspace tool schema validation implemented |
 | G4 — Safe execution | OS sandbox, permission broker, cancellation, audit and cleanup | Not production-ready |
-| G5 — Durable agents | Checkpointing, resumable runs, memory retrieval and event store | Not complete |
+| G5 — Durable agents | Checkpointing, resumable runs, scoped memory retrieval and event store | Partial; scoped SQLite memory, explicit project-note capture/archive and retrieval are implemented; run checkpoint/resume remains incomplete |
 | G6 — Multi-agent workforce | Delegation, shared state, scheduling, budgets and least privilege | Not complete |
 | G7 — Interoperability | MCP client/server, ACP and browser/computer adapters | Not complete |
 | G8 — Certification | Benchmark adapters, controlled comparisons and regression gates | Not complete |
