@@ -13,6 +13,14 @@ def test_model_card_dossier_extracts_explicit_publisher_disclosures() -> None:
                 "datasets": ["publisher/dataset-a"],
                 "base_model": ["publisher/base-model"],
             },
+            "model-index": [{
+                "name": "Specialist Model",
+                "results": [{
+                    "task": {"type": "text-generation"},
+                    "dataset": {"name": "CodeBench"},
+                    "metrics": [{"name": "pass@1", "value": 0.72}],
+                }],
+            }],
         },
         "model_card_markdown": (
             "# Model Description\nA model designed for repository-level code analysis.\n"
@@ -36,6 +44,7 @@ def test_model_card_dossier_extracts_explicit_publisher_disclosures() -> None:
     assert "incorrect patches" in dossier.limitations
     assert "instruction mixture" in dossier.training_details
     assert "repository repair" in dossier.evaluation_details
+    assert "pass@1=0.72" in dossier.published_evaluations[0]
     assert len(dossier.model_card_sha256) == 64
 
 
