@@ -250,7 +250,7 @@ class MainWindow(QMainWindow):
             self.run_history_data = self.repository.list_runs(100)
             self.run_history_list.clear()
             for run in self.run_history_data:
-                task = str(run.get("task") or "").replace("\\n", " ").strip()
+                task = " ".join(str(run.get("task") or "").split())
                 if len(task) > 72:
                     task = task[:69] + "..."
                 self.run_history_list.addItem(
@@ -617,7 +617,14 @@ class MainWindow(QMainWindow):
         )
 
     def agent_finished(self, result: object) -> None:
-        self.agent_output.append(f"<b>{html.escape(result.status)}</b><p>{html.escape(result.final_message)}</p>")
+        safe_message, redacted_count = WorkspaceTools.redact_sensitive_text(result.final_message)
+        notice = (
+            f"<p><small>Security filter redacted {redacted_count} credential-like value(s).</small></p>"
+            if redacted_count else ""
+        )
+        self.agent_output.append(
+            f"<b>{html.escape(result.status)}</b>{notice}<p>{html.escape(safe_message)}</p>"
+        )
         self.refresh_runs()
 
     def save(self) -> None:
