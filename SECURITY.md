@@ -50,7 +50,7 @@ Assets include source code, workspaces, local credentials, private keys, Git rep
 7. Add in-flight cancellation, process-tree cleanup, CPU/RAM/disk/process-count quotas and cleanup after application crashes.
 8. Add crash-safe run checkpoints and resumable execution with model/harness/policy version binding.
 9. Add SBOM, dependency/license scanning, vulnerability review, signed installers and reproducible Windows packaging.
-10. Threat-model MCP server provenance, remote transport authentication, server capabilities and child-agent permission inheritance. The current client uses explicit per-server tool-name grants and environment-variable references for stdio secrets; OAuth, custom HTTP authorization headers, resource/prompt subscriptions and an MCP server are not implemented.
+10. Threat-model MCP server provenance, remote transport authentication, server capabilities and child-agent permission inheritance. The current client uses explicit per-server tool-name grants and environment-variable references for stdio secrets; OAuth, custom HTTP authorization headers, resource/prompt subscriptions and an MCP server are not implemented. The current client uses explicit per-server tool-name grants and environment-variable references for stdio secrets; OAuth, custom HTTP authorization headers, resource/prompt subscriptions and an MCP server are not implemented.
 
 ## Reporting vulnerabilities
 
