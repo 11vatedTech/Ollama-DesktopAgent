@@ -505,7 +505,7 @@ class MainWindow(QMainWindow):
         if installed is None:
             raise ValueError(f"Model {model!r} is not installed in the configured Ollama instance.")
         validate_installed_model_binding(profile, installed)
-        tools = WorkspaceTools(workspace, allow_shell=False)
+        tools = WorkspaceTools(workspace, allow_shell=False, cancel_event=cancel_event)
         runtime = AgentRuntime(
             self.client, max_steps=self.settings.max_agent_steps,
             keep_alive=self.settings.keep_alive, repository=self.repository,
