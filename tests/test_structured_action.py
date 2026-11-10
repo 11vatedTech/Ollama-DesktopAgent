@@ -1,5 +1,6 @@
 from ollama_workstation.agents.runtime import AgentRuntime
 
+
 def test_decode_final_structured_action() -> None:
     calls, final = AgentRuntime._decode_structured_action('{"action":"final","message":"done"}')
     assert calls == []
