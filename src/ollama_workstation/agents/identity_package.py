@@ -10,6 +10,7 @@ from ollama_workstation.models.schemas import ModelProfile, utc_now
 
 
 def build_identity_package(profile: ModelProfile) -> dict[str, Any]:
+    """Build the current schema-1.0 export without granting execution access."""
     return {
         "schema_version": "1.0",
         "package_type": "11vated.agent_identity",
@@ -54,6 +55,7 @@ def build_identity_package(profile: ModelProfile) -> dict[str, Any]:
 
 
 def export_identity_package(profile: ModelProfile, destination: Path) -> Path:
+    """Atomically write a JSON identity package to the destination path."""
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_suffix(destination.suffix + ".tmp")
     temporary.write_text(json.dumps(build_identity_package(profile), indent=2, ensure_ascii=False),
