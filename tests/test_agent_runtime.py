@@ -148,3 +148,32 @@ def test_cancellation_after_model_response_prevents_tool_side_effect(tmp_path: P
     assert result.status == "cancelled"
     assert not (workspace / "new.txt").exists()
     assert not any(event.kind == "tool_completed" for event in result.trace)
+
+
+
+def test_run_objectives_and_event_payloads_are_redacted_before_persistence(tmp_path: Path) -> None:
+    from ollama_workstation.agents.runtime import _sanitize_event_value
+
+    client = FakeClient([
+        {"message": {"role": "assistant", "content": "Task completed."}},
+    ])
+    profile = ModelProfile(
+        model_name="fake:latest", digest="abc", generated_at="now",
+        professional_title="General Intelligence Associate", agentability_mode="guided",
+    )
+    repository = Repository(tmp_path / "redacted-runs.sqlite3")
+    task = "Review this config: API_TOKEN=objective-secret-value"
+    result = AgentRuntime(client, repository=repository).run(
+        "fake:latest", profile, task, WorkspaceTools(tmp_path / "workspace")
+    )
+    persisted = repository.list_runs()[0]
+    assert result.status == "completed"
+    assert "objective-secret-value" not in persisted["task"]
+    assert "[REDACTED]" in persisted["task"]
+
+    safe_data = _sanitize_event_value({
+        "api_token": "nested-secret",
+        "arguments": {"content": "PASSWORD=embedded-secret"},
+    })
+    assert safe_data["api_token"] == "[REDACTED]"
+    assert "embedded-secret" not in safe_data["arguments"]["content"]
