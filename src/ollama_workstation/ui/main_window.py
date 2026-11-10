@@ -32,8 +32,12 @@ from PySide6.QtWidgets import (
 )
 
 from ollama_workstation.agents.binding import validate_installed_model_binding
+from ollama_workstation.agents.mcp_gateway import (
+    CompositeToolRegistry,
+    MCPServerSpec,
+    MCPToolGateway,
+)
 from ollama_workstation.agents.memory import MemoryStore
-from ollama_workstation.agents.mcp_gateway import CompositeToolRegistry, MCPServerSpec, MCPToolGateway
 from ollama_workstation.agents.runtime import AgentRuntime
 from ollama_workstation.agents.tools import WorkspaceTools
 from ollama_workstation.benchmarking.runner import BenchmarkRunner
