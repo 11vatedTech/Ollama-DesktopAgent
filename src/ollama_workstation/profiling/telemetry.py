@@ -17,6 +17,7 @@ class SystemTelemetry:
 
     @staticmethod
     def _memory() -> dict[str, int | None]:
+        """Read total, available and used physical memory on supported hosts."""
         if os.name == "nt":
             try:
                 import ctypes
@@ -71,6 +72,7 @@ class SystemTelemetry:
 
     @staticmethod
     def _nvidia_gpus() -> list[dict[str, Any]]:
+        """Read best-effort GPU memory/utilization data from nvidia-smi."""
         executable = shutil.which("nvidia-smi")
         if not executable:
             return []
@@ -107,6 +109,7 @@ class SystemTelemetry:
         return gpus
 
     def snapshot(self) -> dict[str, Any]:
+        """Capture a local system snapshot without transmitting telemetry."""
         return {
             "captured_at": datetime.now(UTC).isoformat(),
             "os": platform.platform(),
