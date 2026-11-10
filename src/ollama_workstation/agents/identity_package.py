@@ -36,6 +36,7 @@ def build_identity_package(profile: ModelProfile) -> dict[str, Any]:
             "default_permissions": "workspace_only_no_shell",
             "capabilities": [
                 {"name": item.capability, "status": item.status, "score": item.score,
+                 "attempts": item.attempts, "passed": item.passed,
                  "confidence": item.confidence, "method": item.method,
                  "metrics": item.metrics, "evidence": item.evidence, "limitations": item.limitations}
                 for item in profile.capabilities
