@@ -71,6 +71,17 @@ OpenAI's 2026 analysis argues SWE-bench Verified is contaminated by public train
 - Compare multiple task sources, including private/internal repository tasks and held-out tasks where legally available.
 - Publish harness, model digest, quantization, context budget, tools, retry limits, timeouts, cost/compute and grader versions with every result.
 
+### Terminal operations — TUA-Bench
+
+**Primary source:** [Facebook Research TUA-Bench](https://github.com/facebookresearch/TUA-Bench)
+
+TUA-Bench describes 120 real-world, execution-based tasks for general-purpose terminal-use agents across everyday digital workflows and specialist scientific tools.
+
+**Policy**
+- Pin the task set and runner revision; report pass@1, pass@5 and all-trials consistency separately where used.
+- Run inside disposable workspaces/VMs and collect exit status, filesystem diffs and validator output.
+- Never translate a terminal benchmark result into a shell permission grant.
+
 ### Computer use — OSWorld
 
 **Primary source:** [OSWorld project and benchmark](https://os-world.github.io/)
@@ -82,6 +93,17 @@ OSWorld is an execution-based benchmark for multimodal agents operating real com
 - Record OS image, applications, initial state, UI scale, accessibility settings, interaction API and task protocol.
 - Keep desktop-control permissions distinct from file, shell, network and credential permissions.
 - Pin the exact OSWorld 2.0 release/checkpoint before publishing results.
+
+### Browser operations — Browser Use Benchmark
+
+**Primary source:** [Browser Use benchmark repository](https://github.com/browser-use/benchmark)
+
+The repository describes BU Bench V2.1 as a 200-task web-agent benchmark. Its v2.1.1 release notes contain changes to runners and task contracts; its documentation explicitly distinguishes historical 60-task results from the current V2.1 dataset.
+
+**Policy**
+- Pin the dataset, runner and rubric revision. A 60-task legacy score is not comparable to V2.1.1's 200 tasks.
+- Save the task trace, tool evidence, final artifacts and independent findings; exclude model reasoning summaries from the judge input where the benchmark contract requires it.
+- Browser permissions, credentials and external transactions remain separately gated even when a benchmark runner uses them.
 
 ## 3. 11vated evaluation standard
 
