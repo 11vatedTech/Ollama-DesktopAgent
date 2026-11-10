@@ -28,6 +28,7 @@ class WorkforceMatcher:
 
     @staticmethod
     def rank(role: str, profiles: list[ModelProfile]) -> list[RoleMatch]:
+        """Rank profiles for one canonical role and expose missing evidence."""
         requirements = ROLE_REQUIREMENTS.get(role)
         if requirements is None:
             raise ValueError(f"Unknown workforce role: {role}")
