@@ -288,26 +288,42 @@ class MCPServerConnection:
             if isinstance(exc, (KeyboardInterrupt, SystemExit)):
                 raise
 
-    def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
+    def call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        cancel_event: threading.Event | None = None,
+    ) -> Any:
         if self._closed or self._loop is None or self._client is None:
             raise MCPConnectionError(f"MCP server {self.spec.name!r} is not connected.")
         coroutine = self._client.call_tool(name, arguments)
         future: Future[Any] = asyncio.run_coroutine_threadsafe(coroutine, self._loop)
-        try:
-            return future.result(timeout=self.spec.call_timeout_seconds)
-        except FutureTimeout as exc:
-            future.cancel()
-            raise MCPConnectionError(
-                f"MCP tool {self.spec.name}/{name} exceeded "
-                f"{self.spec.call_timeout_seconds:.0f} seconds."
-            ) from exc
+        started = time.monotonic()
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                future.cancel()
+                raise MCPConnectionError(f"MCP tool {self.spec.name}/{name} was cancelled.")
+            remaining = self.spec.call_timeout_seconds - (time.monotonic() - started)
+            if remaining <= 0:
+                future.cancel()
+                raise MCPConnectionError(
+                    f"MCP tool {self.spec.name}/{name} exceeded "
+                    f"{self.spec.call_timeout_seconds:.0f} seconds."
+                )
+            try:
+                return future.result(timeout=min(0.2, remaining))
+            except FutureTimeout:
+                continue
 
     def close(self) -> None:
         if self._closed:
             return
         self._closed = True
-        if self._loop is not None and self._stop_event is not None and self._thread is not None:
-            self._loop.call_soon_threadsafe(self._stop_event.set)
+        if self._loop is not None and self._thread is not None:
+            if self._stop_event is not None:
+                self._loop.call_soon_threadsafe(self._stop_event.set)
+            else:
+                self._loop.call_soon_threadsafe(self._loop.stop)
             self._thread.join(timeout=5.0)
             if self._thread.is_alive():
                 self._loop.call_soon_threadsafe(self._loop.stop)
@@ -350,7 +366,10 @@ class MCPToolGateway:
                 approved = set(spec.approved_tools)
                 for tool in connection.tools:
                     remote_name = str(getattr(tool, "name", ""))
-                    if not remote_name or remote_name not in approved:
+                    if (
+                        not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", remote_name)
+                        or remote_name not in approved
+                    ):
                         continue
                     input_schema = getattr(tool, "input_schema", None)
                     if not isinstance(input_schema, dict):
@@ -416,7 +435,7 @@ class MCPToolGateway:
         except ValidationError as exc:
             raise ToolError(f"Invalid arguments for MCP tool {route.remote_name}: {exc.message}") from exc
         try:
-            result = connection.call_tool(route.remote_name, arguments)
+            result = connection.call_tool(route.remote_name, arguments, self.cancel_event)
         except MCPConnectionError as exc:
             raise ToolError(str(exc)) from exc
         content_items: list[dict[str, Any]] = []
@@ -451,6 +470,12 @@ class MCPToolGateway:
 
 
 def _redact_mcp_value(value: Any, key: str = "") -> Any:
+    normalized_key = re.sub(r"[^a-z0-9]+", "_", key.casefold()).strip("_")
+    if re.search(
+        r"(?:^|_)(?:api_?key|api_?token|access_?key|access_?token|auth_?token|oauth_?token|session_?token|token|client_?secret|password|passwd|secret|credential|private_?key|authorization)(?:$|_)",
+        normalized_key,
+    ):
+        return "[REDACTED]"
     if isinstance(value, str):
         return WorkspaceTools.redact_sensitive_text(value)[0][:8_000]
     if isinstance(value, dict):
