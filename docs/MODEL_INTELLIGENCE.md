@@ -35,7 +35,7 @@ A single passed smoke test proves only that a model passed that one item once. I
 
 ### Operational dossier
 
-Record cold/warm load time, prompt and generation throughput, token counts, VRAM/RAM, context behavior, concurrent memory pressure and scheduling constraints. Include hardware, driver, Ollama version, model digest and benchmark configuration. v0.1 records Ollama timing and token counters when returned; direct GPU/RAM telemetry is deferred.
+Record cold/warm load time, prompt and generation throughput, token counts, VRAM/RAM, context behavior, concurrent memory pressure and scheduling constraints. Include hardware, driver, Ollama version, model digest and benchmark configuration. The v0.2 increment adds dependency-free host snapshots (OS, CPU count, system memory) and best-effort NVIDIA telemetry through nvidia-smi, plus Ollama generation/prompt token counters, load duration and derived generation throughput. GPU telemetry is unavailable when nvidia-smi is absent; unknown values remain null rather than fabricated.
 
 ## Professional identity
 
