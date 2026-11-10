@@ -71,6 +71,7 @@ class BenchmarkRunner:
         model_digest: str = "",
         suite_id: str = "core",
         repeats: int = 3,
+        inference_options: dict[str, Any] | None = None,
         cancel_event: Event | None = None,
         progress: Callable[[str], None] | None = None,
     ) -> BenchmarkRun:
@@ -78,7 +79,19 @@ class BenchmarkRunner:
         suite = get_suite(suite_id)
         notify = progress or (lambda _message: None)
         started_at = datetime.now(UTC).isoformat()
-        manifest = self._manifest(suite, repeats, {"keep_alive": self.keep_alive})
+        effective_options = dict(inference_options or {"temperature": 0.0})
+        try:
+            ollama_version = self.client.version()
+        except Exception:
+            ollama_version = "unknown"
+        manifest = self._manifest(
+            suite, repeats,
+            {
+                "keep_alive": self.keep_alive,
+                "inference_options": effective_options,
+                "ollama_version": ollama_version,
+            },
+        )
         results: list[BenchmarkCaseResult] = []
 
         for case in suite.cases:
@@ -93,6 +106,7 @@ class BenchmarkRunner:
                         model_name,
                         [{"role": "user", "content": case.prompt}],
                         output_format=case.output_schema if case.evaluator == "json" else None,
+                        options=effective_options,
                         keep_alive=self.keep_alive,
                         cancel_event=cancel_event,
                     )
@@ -172,6 +186,8 @@ class BenchmarkRunner:
             suite_version=suite.version,
             model_name=model_name,
             model_digest=model_digest,
+            ollama_version=ollama_version,
+            inference_options=effective_options,
             repeats=repeats,
             manifest_sha256=manifest,
             started_at=started_at,
