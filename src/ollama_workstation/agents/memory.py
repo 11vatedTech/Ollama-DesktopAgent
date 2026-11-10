@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from ollama_workstation.agents.tools import WorkspaceTools
 from ollama_workstation.storage.repository import Repository
 
 MEMORY_SCOPES = {"user", "project", "agent"}
@@ -48,7 +49,7 @@ class MemoryStore:
                  category: str = "fact", tags: list[str] | None = None,
                  source: str = "user", confidence: float = 1.0) -> MemoryRecord:
         """Persist an explicit, validated note in one named memory scope."""
-        normalized = content.strip()
+        normalized, _ = WorkspaceTools.redact_sensitive_text(content.strip())
         if not normalized or len(normalized) > self.MAX_CONTENT_CHARS:
             raise ValueError(f"Memory content must contain 1-{self.MAX_CONTENT_CHARS} characters")
         if scope not in MEMORY_SCOPES:
