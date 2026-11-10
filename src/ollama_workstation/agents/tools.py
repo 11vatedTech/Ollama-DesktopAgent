@@ -125,7 +125,7 @@ class WorkspaceTools:
         """Redact common credential value patterns before text reaches model context."""
         patterns = (
             re.compile(
-                r"""(?i)(\b(?:api[_-]?(?:key|token)|access[_-]?token|auth[_-]?token|client[_-]?secret|password|passwd|secret|private[_-]?key|refresh[_-]?token|aws[_-]?secret[_-]?access[_-]?key|database[_-]?url)\b["']?\s*[:=]\s*)(["']?)([^"'\s,;#}]+)"""
+                r"""(?i)(\b(?:api[_-]?(?:key|token)|access[_-]?(?:key|token)|auth[_-]?token|oauth[_-]?token|session[_-]?token|client[_-]?secret|password|passwd|secret|private[_-]?key|refresh[_-]?token|aws[_-]?secret[_-]?access[_-]?key|database[_-]?url)\b["']?\s*[:=]\s*)(["']?)([^"'\s,;#}]+)"""
             ),
             re.compile(r"(?i)(\bBearer\s+)[A-Za-z0-9._~+/-]{10,}"),
             re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
@@ -307,9 +307,13 @@ class WorkspaceTools:
         if not all(isinstance(value, str) for value in command_args):
             raise ToolError("Every command argument must be a string")
         argv = [str(executable), *command_args]
+        safe_argv = [
+            value if index == 0 else self.redact_sensitive_text(value)[0]
+            for index, value in enumerate(argv)
+        ]
         if self.cancel_event is not None and self.cancel_event.is_set():
             raise ToolError("Command execution was cancelled before launch")
-        if not self.approval("Run approved executable: " + json.dumps(argv)):
+        if not self.approval("Run approved executable: " + json.dumps(safe_argv)):
             raise ToolError("Command execution was not approved")
         process_options: dict[str, Any] = {
             "cwd": working_directory,
@@ -347,7 +351,7 @@ class WorkspaceTools:
         safe_stdout, stdout_redactions = self.redact_sensitive_text(stdout[-12000:])
         safe_stderr, stderr_redactions = self.redact_sensitive_text(stderr[-12000:])
         return {
-            "command": argv,
+            "command": safe_argv,
             "return_code": process.returncode,
             "stdout": safe_stdout,
             "stderr": safe_stderr,
