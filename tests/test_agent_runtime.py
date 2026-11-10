@@ -170,6 +170,11 @@ def test_run_objectives_and_event_payloads_are_redacted_before_persistence(tmp_p
     assert result.status == "completed"
     assert "objective-secret-value" not in persisted["task"]
     assert "[REDACTED]" in persisted["task"]
+    assert "objective-secret-value" not in result.final_message
+    assert all(
+        "objective-secret-value" not in json.dumps(event, ensure_ascii=False)
+        for event in persisted["trace"]
+    )
 
     safe_data = _sanitize_event_value({
         "api_token": "nested-secret",
