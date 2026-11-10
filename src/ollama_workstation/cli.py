@@ -76,6 +76,7 @@ def main(argv: list[str] | None = None) -> int:
             candidates = HuggingFaceResearcher().search_candidates(args.model)
             print(json.dumps([{"repository_id": x.repository_id, "pipeline_tag": x.pipeline_tag,
                                "downloads": x.downloads, "likes": x.likes, "tags": x.tags,
+                               "match_score": x.match_score, "match_reasons": x.match_reasons,
                                "model_card_url": x.model_card_url} for x in candidates], indent=2))
             return 0
         if args.command == "attach-model-card":
