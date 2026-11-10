@@ -4,7 +4,7 @@
 
 A local-first, Windows-first desktop agent workstation from 11vatedTech. Its defining subsystem is the **Universal Agentification Engine**: inventory a model, research its origin, test its real capabilities, assign an evidence-backed professional identity, then equip it with a bounded execution harness.
 
-> **Release status: 0.1.0 — foundational vertical slice.** The repository contains an Ollama client, model inventory, local smoke profiler, evidence-aware role/title generator, optional Hugging Face model-card research, SQLite persistence, bounded workspace tools, an agent loop with native-tool and structured-action fallback modes, a CLI, a PySide6 desktop shell, tests and CI. This is not yet a fully certified replacement for Claude, Codex, Goose or OpenHands. See the roadmap.
+> **Release status: v0.2 development increment on the 0.1.0 foundation — not production-certified.** The branch adds a structured publisher dossier, repeatable local profiling, hardware/inference telemetry, model-digest enforcement, scoped project memory, expanded identity/workforce roles, host-side tool-schema validation and a desktop/CLI workflow. The broader production gates are tracked in [Production Readiness](docs/PRODUCTION_READINESS.md).
 
 ## Product thesis
 
@@ -22,7 +22,7 @@ Ollama supplies local inference. This workstation provides the operational syste
 
 `Desktop / CLI → Application services → Ollama provider + Model Intelligence Engine → Universal Agentification Engine → Agent runtime → Policy-enforced tools → Verification and evidence → SQLite`
 
-The core is provider/harness/UI separated. The desktop shell does not duplicate inference or tool policy. Read [Architecture](docs/ARCHITECTURE.md), [Model Intelligence](docs/MODEL_INTELLIGENCE.md), [Benchmarking](docs/BENCHMARKING.md) and the [competitive research register](docs/research/COMPETITIVE_RESEARCH.md).
+The core is provider/harness/UI separated. The desktop shell does not duplicate inference or tool policy. Read [Architecture](docs/ARCHITECTURE.md), [Model Intelligence](docs/MODEL_INTELLIGENCE.md), [Production Readiness](docs/PRODUCTION_READINESS.md) and the dated [Research Register](docs/RESEARCH_REGISTER.md).
 
 ## Implemented in the current development branch (pre-release v0.2)
 
@@ -40,8 +40,8 @@ The core is provider/harness/UI separated. The desktop shell does not duplicate 
 | Structured JSON action fallback and guided text action fallback | Implemented |
 | Workspace-scoped file tools | Implemented with path containment, size limits and host-side JSON argument validation |
 | Optional allow-listed shell tool | Implemented but disabled by default; approval required |
-| SQLite profile, conversation, run and scoped-memory persistence | Implemented; project memory can be captured, recalled and archived |
-| PySide6 desktop shell and headless CLI | Implemented; actual Windows/Qt runtime validation remains |
+| SQLite profile, conversation, run and scoped-memory persistence | Implemented; project notes support explicit capture, lexical retrieval, listing and archive; no embeddings or automatic memory writes |
+| PySide6 desktop shell and headless CLI | Implemented; Windows desktop import passes in CI; full GUI workflow QA on supported hardware remains |
 | Evidence-based workforce ranking primitive | Implemented for software, repository, workflow, research, visual, quantitative, data, creative, multilingual and planning roles; qualification is explicit |
 | Full MCP client/server ecosystem, browser/computer-use adapters, durable resumable runs, dynamic multi-agent scheduler, specialist benchmark adapters and role/agent certification | Roadmap |
 
@@ -87,7 +87,7 @@ python -m ollama_workstation
 11vated export-agent qwen2.5-coder:7b
 ```
 
-The probe suite makes several model calls and loads the selected model. `--repeats 1..5` repeats each smoke probe and records pass rate and confidence. It remains an initial smoke-test battery, not a substitute for SWE-bench, Terminal-Bench, BFCL or statistically meaningful capability certification.
+The probe suite makes several model calls and loads the selected model. `--repeats 1..5` repeats each smoke probe and records pass rate, confidence and inference metrics. It remains an initial smoke-test battery, not a substitute for independently audited specialist evaluations. Read the [Research Register](docs/RESEARCH_REGISTER.md) before interpreting public benchmark scores.
 
 ## Privacy and security
 
@@ -98,7 +98,7 @@ The probe suite makes several model calls and loads the selected model. `--repea
 - File tools are workspace scoped and size limited.
 - Overwrites require approval.
 - Shell execution is disabled by default; when enabled it is allow-listed, approval-gated, uses no `shell=True`, and is time limited.
-- No unrestricted browser, desktop-control, network or arbitrary Python-evaluation tool is exposed in 0.1.0.
+- No unrestricted browser, desktop-control, network or arbitrary Python-evaluation tool is exposed in this development increment. Shell stays disabled in the desktop agent.
 
 Read [SECURITY.md](SECURITY.md) before enabling command execution or using sensitive workspaces.
 
@@ -111,7 +111,7 @@ ruff check .
 python -m compileall -q src
 ```
 
-CI is configured for Python 3.11/3.12 on Windows and Ubuntu. The current development branch has passed compile, Ruff, test and Windows desktop-import jobs (36 tests in the latest completed run). The Windows packaging workflow builds a PyInstaller distribution; installer signing and release certification remain open gates.
+CI is configured for Python 3.11/3.12 on Windows and Ubuntu. The latest completed matrix passed compile, Ruff, tests and Windows desktop-import jobs (**50 tests** at the validated checkpoint; later commits rerun the matrix). The Windows packaging workflow builds a PyInstaller distribution; installer signing and release certification remain open gates.
 
 ## Research sources
 
