@@ -25,6 +25,7 @@ class ModelCardDossier:
     limitations: str = ""
     training_details: str = ""
     evaluation_details: str = ""
+    published_evaluations: list[str] = field(default_factory=list)
     model_card_sha256: str = ""
     metadata_url: str = ""
     model_card_url: str = ""
@@ -88,6 +89,28 @@ def extract_model_card_dossier(card: dict[str, Any]) -> ModelCardDossier:
     datasets = _strings(card_data.get("datasets")) or _tag_value(tags, "dataset:")
     base_models = _strings(card_data.get("base_model"))
     pipeline = str(metadata.get("pipeline_tag") or card_data.get("pipeline_tag") or "")
+    raw_index = metadata.get("model-index") or card_data.get("model-index") or []
+    published_evaluations: list[str] = []
+    for model_entry in raw_index if isinstance(raw_index, list) else []:
+        if not isinstance(model_entry, dict):
+            continue
+        model_name = str(model_entry.get("name") or repo_id or "publisher model")
+        for result in model_entry.get("results", [])[:30]:
+            if not isinstance(result, dict):
+                continue
+            dataset = result.get("dataset") or {}
+            task = result.get("task") or {}
+            dataset_name = str(dataset.get("name") or dataset.get("type") or "unspecified dataset")
+            task_name = str(task.get("name") or task.get("type") or "unspecified task")
+            metrics = result.get("metrics") or []
+            metric_text = ", ".join(
+                f"{metric.get('name', 'metric')}={metric.get('value', 'n/a')}"
+                for metric in metrics[:10] if isinstance(metric, dict)
+            )
+            published_evaluations.append(
+                f"{model_name}: {task_name} on {dataset_name}"
+                + (f" ({metric_text})" if metric_text else "")
+            )
     digest = str(card.get("model_card_sha256") or hashlib.sha256(markdown.encode("utf-8")).hexdigest())
     return ModelCardDossier(
         repository_id=repo_id,
@@ -102,6 +125,7 @@ def extract_model_card_dossier(card: dict[str, Any]) -> ModelCardDossier:
         limitations=_section(sections, "limitations", "risks", "bias"),
         training_details=_section(sections, "training details", "training procedure", "training data"),
         evaluation_details=_section(sections, "evaluation", "benchmark", "results"),
+        published_evaluations=published_evaluations,
         model_card_sha256=digest,
         metadata_url=str(card.get("metadata_url") or (
             f"https://huggingface.co/api/models/{repo_id}" if repo_id else "")),
