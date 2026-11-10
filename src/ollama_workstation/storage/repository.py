@@ -119,16 +119,9 @@ class Repository:
                 "VALUES(?,?,?,?,?,?)",
                 (run_id, sequence, kind, message, encoded_data, created_at),
             )
-            trace_row = db.execute(
-                "SELECT trace_json FROM agent_runs WHERE run_id=?", (run_id,)
-            ).fetchone()
-            trace = json.loads(trace_row[0]) if trace_row else []
-            trace.append({
-                "kind": kind, "message": message, "data": data, "timestamp": created_at
-            })
             db.execute(
-                "UPDATE agent_runs SET trace_json=?, status='running' WHERE run_id=?",
-                (json.dumps(trace, ensure_ascii=False, default=str), run_id),
+                "UPDATE agent_runs SET status='running' WHERE run_id=?",
+                (run_id,),
             )
         return sequence
 
