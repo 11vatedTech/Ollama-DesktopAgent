@@ -83,8 +83,10 @@ class MainWindow(QMainWindow):
         self.agent_cancel_event: Event | None = None
         self.models: list[str] = []
         self.selected_model = ""
+        self.run_history_data: list[dict[str, object]] = []
         self._build()
         self.refresh_models()
+        self.refresh_runs()
 
     def _build(self) -> None:
         root_widget = QWidget()
@@ -102,7 +104,9 @@ class MainWindow(QMainWindow):
         self.status = QLabel("Checking Ollama…")
         side.addWidget(self.status)
         self.navigation = QListWidget()
-        self.navigation.addItems(["Command Center", "Model Intelligence", "Agent Workspace", "Settings"])
+        self.navigation.addItems([
+            "Command Center", "Model Intelligence", "Agent Workspace", "Run History", "Settings"
+        ])
         self.navigation.setCurrentRow(0)
         side.addWidget(self.navigation, 1)
         root.addWidget(sidebar)
@@ -112,6 +116,7 @@ class MainWindow(QMainWindow):
         self.pages.addTab(self._overview(), "Overview")
         self.pages.addTab(self._models(), "Models")
         self.pages.addTab(self._agent(), "Agent")
+        self.pages.addTab(self._run_history(), "Run History")
         self.pages.addTab(self._settings(), "Settings")
         self.navigation.currentRowChanged.connect(self.pages.setCurrentIndex)
         root.addWidget(self.pages, 1)
@@ -211,6 +216,100 @@ class MainWindow(QMainWindow):
         self.agent_progress.hide()
         layout.addWidget(self.agent_progress)
         return page
+
+    def _run_history(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        title = QLabel("Run History")
+        title.setObjectName("Headline")
+        layout.addWidget(title)
+        toolbar = QHBoxLayout()
+        refresh = QPushButton("Refresh history")
+        refresh.clicked.connect(self.refresh_runs)
+        toolbar.addWidget(refresh)
+        toolbar.addStretch(1)
+        layout.addLayout(toolbar)
+        split = QSplitter()
+        self.run_history_list = QListWidget()
+        self.run_history_list.currentRowChanged.connect(self.show_run)
+        split.addWidget(self.run_history_list)
+        self.run_history_detail = QTextBrowser()
+        self.run_history_detail.setHtml(
+            "<h2>Execution journal</h2><p>Select a run to inspect its durable event history.</p>"
+        )
+        split.addWidget(self.run_history_detail)
+        split.setStretchFactor(1, 3)
+        layout.addWidget(split, 1)
+        return page
+
+    def refresh_runs(self) -> None:
+        """Reload durable run summaries without blocking on provider or model work."""
+        if not hasattr(self, "run_history_list"):
+            return
+        try:
+            self.run_history_data = self.repository.list_runs(100)
+            self.run_history_list.clear()
+            for run in self.run_history_data:
+                task = str(run.get("task") or "").replace("\\n", " ").strip()
+                if len(task) > 72:
+                    task = task[:69] + "..."
+                self.run_history_list.addItem(
+                    f"{run.get('status', 'unknown').upper()} · "
+                    f"{run.get('agent_title', 'Agent')} · "
+                    f"{str(run.get('created_at', ''))[:19]} · {task}"
+                )
+            if self.run_history_data:
+                self.run_history_list.setCurrentRow(0)
+            else:
+                self.run_history_detail.setHtml(
+                    "<h2>No agent runs yet</h2><p>Completed, failed and interrupted executions will appear here.</p>"
+                )
+        except Exception as exc:
+            self.run_history_detail.setHtml(
+                f"<h2>Unable to load run history</h2><p>{html.escape(str(exc))}</p>"
+            )
+
+    def show_run(self, row: int) -> None:
+        """Render a selected run and its ordered, durable event journal."""
+        if row < 0 or row >= len(self.run_history_data):
+            return
+        run = self.run_history_data[row]
+        run_id = str(run.get("run_id") or "")
+        try:
+            events = self.repository.list_run_events(run_id)
+        except Exception:
+            events = []
+        if not events:
+            events = [
+                {
+                    "sequence": index + 1,
+                    "kind": item.get("kind", "event"),
+                    "message": item.get("message", ""),
+                    "timestamp": item.get("timestamp", ""),
+                }
+                for index, item in enumerate(run.get("trace", []))
+                if isinstance(item, dict)
+            ]
+        event_rows = []
+        for event in events:
+            message, _ = WorkspaceTools.redact_sensitive_text(str(event.get("message") or ""))
+            event_rows.append(
+                f"<article><h3>#{int(event.get('sequence', 0)):03d} · "
+                f"{html.escape(str(event.get('kind', 'event')))}</h3>"
+                f"<p><small>{html.escape(str(event.get('timestamp') or ''))}</small></p>"
+                f"<p>{html.escape(message)}</p></article>"
+            )
+        task, _ = WorkspaceTools.redact_sensitive_text(str(run.get("task") or ""))
+        self.run_history_detail.setHtml(
+            f"<h1>{html.escape(str(run.get('agent_title') or 'Agent'))}</h1>"
+            f"<p><b>Status:</b> {html.escape(str(run.get('status') or 'unknown'))}</p>"
+            f"<p><b>Model:</b> {html.escape(str(run.get('model_name') or ''))}</p>"
+            f"<p><b>Run ID:</b> {html.escape(run_id)}</p>"
+            f"<p><b>Started:</b> {html.escape(str(run.get('created_at') or ''))}</p>"
+            f"<p><b>Finished:</b> {html.escape(str(run.get('completed_at') or 'Still running'))}</p>"
+            f"<h2>Objective</h2><p>{html.escape(task)}</p>"
+            f"<h2>Event journal ({len(events)} events)</h2>{''.join(event_rows)}"
+        )
 
     def _settings(self) -> QWidget:
         page = QWidget()
@@ -519,6 +618,7 @@ class MainWindow(QMainWindow):
 
     def agent_finished(self, result: object) -> None:
         self.agent_output.append(f"<b>{html.escape(result.status)}</b><p>{html.escape(result.final_message)}</p>")
+        self.refresh_runs()
 
     def save(self) -> None:
         self.settings.ollama_base_url = self.endpoint.text().strip().rstrip("/")
