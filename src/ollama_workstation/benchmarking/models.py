@@ -61,6 +61,8 @@ class BenchmarkRun:
     suite_version: str
     model_name: str
     model_digest: str
+    ollama_version: str
+    inference_options: dict[str, Any]
     repeats: int
     manifest_sha256: str
     started_at: str
