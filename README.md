@@ -36,10 +36,12 @@ The core is provider/harness/UI separated. The desktop shell does not duplicate 
 | Repeatable smoke profiling | Implemented with 1–5 trials, pass-rate aggregation and confidence tracking; not a full benchmark suite |
 | Host and inference telemetry | Implemented with system RAM/CPU snapshots, best-effort NVIDIA telemetry, Ollama token counters, load timing and derived generation throughput |
 | Agent Identity Package export | Implemented |
-| Native tool-call loop | Implemented |\n| Structured/guided tool catalogue and action contracts | Implemented; host validation required before execution |\n| Desktop cooperative stop control | Implemented at model/tool boundaries; does not interrupt in-flight requests or kill subprocess trees |
+| Native tool-call loop | Implemented |
+| Structured/guided tool catalogue and action contracts | Implemented; host validation required before execution |
+| Streaming cancellation and command cleanup | Desktop can close in-flight Ollama streams; command cancellation uses process-group/taskkill cleanup, best-effort only |
 | Structured JSON action fallback and guided text action fallback | Implemented |
-| Workspace-scoped file tools | Implemented with path containment, size limits and host-side JSON argument validation |
-| Optional allow-listed shell tool | Implemented but disabled by default; approval required |
+| Workspace-scoped file tools | Implemented with path containment, size limits, host-side JSON argument validation and default credential/private-key path denial |
+| Optional allow-listed command tool | Implemented but disabled by default; configured executable resolution and human approval required; not a sandbox |
 | SQLite profile, conversation, run and scoped-memory persistence | Implemented; project notes support explicit capture, lexical retrieval, listing and archive; no embeddings or automatic memory writes |
 | PySide6 desktop shell and headless CLI | Implemented; Windows desktop import passes in CI; full GUI workflow QA on supported hardware remains |
 | Evidence-based workforce ranking primitive | Implemented for software, repository, workflow, research, visual, quantitative, data, creative, multilingual and planning roles; qualification is explicit |
@@ -100,7 +102,7 @@ The probe suite makes several model calls and loads the selected model. `--repea
 - Shell execution is disabled by default; when enabled it is allow-listed, approval-gated, uses no `shell=True`, and is time limited.
 - No unrestricted browser, desktop-control, network or arbitrary Python-evaluation tool is exposed in this development increment. Shell stays disabled in the desktop agent.
 
-Read [SECURITY.md](SECURITY.md) before enabling command execution or using sensitive workspaces. The desktop stop button is cooperative: it is honored between provider/tool operations, not by forcibly terminating an active request or subprocess.
+Read [SECURITY.md](SECURITY.md) before enabling command execution or using sensitive workspaces. The desktop stop button closes the active streamed Ollama request and is checked between tool operations. Command termination is best-effort; this does not replace OS-level run isolation.
 
 ## Development
 
@@ -111,7 +113,7 @@ ruff check .
 python -m compileall -q src
 ```
 
-CI is configured for Python 3.11/3.12 on Windows and Ubuntu. The latest completed matrix passed compile, Ruff, tests and Windows desktop-import jobs (the latest fully validated checkpoint is the CI run linked from PR #1; test counts are published with each run). The Windows packaging workflow builds a PyInstaller distribution; installer signing and release certification remain open gates.
+CI is configured for Python 3.11/3.12 on Windows and Ubuntu. The last fully validated checkpoint passed compile, Ruff, tests and Windows desktop-import jobs (55 tests at that checkpoint). Newer cancellation, process cleanup and secret-path regression tests are awaiting a completed matrix before they are treated as validated. The Windows packaging workflow builds a PyInstaller distribution; installer signing and release certification remain open gates.
 
 ## Research sources
 
