@@ -83,6 +83,7 @@ class MainWindow(QMainWindow):
         self.memory_store = MemoryStore(self.repository)
         self.pool = QThreadPool.globalInstance()
         self.agent_cancel_event: Event | None = None
+        self.benchmark_cancel_event: Event | None = None
         self.models: list[str] = []
         self.model_refs: dict[str, ModelRef] = {}
         self.selected_model = ""
@@ -153,9 +154,13 @@ class MainWindow(QMainWindow):
         self.benchmark_button = QPushButton("Run core benchmark")
         self.benchmark_button.clicked.connect(self.benchmark_selected)
         self.benchmark_button.setEnabled(False)
+        self.cancel_benchmark_button = QPushButton("Stop benchmark")
+        self.cancel_benchmark_button.clicked.connect(self.cancel_benchmark)
+        self.cancel_benchmark_button.setEnabled(False)
         row.addWidget(refresh)
         row.addWidget(self.profile_button)
         row.addWidget(self.benchmark_button)
+        row.addWidget(self.cancel_benchmark_button)
         row.addWidget(QLabel("Trials"))
         self.profile_repeats = QSpinBox()
         self.profile_repeats.setRange(1, 5)
@@ -403,6 +408,8 @@ class MainWindow(QMainWindow):
             )
             return
         self.benchmark_button.setEnabled(False)
+        self.cancel_benchmark_button.setEnabled(True)
+        self.benchmark_cancel_event = Event()
         self.profile_progress.show()
         runner = BenchmarkRunner(self.client, keep_alive=self.settings.keep_alive)
         worker = FunctionWorker(
@@ -410,15 +417,34 @@ class MainWindow(QMainWindow):
             model_digest=model_ref.digest,
             suite_id="core",
             repeats=self.profile_repeats.value(),
+            cancel_event=self.benchmark_cancel_event,
             progress=lambda message: worker.signals.progress.emit(message),
         )
         worker.signals.progress.connect(self.status.setText)
         worker.signals.result.connect(self.benchmark_ready)
-        worker.signals.error.connect(self.show_error)
+        worker.signals.error.connect(self.benchmark_failed)
         worker.signals.finished.connect(lambda: (
-            self.benchmark_button.setEnabled(True), self.profile_progress.hide()
+            self.benchmark_button.setEnabled(
+                bool(self.selected_model) and self.selected_model in self.model_refs
+            ),
+            self.cancel_benchmark_button.setEnabled(False),
+            setattr(self, "benchmark_cancel_event", None),
+            self.profile_progress.hide(),
         ))
         self.pool.start(worker)
+
+    def cancel_benchmark(self) -> None:
+        if self.benchmark_cancel_event is None:
+            return
+        self.benchmark_cancel_event.set()
+        self.cancel_benchmark_button.setEnabled(False)
+        self.status.setText("Benchmark stop requested; cancelling the active Ollama stream.")
+
+    def benchmark_failed(self, message: str) -> None:
+        if self.benchmark_cancel_event is not None and self.benchmark_cancel_event.is_set():
+            self.status.setText("Benchmark cancelled. No partial report was certified.")
+            return
+        self.show_error(message)
 
     def benchmark_ready(self, report: object) -> None:
         try:
