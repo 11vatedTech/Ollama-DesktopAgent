@@ -285,7 +285,7 @@ class MainWindow(QMainWindow):
             return
         labels = [
             f"{candidate.repository_id} · {candidate.pipeline_tag or 'task undisclosed'} · "
-            f"{candidate.downloads:,} downloads"
+            f"name match {candidate.match_score:.0%} (hint only) · {candidate.downloads:,} downloads"
             for candidate in candidates
         ]
         selected, accepted = QInputDialog.getItem(
