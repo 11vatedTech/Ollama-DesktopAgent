@@ -160,6 +160,7 @@ class AgentRuntime:
             )},
             {"role": "user", "content": task},
         ]
+        total_tool_calls = 0
         record("started", f"Agent started as {profile.professional_title}.",
                model=model, mode=profile.agentability_mode, workspace=str(tools.workspace))
 
