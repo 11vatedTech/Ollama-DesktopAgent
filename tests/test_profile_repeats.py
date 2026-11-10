@@ -28,3 +28,16 @@ def test_repeated_unsupported_protocol_stays_unknown_not_zero() -> None:
     assert result.status == "unsupported"
     assert result.score is None
     assert result.attempts == 2
+
+
+
+def test_aggregated_probe_retains_inference_speed_metrics() -> None:
+    outcomes = [
+        CapabilityResult("reasoning", "passed", 100, 0.2, 1, 1, 100.0,
+                         "smoke", metrics={"generation_tokens_per_second": 20.0}),
+        CapabilityResult("reasoning", "passed", 100, 0.2, 1, 1, 120.0,
+                         "smoke", metrics={"generation_tokens_per_second": 30.0}),
+    ]
+    metrics = ModelProfiler._aggregate_metrics(outcomes)
+    assert metrics["mean_generation_tokens_per_second"] == 25.0
+    assert len(metrics["trials"]) == 2
