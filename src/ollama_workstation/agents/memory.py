@@ -69,8 +69,11 @@ class MemoryStore:
     def recall(self, query: str, scopes: list[tuple[str, str]], limit: int = 6) -> list[MemoryRecord]:
         if not scopes:
             return []
-        candidates = self.repository.list_memories(scopes, limit=500)
         terms = set(re.findall(r"[a-z0-9_'-]{2,}", query.casefold()))
+        candidates = (
+            self.repository.search_memories(scopes, sorted(terms), limit=500)
+            if terms else self.repository.list_memories(scopes, limit=500)
+        )
         ranked: list[tuple[float, MemoryRecord]] = []
         for raw in candidates:
             record = MemoryRecord(**raw)
