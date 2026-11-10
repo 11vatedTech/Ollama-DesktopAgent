@@ -430,6 +430,16 @@ class MainWindow(QMainWindow):
             destination.write_text(
                 json.dumps(report.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8"
             )
+            current_ref = self.model_refs.get(report.model_name)
+            if (
+                self.selected_model != report.model_name
+                or current_ref is None
+                or current_ref.digest != report.model_digest
+            ):
+                self.status.setText(
+                    f"Benchmark saved for {report.model_name}; selection changed before completion."
+                )
+                return
             rows = "".join(
                 "<tr>"
                 f"<td>{html.escape(case.capability)}</td>"
@@ -444,7 +454,9 @@ class MainWindow(QMainWindow):
             self.profile_view.setHtml(
                 f"<h1>11vated Core Benchmark</h1><h3>{safe_model}</h3>"
                 f"<p><b>Suite:</b> {html.escape(report.suite_id)}@{html.escape(report.suite_version)}"
+                f" · <b>Ollama:</b> {html.escape(report.ollama_version)}"
                 f" · <b>Digest:</b> {html.escape(report.model_digest or 'unknown')}</p>"
+                f"<p><b>Inference options:</b> {html.escape(json.dumps(report.inference_options, sort_keys=True))}</p>"
                 f"<h2>{report.score:.1f}/100</h2>"
                 f"<p>{report.total_passed}/{report.total_attempts} trial(s) passed across "
                 f"{len(report.cases)} deterministic cases. Results are diagnostic, not certification.</p>"
