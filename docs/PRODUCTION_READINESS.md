@@ -48,7 +48,7 @@ The UI must remain a client of application services. Provider-specific payloads,
 
 The current PySide6 shell is a nine-workspace client of the same application services used by the CLI. Shared tokens and components provide a coherent surface; the intelligence core, chat states, workforce graph and telemetry are driven by real local events. Responsive layouts collapse Chat context and reflow Command/Workforce, and reduced motion is available. See [Desktop Intelligence Interface](UI_INTERFACE.md) for the design contract, screenshot gallery and validation matrix.
 
-This is implemented and locally tested, not a production-certified client. The current native matrix covers 1480 × 940, 1120 × 720, 1280 × 800, 1024 × 768 and 900 × 700, including the vertical Model Intelligence split. Full screen-reader/high-contrast audit, clean-VM visual QA, screenshot regression testing and end-to-end frame pacing remain open. A fresh hosted-CI run for this increment is also pending.
+This is implemented, locally tested and hosted-CI verified, not a production-certified client. The current native matrix covers 1480 × 940, 1120 × 720, 1280 × 800, 1024 × 768 and 900 × 700, including the vertical Model Intelligence split. Full screen-reader/high-contrast audit, clean-VM visual QA, screenshot regression testing and end-to-end frame pacing remain open.
 
 ## Model Intelligence & Identity Engine
 
@@ -220,7 +220,7 @@ These are research references, not approved runtime dependencies. For every prop
 
 | Gate | Required evidence | Current state |
 |---|---|---|
-| G0 — Repository foundation | CI, typed boundaries, install and launch | Implemented baseline; hosted CI is green for the previous pushed head (run 42977911248); a fresh matrix for the current increment is pending |
+| G0 — Repository foundation | CI, typed boundaries, install and launch | Implemented baseline; hosted CI run 43056402479 passed all four Windows/Ubuntu Python 3.11/3.12 jobs for this increment |
 | G1 — Model dossier | Publisher fields, source links, explicit match confirmation, hash, unknown handling | v0.2 increment implemented; 15 live metadata profiles now preserve provenance and unknown values; needs fresh CI and broader live model-card validation |
 | G2 — Empirical profiling | Repeated tests, host/GPU telemetry, expanded task suites, repeatability, confidence and resource metrics | Partial; repeated smoke probes and a six-case deterministic 11vated-core runner with host-side scoring, per-trial evidence and a hashed manifest are implemented. Specialist/held-out suites and role thresholds remain open |
 | G3 — Agentification | Protocol adapters, strict host-side tool argument validation, bounded recovery and digest binding | Partial; native/structured/guided paths and workspace tool schema validation implemented |
@@ -236,7 +236,7 @@ These are research references, not approved runtime dependencies. For every prop
 On the Windows development host (Python 3.12.13, Ollama 0.40.16, 15 installed models):
 
 - Ruff and `compileall` pass.
-- The full local pytest suite reports **185 passed / 4 skipped**. Opt-in live Ollama tests are skipped in the ordinary run. Python 3.11 and fresh hosted coverage for this increment remain to be rerun after push.
+- The full local pytest suite reports **185 passed / 4 skipped**. Opt-in live Ollama tests are skipped in the ordinary run. Hosted run 43056402479 reports Ubuntu 176/4 and Windows 175/5 for both Python versions; the difference is platform/live-test gating, not a missing local module.
 - Ten focused desktop UI tests pass under offscreen Qt: all nine workspace constructors, responsive Command/Chat/Model behavior, intelligence-core states and reduced-motion timing, Markdown escaping, conversation persistence and Settings values.
 - Twenty-four native Windows gallery captures were inspected at 1480 × 940, 1120 × 720, 1280 × 800, 1024 × 768 and 900 × 700 logical windows: nine desktop workspaces, compact Command/Chat/Workforce, and the responsive matrix. The measured 410 × 410 core paint sample averaged 5.77 ms per frame (p95 8.01 ms); no end-to-end FPS claim is made.
 - Live provider checks cover real version/inventory, `/api/show` metadata, non-empty chat completion and 768-dimensional embeddings. A real `qwen2.5-coder:7b` desktop chat returned `STREAM_OK`; an active stream was stopped and surfaced as `Generation stopped`.
@@ -244,6 +244,6 @@ On the Windows development host (Python 3.12.13, Ollama 0.40.16, 15 installed mo
 - Live CLI analysis run `23dc040f-1aa3-40d1-882a-b3a2c7f6b6e0` completed with `verification_passed=true`; prose was normalized through the typed schema and the host wrote the audit.
 - Live desktop `WorkforcePage` run `beee5cd1-342a-449b-994b-e47d3a53d9be` completed with `verification_passed=true`. Its audit preserves the model's `FAIL`, records the factual contradiction against the nonempty immutable manifest, and records host decision `PASS` with `host_override=true`.
 - Live desktop failure run `fb65bbb1-064e-4be6-9937-a40c2d3acd30` correctly reported `verification_failed` when the analysis model claimed a write without creating the artifact. The host blocked the verifier rather than manufacturing success.
-- Real MCP stdio and Streamable HTTP integration tests passed locally on Windows in the preceding run; they were not rerun for this documentation-only increment. Hosted CI run [42977911248](https://github.com/11vatedTech/Ollama-DesktopAgent/actions/runs/42977911248) passed all four jobs at the previous pushed head; this increment needs a fresh matrix result.
+- Real MCP stdio and Streamable HTTP integration tests passed locally on Windows in the preceding run; they were not rerun for this documentation-only increment. Hosted CI run [43056402479](https://github.com/11vatedTech/Ollama-DesktopAgent/actions/runs/43056402479) passed all four jobs, including the Windows desktop import and UI tests; those are hosted results for the pushed code, not a production certification.
 
 A release may not be called production-certified until all applicable gates pass on the supported Windows hardware/software matrix. Feature presence alone is not proof of production readiness.

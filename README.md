@@ -30,7 +30,7 @@ The PySide6 shell is organized as nine workspaces: **Command Center**, **Advance
 
 ![Command Center](tests/screenshots/windows-command.png)
 
-The interface is documented with its validation matrix, screenshot gallery and known limitations in [Desktop Intelligence Interface](docs/UI_INTERFACE.md). It is a local engineering surface, not a production-certified UI: a fresh hosted-CI run for this increment, screen-reader/high-contrast validation and clean-VM validation remain open.
+The interface is documented with its validation matrix, screenshot gallery and known limitations in [Desktop Intelligence Interface](docs/UI_INTERFACE.md). It is a locally and hosted-CI-verified engineering surface, not a production-certified UI: screen-reader/high-contrast validation, clean-VM validation and exhaustive intermediate scaling remain open.
 
 ## Implemented in the current development branch (pre-release v0.2)
 
@@ -217,7 +217,7 @@ ruff check .
 python -m compileall -q src
 ```
 
-CI is configured for Python 3.11/3.12 on Windows and Ubuntu and installs the `mcp` extra so the real transport suite runs in every matrix leg. The latest local Windows Python 3.12.13 run reports **185 passed, 4 skipped**, with Ruff and `compileall` clean; the current increment still needs a fresh hosted matrix result, and the opt-in live Ollama tests remain skipped unless `OLLAMA_LIVE=1`. The GitHub Actions matrix is the authoritative cross-platform result; do not infer Linux or Python 3.11 coverage until the pushed matrix completes. The Windows packaging workflow builds a PyInstaller distribution; installer signing and release certification remain open gates.
+CI is configured for Python 3.11/3.12 on Windows and Ubuntu and installs the `mcp` extra so the real transport suite runs in every matrix leg. The latest local Windows Python 3.12.13 run reports **185 passed, 4 skipped**, with Ruff and `compileall` clean. Hosted run [43056402479](https://github.com/11vatedTech/Ollama-DesktopAgent/actions/runs/43056402479) passed all four jobs: Ubuntu 3.11/3.12 reported 176 passed/4 skipped and Windows 3.11/3.12 reported 175 passed/5 skipped, with Windows desktop import and 10 UI tests. The opt-in live Ollama tests remain skipped unless `OLLAMA_LIVE=1`. The Windows packaging workflow builds a PyInstaller distribution; installer signing and release certification remain open gates.
 
 ## Research sources
 
