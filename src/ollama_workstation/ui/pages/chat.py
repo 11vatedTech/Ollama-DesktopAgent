@@ -13,10 +13,18 @@ from threading import Event
 from typing import Any
 
 from PySide6.QtCore import Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QDragEnterEvent, QDropEvent, QKeyEvent
+from PySide6.QtGui import (
+    QDesktopServices,
+    QDragEnterEvent,
+    QDropEvent,
+    QKeyEvent,
+    QPixmap,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QFrame,
     QGridLayout,
@@ -39,7 +47,11 @@ from ollama_workstation.agents.mcp_gateway import CompositeToolRegistry, MCPTool
 from ollama_workstation.agents.runtime import AgentEvent, AgentRuntime
 from ollama_workstation.agents.tools import WorkspaceTools
 from ollama_workstation.models.model_intelligence import ModelIntelligence
-from ollama_workstation.models.routing import ModelRouter, RoutingRequest
+from ollama_workstation.models.routing import (
+    ModelRouter,
+    RoutingRequest,
+    infer_task_capabilities,
+)
 from ollama_workstation.models.schemas import ModelProfile
 from ollama_workstation.ui.components import (
     AutoTextBrowser,
@@ -49,7 +61,7 @@ from ollama_workstation.ui.components import (
     divider,
     label,
 )
-from ollama_workstation.ui.formatting import render_markdown
+from ollama_workstation.ui.formatting import conversation_to_markdown, render_markdown
 from ollama_workstation.ui.intelligence_core import IntelligenceCore
 from ollama_workstation.ui.pages.common import (
     format_timestamp,
@@ -110,6 +122,8 @@ class MessageBubble(QFrame):
         parent: QWidget | None = None,
         on_copy: Any = None,
         on_regenerate: Any = None,
+        on_branch: Any = None,
+        on_edit: Any = None,
     ) -> None:
         super().__init__(parent)
         self._content = content
@@ -157,12 +171,15 @@ class MessageBubble(QFrame):
         layout.addWidget(self.text)
         actions = QHBoxLayout()
         actions.setSpacing(4)
-        if role == "assistant":
-            actions.addStretch(1)
-            if on_copy is not None:
-                actions.addWidget(button("Copy", variant="Ghost", on_click=lambda: on_copy(content)))
-            if on_regenerate is not None:
-                actions.addWidget(button("Regenerate", variant="Ghost", on_click=on_regenerate))
+        actions.addStretch(1)
+        if role == "assistant" and on_copy is not None:
+            actions.addWidget(button("Copy", variant="Ghost", on_click=lambda: on_copy(content)))
+        if role == "assistant" and on_regenerate is not None:
+            actions.addWidget(button("Regenerate", variant="Ghost", on_click=on_regenerate))
+        if role == "user" and on_edit is not None:
+            actions.addWidget(button("Edit", variant="Ghost", on_click=on_edit))
+        if on_branch is not None:
+            actions.addWidget(button("Branch", variant="Ghost", on_click=on_branch))
         layout.addLayout(actions)
         self.set_content(content)
 
@@ -179,6 +196,66 @@ class MessageBubble(QFrame):
     def set_status(self, value: str, tone: str = "muted") -> None:
         self.status_label.setText(value)
         self.status_label.setStyleSheet(f"color:{COLORS.get(tone, COLORS['muted'])};")
+
+
+class ArtifactPreviewDialog(QDialog):
+    """Inspect a local artifact without leaving the conversation."""
+
+    def __init__(self, path: Path, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.path = path
+        self.setWindowTitle(f"Artifact · {path.name}")
+        self.resize(820, 620)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 16, 18, 14)
+        layout.setSpacing(9)
+        layout.addWidget(label("ARTIFACT INSPECTION", "Eyebrow"))
+        layout.addWidget(label(path.name, "PageTitle"))
+        layout.addWidget(label(str(path), "Faint", wrap=True))
+        layout.addWidget(divider())
+        try:
+            size = path.stat().st_size
+        except OSError:
+            size = 0
+        suffix = path.suffix.casefold()
+        if suffix in IMAGE_SUFFIXES:
+            image = QPixmap(str(path))
+            if not image.isNull():
+                preview = QLabel()
+                preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                preview.setPixmap(image.scaled(
+                    760, 430, Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                ))
+                layout.addWidget(preview, 1)
+            else:
+                layout.addWidget(label("The image could not be decoded.", "Muted"))
+        elif suffix in TEXT_SUFFIXES or size < 256_000:
+            viewer = QPlainTextEdit()
+            viewer.setReadOnly(True)
+            try:
+                content = path.read_text(encoding="utf-8", errors="replace")[:500_000]
+            except OSError as exc:
+                content = f"Could not read artifact: {exc}"
+            viewer.setPlainText(content)
+            layout.addWidget(viewer, 1)
+        else:
+            layout.addWidget(label(
+                f"Binary or unsupported preview · {size:,} bytes. Open it externally to inspect.",
+                "Muted", wrap=True,
+            ))
+            layout.addStretch(1)
+        bottom = QHBoxLayout()
+        bottom.addWidget(label(f"{size:,} bytes", "Faint"))
+        bottom.addStretch(1)
+        bottom.addWidget(button(
+            "Open externally", variant="Ghost",
+            on_click=lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))),
+        ))
+        close = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        close.rejected.connect(self.reject)
+        bottom.addWidget(close)
+        layout.addLayout(bottom)
 
 
 class ChatPage(QWidget):
@@ -217,12 +294,13 @@ class ChatPage(QWidget):
         root.setContentsMargins(26, 22, 26, 0)
         root.setSpacing(13)
         self.new_button = button("New session", variant="Primary", on_click=self._new_conversation)
+        self.export_button = button("Export", variant="Ghost", on_click=self.export_conversation)
         self.context_button = button("Hide context", variant="Ghost", on_click=self._toggle_context)
         root.addWidget(PageHeader(
             "INTELLIGENCE / DIALOGUE",
             "Advanced Chat",
             "Converse with one model, an equipped agent, an automatic route or a coordinated team.",
-            actions=[self.new_button, self.context_button],
+            actions=[self.new_button, self.export_button, self.context_button],
         ))
 
         main_split = QSplitter(Qt.Orientation.Horizontal)
@@ -273,14 +351,18 @@ class ChatPage(QWidget):
         controls_layout = QHBoxLayout(controls)
         controls_layout.setContentsMargins(12, 8, 12, 8)
         controls_layout.setSpacing(8)
-        controls_layout.addWidget(label("MODE", "MetricLabel"))
+        self.mode_label = label("MODE", "MetricLabel")
+        controls_layout.addWidget(self.mode_label)
         self.mode_combo = QComboBox()
         for text, data in MODES:
             self.mode_combo.addItem(text, data)
         self.mode_combo.currentIndexChanged.connect(self._mode_changed)
         controls_layout.addWidget(self.mode_combo)
-        controls_layout.addWidget(label("MODEL", "MetricLabel"))
+        self.model_label = label("MODEL", "MetricLabel")
+        controls_layout.addWidget(self.model_label)
         self.model_combo = QComboBox()
+        self.model_combo.setMinimumWidth(0)
+        self.model_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.model_combo.currentTextChanged.connect(self._model_changed)
         controls_layout.addWidget(self.model_combo, 1)
         self.agent_combo = QComboBox()
@@ -530,6 +612,8 @@ class ChatPage(QWidget):
         model = self.model_combo.currentText()
         profile = self.context.profile_for(model) if model else None
         self.ctx_model.setText(model or "No installed model")
+        self.model_combo.setToolTip(f"Active model: {model}" if model else "No installed model")
+        self.mode_combo.setToolTip(self.mode_hint.text())
         if profile:
             self.ctx_profile.setText(
                 f"{profile.professional_title}\n{profile.agentability_status.replace('_', ' ')}"
@@ -588,6 +672,9 @@ class ChatPage(QWidget):
         if not hasattr(self, "context_panel"):
             return
         narrow = self.width() < 1030
+        self.mode_label.setVisible(not narrow)
+        self.model_label.setVisible(not narrow)
+        self.live_status.setVisible(not narrow)
         if narrow and not self._context_auto_hidden and not self._context_pinned:
             # Explicit hide is required here: isVisible() is false while the
             # page itself is hidden, and visibility would otherwise return
@@ -684,8 +771,9 @@ class ChatPage(QWidget):
         self._clear_messages()
         self.empty.setVisible(not self.messages)
         self._update_empty_stretch()
-        for message in self.messages:
+        for index, message in enumerate(self.messages):
             role = str(message.get("role") or "assistant")
+            is_user = role == "user"
             meta = (
                 {"model": message.get("model"), "mode": message.get("mode")}
                 if role == "assistant" else {}
@@ -693,6 +781,14 @@ class ChatPage(QWidget):
             bubble = self._add_bubble(
                 role, str(message.get("content") or ""), meta=meta,
                 regenerate=self._is_last_assistant(message) and not self._busy,
+                on_branch=(
+                    lambda checked=False, position=index: self._branch_from(position)
+                    if not self._busy else None
+                ),
+                on_edit=(
+                    lambda checked=False, position=index, can_edit=is_user: self._edit_message(position)
+                    if not self._busy and can_edit else None
+                ),
             )
             if role == "assistant" and message.get("error"):
                 bubble.set_status("FAILED", "red")
@@ -710,11 +806,15 @@ class ChatPage(QWidget):
         *,
         meta: dict[str, Any] | None = None,
         regenerate: bool = False,
+        on_branch: Any = None,
+        on_edit: Any = None,
     ) -> MessageBubble:
         bubble = MessageBubble(
             role, content, meta=meta,
             on_copy=self._copy_text,
             on_regenerate=self.regenerate if regenerate else None,
+            on_branch=on_branch,
+            on_edit=on_edit,
         )
         self._bubbles.append(bubble)
         self.messages_layout.insertWidget(self.messages_layout.count() - 1, bubble)
@@ -1035,7 +1135,17 @@ class ChatPage(QWidget):
                     intelligence[profile.model_name] = ModelIntelligence.from_dict(profile.intelligence)
                 except (TypeError, ValueError):
                     pass
-        request = RoutingRequest(preferred_models=(preferred,) if preferred else ())
+        last_user = next(
+            (str(item.get("content") or "") for item in reversed(messages)
+             if item.get("role") == "user"),
+            "",
+        )
+        context_tokens = max(1, sum(len(str(item.get("content") or "")) for item in messages) // 4)
+        request = RoutingRequest(
+            preferred_capabilities=infer_task_capabilities(last_user),
+            context_tokens=context_tokens,
+            preferred_models=(preferred,) if preferred else (),
+        )
         decision = ModelRouter().rank(
             self.context.models,
             request=request,
@@ -1148,11 +1258,13 @@ class ChatPage(QWidget):
         self._append_trace(kind, message)
         self.live_status.setText(message[:90])
         if kind in {"tool_started", "tool_completed"}:
-            self.context.set_state("executing", message)
+            self.context.set_state("tool_execution", message)
         elif kind == "thinking":
             self.context.set_state("thinking", message)
         elif kind == "memory_retrieved":
             self.context.set_state("planning", message)
+        elif kind in {"verification_started", "verification_recorded"}:
+            self.context.set_state("verifying", message)
         if self._assistant_bubble is not None:
             self._assistant_bubble.set_status(kind.replace("_", " ").upper(), "cyan")
         self.context.activity.update(self._activity_id, message)
@@ -1193,7 +1305,7 @@ class ChatPage(QWidget):
     def _on_stream(self, content: str, thinking: str) -> None:
         if not self._stream_started:
             self._stream_started = True
-            self.context.set_state("executing", "Receiving local model output")
+            self.context.set_state("generating", "Receiving local model output")
             if self._assistant_bubble is not None:
                 self._assistant_bubble.set_status("STREAMING", "cyan")
         self._assistant_text += content
@@ -1313,7 +1425,7 @@ class ChatPage(QWidget):
             "error": not cancelled,
         })
         self._save_conversation()
-        self.context.set_state("standby" if cancelled else "warning",
+        self.context.set_state("standby" if cancelled else "error",
                                "Generation stopped" if cancelled else "Request failed")
         if not cancelled:
             self.live_status.setText("Execution failed")
@@ -1446,7 +1558,91 @@ class ChatPage(QWidget):
     def _open_artifact(self, item: QListWidgetItem) -> None:
         value = str(item.data(Qt.ItemDataRole.UserRole) or "")
         if value:
-            QDesktopServices.openUrl(QUrl.fromLocalFile(value))
+            path = Path(value)
+            if path.is_file():
+                ArtifactPreviewDialog(path, self).exec()
+            else:
+                self.context.notify("That artifact is no longer present on disk.")
+
+    def _branch_from(self, index: int) -> None:
+        """Create a new conversation containing the selected message prefix."""
+        if self._busy or index < 0 or index >= len(self.messages):
+            return
+        prefix = [dict(item) for item in self.messages[: index + 1]]
+        if not prefix:
+            return
+        title = "Branch · " + next(
+            (" ".join(str(item.get("content") or "").split())[:56]
+             for item in prefix if item.get("role") == "user"),
+            "untitled",
+        )
+        self.conversation_id = str(uuid.uuid4())
+        self.messages = prefix
+        self._artifacts = []
+        for item in self.messages:
+            artifacts = item.get("artifacts")
+            if isinstance(artifacts, list):
+                self._artifacts.extend(Path(str(path)) for path in artifacts)
+        self._save_conversation()
+        self.session_title.setText(title)
+        self._render_messages()
+        self._render_artifacts()
+        self._sync_context()
+        self.context.notify(f"Branched {len(prefix)} messages into a new local session.")
+
+    def _edit_message(self, index: int) -> None:
+        """Fork before the selected user message and place it back in the composer."""
+        if self._busy or index < 0 or index >= len(self.messages):
+            return
+        target = self.messages[index]
+        if target.get("role") != "user":
+            return
+        prefix = [dict(item) for item in self.messages[:index]]
+        self.conversation_id = str(uuid.uuid4())
+        self.messages = prefix
+        self._artifacts = []
+        for item in prefix:
+            artifacts = item.get("artifacts")
+            if isinstance(artifacts, list):
+                self._artifacts.extend(Path(str(path)) for path in artifacts)
+        self._save_conversation()
+        self._render_messages()
+        self._render_artifacts()
+        self._sync_context()
+        self.composer.setPlainText(str(target.get("content") or ""))
+        self.composer.setFocus()
+        self.context.notify(
+            "Created a branch before the selected message. Edit the text, then send."
+        )
+
+    def export_conversation(self) -> None:
+        if not self.messages:
+            self.context.notify("There is no conversation to export yet.")
+            return
+        title = self.session_title.text() or "intelligence-session"
+        safe = "".join(
+            character if character.isalnum() or character in {"-", "_"} else "-"
+            for character in title.casefold()
+        ).strip("-")[:60] or "intelligence-session"
+        destination, _filter = QFileDialog.getSaveFileName(
+            self, "Export conversation", str(Path.home() / f"{safe}.md"),
+            "Markdown (*.md);;Text (*.txt)",
+        )
+        if not destination:
+            return
+        path = Path(destination)
+        try:
+            path.write_text(
+                conversation_to_markdown(
+                    title, self.messages,
+                    model=self._request_model or self.model_combo.currentText(),
+                ),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            QMessageBox.warning(self, "Export failed", str(exc))
+            return
+        self.context.notify(f"Conversation exported to {path.name}.")
 
     def _restore_standby_later(self) -> None:
         QTimer.singleShot(

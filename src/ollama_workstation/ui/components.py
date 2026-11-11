@@ -5,9 +5,10 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QFont, QPainter, QPen
+from PySide6.QtGui import QFont, QPainter, QPen, QResizeEvent
 from PySide6.QtWidgets import (
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -203,6 +204,8 @@ class GroupLabel(QLabel):
 
 
 class PageHeader(QWidget):
+    """Workspace heading that preserves every action at narrow widths."""
+
     def __init__(
         self,
         eyebrow: str,
@@ -213,10 +216,15 @@ class PageHeader(QWidget):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 2)
-        layout.setSpacing(18)
-        copy = QVBoxLayout()
+        self._stacked = False
+        self._grid = QGridLayout(self)
+        self._grid.setContentsMargins(0, 0, 0, 2)
+        self._grid.setHorizontalSpacing(18)
+        self._grid.setVerticalSpacing(9)
+        self._grid.setColumnStretch(0, 1)
+        copy_widget = QWidget()
+        copy = QVBoxLayout(copy_widget)
+        copy.setContentsMargins(0, 0, 0, 0)
         copy.setSpacing(4)
         eyebrow_label = label(eyebrow.upper(), "Eyebrow")
         title_label = label(title, "PageTitle")
@@ -224,12 +232,33 @@ class PageHeader(QWidget):
         copy.addWidget(eyebrow_label)
         copy.addWidget(title_label)
         copy.addWidget(subtitle_label)
-        layout.addLayout(copy, 1)
-        action_row = QHBoxLayout()
+        self._grid.addWidget(copy_widget, 0, 0)
+        self._actions_widget = QWidget()
+        action_row = QHBoxLayout(self._actions_widget)
+        action_row.setContentsMargins(0, 0, 0, 0)
         action_row.setSpacing(8)
         for action in actions:
             action_row.addWidget(action)
-        layout.addLayout(action_row)
+        self._grid.addWidget(
+            self._actions_widget, 0, 1, Qt.AlignmentFlag.AlignRight
+        )
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        stacked = self.width() < 920
+        if stacked == self._stacked:
+            return
+        self._grid.removeWidget(self._actions_widget)
+        if stacked:
+            self._grid.addWidget(
+                self._actions_widget, 1, 0, 1, 2, Qt.AlignmentFlag.AlignLeft
+            )
+        else:
+            self._grid.addWidget(
+                self._actions_widget, 0, 1, Qt.AlignmentFlag.AlignRight
+            )
+        self._stacked = stacked
 
 
 class SectionHeader(QWidget):

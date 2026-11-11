@@ -29,8 +29,13 @@ aggregate verification -> completed | failed | verification_failed
 
 A child is only considered successful when its runtime returns `completed` and
 the host-owned checks pass. A valid artifact is necessary for the built-in
-templates, but is not sufficient by itself: a verifier's `FAIL` verdict fails
-the workflow even when its verification file exists.
+templates, but is not sufficient by itself. A verifier's substantive `FAIL`
+fails the workflow. A narrow exception exists for factual contradictions: if
+the model says an immutable manifest artifact is missing or empty while the host
+manifest records a nonzero, unchanged file, and every deterministic acceptance
+check passes, the host records the model verdict and the contradiction, then
+makes its own PASS decision. Subjective quality disagreements are never
+overridden.
 
 ## Plans
 
@@ -66,10 +71,10 @@ deliver + verify). A custom plan can be supplied with `--plan FILE`:
     {
       "task_id": "verify",
       "role": "repository_analysis",
-      "objective": "Inspect the deliverables and write workforce/verification.md.",
+      "objective": "Inspect the immutable manifest, verify every acceptance criterion, and return the structured JSON verdict. Do not write any file.",
       "depends_on": ["deliver"],
       "max_steps": 12,
-      "verification": [{"kind": "file_contains", "target": "workforce/verification.md", "expected": "VERDICT:"}],
+      "read_only": true,
       "verdict_required": true
     }
   ]
@@ -103,24 +108,34 @@ during plan validation. Plans are limited to 16 tasks and 160 total steps.
   `timed_out` and cannot become a successful dependency.
 - **Retry safety.** Retries occur only for transient child failure on a task
   marked `retry_safe`. Artifact/verdict failures and deterministic step-limit
-  termination are not retried, because replaying them can duplicate side
-  effects or conceal the cause.
+  termination are not retried automatically, because replaying them can
+  duplicate side effects or conceal the cause.
 - **Dependency context.** A child receives prior results explicitly labelled as
   untrusted evidence. It cannot gain permissions from another child's prose.
 
 ## Independent verification
 
-The verifier is a separate task with its own bounded runtime, usually the same
-workspace, and a host-required `VERDICT: PASS` or `VERDICT: FAIL` signal. The
-host reads an existing verdict artifact first. If the verifier returns a
-verdict in its final message but omits the requested audit file, the host
-persists that verdict as `workforce/verification.md`; it never overwrites an
-existing artifact. This preserves the audit record without accepting a
-verdict that contradicts the artifact.
+The verifier is a separate read-only task over the same workspace. Before it
+starts, the host snapshots every acceptance target into an immutable
+`ArtifactManifest` (path, size, SHA-256). The verifier receives the original
+acceptance criteria and manifest, and may use only list/read/search tools. It
+must return the typed `11vated-verifier/1` JSON contract: `schema_version`,
+`verdict`, non-empty `summary`, and `evidence` with artifact path, observation
+and optional digest. A PASS must cite every manifest artifact.
+
+If the verifier returns prose instead of the contract, the host performs one
+provider-enforced JSON-schema formatting call over the same immutable manifest.
+The model cannot write the audit file. The host validates paths and digests,
+rechecks that the artifacts did not change, and writes
+`workforce/verification.json` with `recorded_by: host`, the model verdict,
+manifest, host checks, errors and tamper check. A failed host check, changed
+artifact, missing evidence, malformed normalized JSON or substantive model FAIL
+fails closed. A model FAIL that claims a nonempty manifest artifact is empty or
+missing is recorded as a contradiction and cannot override passed deterministic
+acceptance checks.
 
 The aggregate verification result contains every check with its task ID, all
-verdicts and a fail-closed status. A missing artifact, failed check, `FAIL`
-verdict or failed/blocked task makes the workflow fail.
+verdicts, host overrides and a fail-closed status.
 
 ## Durable tracing
 
@@ -170,19 +185,23 @@ service as the CLI; no scheduling or policy logic lives in the widget.
 
 ## Live local evidence
 
-On 2026-11-11, with Ollama 0.40.15 and `qwen2.5-coder:7b`, a custom three-task
-delivery workflow completed successfully:
+On 2026-11-11, with Ollama 0.40.16 and `qwen2.5-coder:7b`, both CLI and
+desktop-controller analysis workflows completed with host verification:
 
-- Run ID: `cb917844-fcc4-4080-b7bd-eee6082aa523`
-- Analysis task: completed, `workforce/analysis.md` non-empty.
-- Delivery task: completed, root `greeting.txt` contained `hello workforce`,
-  `workforce/result.md` non-empty.
-- Verifier: independent task returned `VERDICT: PASS`; verification artifact
-  present and host checks passed.
-- CLI exit code: 0; elapsed: 17 seconds.
+- Run ID `23dc040f-1aa3-40d1-882a-b3a2c7f6b6e0` (CLI): analysis completed,
+  `workforce/analysis.md` nonempty, verifier prose was normalized to a
+  schema-enforced PASS, host audit recorded, `verification_passed=true`.
+- Desktop `WorkforcePage` run `fb65bbb1...` failed correctly when the analysis
+  model claimed success without writing the artifact; the host blocked the
+  verifier. A clean rerun (`live-workforce-ui2`) completed with
+  `verification_passed=true`; its audit records model verdict `FAIL`,
+  `host_decision: PASS`, `host_override: true` for a contradicted “empty”
+  claim, and the immutable manifest for `workforce/analysis.md`.
+- The CLI acceptance run also covered the contradiction-safe path: a model
+  prose FAIL that claimed the nonempty artifact was missing was recorded, but
+  deterministic acceptance passed.
 
-This is live local evidence, not a hosted CI result or a production
-certification.
+These are live local results, not hosted CI or production certification.
 
 ## Limits
 

@@ -90,7 +90,7 @@ class MainWindow(QMainWindow):
             apply_theme(app)
         self.setWindowTitle("11vatedTech Intelligence — Ollama Workstation")
         self.resize(1480, 940)
-        self.setMinimumSize(1120, 720)
+        self.setMinimumSize(900, 700)
         self.paths = AppPaths.default()
         self.paths.ensure()
         configure_logging(self.paths.logs_dir)
@@ -352,7 +352,7 @@ class MainWindow(QMainWindow):
 
     def _core_state(self, state: str, detail: str) -> None:
         self.top_core.set_state(state, detail)
-        if state == "warning":
+        if state in {"warning", "error", "disconnected"}:
             self.top_core.setStyleSheet("")
 
     def _activity_changed(self) -> None:
@@ -395,8 +395,14 @@ class MainWindow(QMainWindow):
         online = self.context.ollama_online
         self.sidebar_dot.set_tone("green" if online else "red")
         self.sidebar_runtime.setText("LOCAL RUNTIME ONLINE" if online else "OLLAMA OFFLINE")
+        empirical = sum(
+            1 for profile in self.context.profiles
+            if any(item.status in {"passed", "partial", "failed"}
+                   for item in profile.capabilities)
+        )
         self.sidebar_detail.setText(
-            f"{len(self.context.models)} models · {len(self.context.profiles)} profiled"
+            f"{len(self.context.models)} models · {len(self.context.profiles)} metadata · "
+            f"{empirical} empirical"
             if online else "Start Ollama to enable local inference."
         )
         self.health_pill.setText("RUNTIME ONLINE" if online else "RUNTIME OFFLINE")
@@ -470,7 +476,7 @@ class MainWindow(QMainWindow):
             self.bus.status.emit(
                 "Ollama is offline. Start the local runtime to enable inference."
             )
-            self.bus.core_state.emit("warning", "Local runtime offline")
+            self.bus.core_state.emit("disconnected", "Local runtime offline")
 
     def _runtime_failed(self, message: str) -> None:
         self.context.ollama_online = False

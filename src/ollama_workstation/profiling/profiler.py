@@ -35,6 +35,90 @@ class ModelProfiler:
                          details=dict(item.get("details") or {}))
                 for item in self.client.list_models()]
 
+    def profile_inventory(
+        self,
+        *,
+        run_probes: bool = False,
+        names: list[str] | tuple[str, ...] | None = None,
+        progress: Callable[[str], None] | None = None,
+        repeats: int = 1,
+    ) -> list[ModelProfile]:
+        """Create a persistent-ready profile for every requested installed artifact.
+
+        Metadata profiles are deliberately cheap and never imply that an
+        empirical capability was tested. Callers can request the full probe
+        suite per model when they have the time and memory budget for it.
+        """
+        notify = progress or (lambda _message: None)
+        selected = set(names) if names is not None else None
+        refs = [
+            model for model in self.inventory()
+            if selected is None or model.name in selected
+        ]
+        profiles: list[ModelProfile] = []
+        for index, model in enumerate(refs, start=1):
+            notify(
+                f"Profiling {index}/{len(refs)} · {model.name}"
+                + (" with local probes" if run_probes else " metadata")
+            )
+            try:
+                profiles.append(
+                    self.profile(
+                        model.name, run_probes=run_probes, repeats=repeats,
+                        progress=None,
+                    )
+                )
+            except Exception as exc:
+                # One unavailable artifact must not prevent coverage of the
+                # rest of the installed inventory. The fallback records the
+                # failure as unknown evidence rather than inventing capability.
+                profiles.append(self._unavailable_profile(model, exc))
+        return profiles
+
+    @staticmethod
+    def _unavailable_profile(model: ModelRef, exc: Exception) -> ModelProfile:
+        details = model.details or {}
+        profile = ModelProfile(
+            model_name=model.name,
+            digest=model.digest,
+            generated_at=utc_now(),
+            family=str(details.get("family") or "unknown"),
+            parameter_size=str(details.get("parameter_size") or "unknown"),
+            quantization=str(details.get("quantization_level") or "unknown"),
+            declared_purpose="Not established; metadata inspection failed.",
+            origin_evidence=[
+                Evidence(
+                    "Metadata inspection", "failed", "unknown",
+                    "Ollama /api/show",
+                    notes=f"{type(exc).__name__}: {str(exc)[:220]}",
+                ),
+            ],
+            known_limitations=[
+                "Ollama metadata inspection failed; every capability remains unassessed.",
+            ],
+            operational={
+                "inventory_size_bytes": model.size_bytes,
+                "modified_at": model.modified_at,
+                "ollama_digest": model.digest,
+                "metadata_error": type(exc).__name__,
+            },
+            capabilities=[
+                CapabilityResult(
+                    name, "not_assessed", method="Metadata inspection failed",
+                    limitations=["No probe was attempted because metadata was unavailable."],
+                )
+                for name in (
+                    "instruction_following", "structured_output", "structured_actions",
+                    "tool_calling", "code_generation", "code_comprehension", "reasoning",
+                    "mathematics", "long_context", "research", "creative_writing",
+                    "multilingual", "data_extraction", "planning", "error_recovery",
+                    "vision", "audio",
+                )
+            ],
+        )
+        assign_identity(profile)
+        return profile
+
     def profile(self, model_name: str, run_probes: bool = True,
                 progress: Callable[[str], None] | None = None, repeats: int = 1) -> ModelProfile:
         notify = progress or (lambda _message: None)
@@ -78,6 +162,15 @@ class ModelProfiler:
                          notes="Never infer training data from a model name."),
                 Evidence("Ollama artifact digest", model.digest or "not available",
                          "observed", "Ollama /api/tags"),
+                Evidence("Artifact template", "reported" if intelligence.template else "not reported",
+                         "observed" if intelligence.template else "unknown",
+                         "Ollama /api/show template"),
+                Evidence("Modelfile", "reported" if intelligence.modelfile else "not reported",
+                         "observed" if intelligence.modelfile else "unknown",
+                         "Ollama /api/show modelfile"),
+                Evidence("Parent model", intelligence.parent_model or "none declared",
+                         "observed" if intelligence.parent_model else "unknown",
+                         "Ollama /api/show details.parent_model"),
                 Evidence("Memory envelope", json.dumps(intelligence.resource_estimate.as_dict()
                          if intelligence.resource_estimate else {}, sort_keys=True),
                          "inferred", "Host estimate"),
@@ -125,8 +218,9 @@ class ModelProfiler:
                      "research", "creative_writing", "multilingual", "data_extraction", "planning",
                      "error_recovery", "vision", "audio")
             profile.capabilities = [CapabilityResult(name, "not_assessed", method="Not run") for name in names]
-        profile.known_limitations = [limitation for item in profile.capabilities
-                                     for limitation in item.limitations]
+        profile.known_limitations = list(dict.fromkeys(
+            limitation for item in profile.capabilities for limitation in item.limitations
+        ))
         profile.overall_reliability = None
         try:
             profile.operational["host_before"] = host_before
@@ -207,7 +301,7 @@ class ModelProfiler:
     @staticmethod
     def _result(name: str, passed: bool, metrics: dict[str, Any],
                 method: str, evidence: str) -> CapabilityResult:
-        return CapabilityResult(name, "passed" if passed else "partial",
+        return CapabilityResult(name, "passed" if passed else "failed",
             100.0 if passed else 0.0, 0.2, 1, int(passed), metrics.get("duration_ms"),
             method, [evidence],
             [] if passed else ["Single-item smoke test failed; broad capability remains unestablished."],

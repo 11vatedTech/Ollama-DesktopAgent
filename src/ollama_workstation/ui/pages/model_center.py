@@ -19,8 +19,10 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMessageBox,
+    QPlainTextEdit,
     QProgressBar,
     QScrollArea,
+    QSizePolicy,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
@@ -106,8 +108,10 @@ class ModelCenterPage(QWidget):
         self._all_models: list[str] = []
         self._selected = ""
         self._profile_worker: FunctionWorker | None = None
+        self._profile_all_worker: FunctionWorker | None = None
         self._benchmark_cancel: Any = None
         self._last_benchmark: Any = None
+        self._compact: bool | None = None
         self._build()
         self._connect()
         self.refresh()
@@ -130,13 +134,14 @@ class ModelCenterPage(QWidget):
                      self.cancel_button, self.compare_button],
         ))
 
-        split = QSplitter(Qt.Orientation.Horizontal)
-        split.addWidget(self._inventory_panel())
-        split.addWidget(self._detail_panel())
-        split.setStretchFactor(0, 0)
-        split.setStretchFactor(1, 1)
-        split.setSizes([315, 900])
-        root.addWidget(split, 1)
+        self.split = QSplitter(Qt.Orientation.Horizontal)
+        self.split.addWidget(self._inventory_panel())
+        self.split.addWidget(self._detail_panel())
+        self.split.setStretchFactor(0, 0)
+        self.split.setStretchFactor(1, 1)
+        self.split.setSizes([315, 900])
+        self._narrow_split: bool | None = None
+        root.addWidget(self.split, 1)
 
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)
@@ -169,6 +174,18 @@ class ModelCenterPage(QWidget):
         panel.body.addWidget(self.model_list, 1)
         self.inventory_meta = label("Waiting for Ollama inventory…", "Faint")
         panel.body.addWidget(self.inventory_meta)
+        self.profile_all_button = button(
+            "Profile missing models", variant="Secondary",
+            on_click=self.profile_missing,
+            tooltip="Create metadata profiles for every installed artifact that lacks one.",
+        )
+        panel.body.addWidget(self.profile_all_button)
+        self._inventory_note = label(
+            "Metadata profiles preserve declared facts and mark untested capabilities. "
+            "They do not claim benchmark evidence.",
+            "Faint", wrap=True,
+        )
+        panel.body.addWidget(self._inventory_note)
         return panel
 
     def _detail_panel(self) -> QWidget:
@@ -178,6 +195,10 @@ class ModelCenterPage(QWidget):
         self.detail_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.detail_content = QWidget()
         self.detail_content.setObjectName("PageBody")
+        self.detail_content.setMinimumWidth(0)
+        self.detail_content.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
         self.detail_layout = QVBoxLayout(self.detail_content)
         self.detail_layout.setContentsMargins(6, 0, 8, 26)
         self.detail_layout.setSpacing(13)
@@ -188,6 +209,32 @@ class ModelCenterPage(QWidget):
         self.context.events.data_changed.connect(self._data_changed)
         self.context.events.theme_changed.connect(self._apply_motion)
         self._apply_motion()
+
+    def showEvent(self, event: Any) -> None:
+        super().showEvent(event)
+        self._apply_responsive_state()
+
+    def resizeEvent(self, event: Any) -> None:
+        super().resizeEvent(event)
+        self._apply_responsive_state()
+
+    def _apply_responsive_state(self) -> None:
+        compact = self.width() < 980
+        narrow_split = self.width() < 880
+        if hasattr(self, "split") and narrow_split != self._narrow_split:
+            self.split.setOrientation(
+                Qt.Orientation.Vertical if narrow_split else Qt.Orientation.Horizontal
+            )
+            self.split.setSizes([210, 300] if narrow_split else [315, 900])
+            self._narrow_split = narrow_split
+        if hasattr(self, "model_list"):
+            self.model_list.setMinimumHeight(96 if narrow_split else 0)
+            self._inventory_note.setVisible(not narrow_split)
+        if compact == self._compact:
+            return
+        self._compact = compact
+        if self._selected:
+            self._select_name(self._selected)
 
     def _data_changed(self, kind: str) -> None:
         if kind in {"models", "profiles", "settings"}:
@@ -213,9 +260,18 @@ class ModelCenterPage(QWidget):
         index = self.family_filter.findData(current)
         self.family_filter.setCurrentIndex(max(0, index))
         self.family_filter.blockSignals(False)
-        self.inventory_meta.setText(
-            f"{len(installed)} installed · {len(self.context.profiles)} profiled"
+        covered = sum(
+            1 for model in installed
+            if self.context.repository.get_profile(model.name, model.digest) is not None
         )
+        missing = max(0, len(installed) - covered)
+        self.inventory_meta.setText(
+            f"{len(installed)} installed · {covered} profiled · {missing} unprofiled"
+        )
+        self.profile_all_button.setText(
+            f"Profile missing models ({missing})" if missing else "All models profiled"
+        )
+        self.profile_all_button.setEnabled(missing > 0 and self._profile_all_worker is None)
         self._filter()
         if not installed:
             self.model_list.clear()
@@ -317,34 +373,50 @@ class ModelCenterPage(QWidget):
         self.detail_layout.addStretch(1)
 
     def _render_model(self, name: str, installed: Any, profile: ModelProfile | None) -> None:
+        self._compact = self.width() < 980
         self._clear_detail()
         details = installed.details if installed is not None else {}
         title_row = QHBoxLayout()
         title_copy = QVBoxLayout()
         title_copy.setSpacing(2)
         title_copy.addWidget(label("MODEL DOSSIER", "Eyebrow"))
-        title_copy.addWidget(label(name, "PageTitle"))
+        display_name = (
+            name.replace("/", "/\u200b").replace(":", ":\u200b")
+            .replace("-", "-\u200b").replace("_", "_\u200b")
+        )
+        model_title = label(display_name, "PageTitle", wrap=True)
+        model_title.setMinimumWidth(0)
+        model_title.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
+        title_copy.addWidget(model_title)
         subtitle = (
             f"{profile.professional_title} · {profile.primary_specialization}"
             if profile else "No evidence-backed profile stored for this artifact."
         )
         title_copy.addWidget(label(subtitle, "PageSubtitle", wrap=True))
         title_row.addLayout(title_copy, 1)
-        if profile:
-            title_row.addWidget(Pill("PROFILED", "green"))
-        else:
-            title_row.addWidget(Pill("UNPROFILED", "amber"))
         self.detail_layout.addLayout(title_row)
 
-        meta_line = QHBoxLayout()
-        meta_line.setSpacing(6)
-        meta_line.addWidget(Pill(str(details.get("family") or "unknown"), "muted"))
-        meta_line.addWidget(Pill(str(details.get("parameter_size") or "—"), "muted"))
-        meta_line.addWidget(Pill(str(details.get("quantization_level") or "—"), "muted"))
+        meta_grid = QGridLayout()
+        meta_grid.setHorizontalSpacing(6)
+        meta_grid.setVerticalSpacing(6)
+        meta_pills = [Pill(
+            "PROFILED" if profile else "UNPROFILED",
+            "green" if profile else "amber",
+        )]
+        meta_pills.append(Pill(str(details.get("family") or "unknown"), "muted"))
+        meta_pills.append(Pill(str(details.get("parameter_size") or "—"), "muted"))
+        meta_pills.append(Pill(str(details.get("quantization_level") or "—"), "muted"))
         if profile:
-            meta_line.addWidget(Pill(profile.agentability_status.replace("_", " "), "violet"))
-        meta_line.addStretch(1)
-        self.detail_layout.addLayout(meta_line)
+            meta_pills.append(Pill(profile.agentability_status.replace("_", " "), "violet"))
+        meta_columns = 2 if self.width() < 760 else 3
+        for index, pill in enumerate(meta_pills):
+            meta_grid.addWidget(pill, index // meta_columns, index % meta_columns)
+        for column in range(meta_columns):
+            meta_grid.setColumnStretch(column, 0)
+        meta_grid.setColumnStretch(meta_columns, 1)
+        self.detail_layout.addLayout(meta_grid)
 
         metrics = QGridLayout()
         metrics.setSpacing(9)
@@ -358,9 +430,12 @@ class ModelCenterPage(QWidget):
             ("QUANTIZATION", str(details.get("quantization_level") or "—"),
              "local artifact"),
         ]
+        columns = 2 if self.width() < 980 else 4
         for index, (heading, value, detail) in enumerate(values):
             tile = MetricTile(heading, value, detail, tone="cyan")
-            metrics.addWidget(tile, 0, index)
+            metrics.addWidget(tile, index // columns, index % columns)
+        for column in range(columns):
+            metrics.setColumnStretch(column, 1)
         self.detail_layout.addLayout(metrics)
 
         if profile is None:
@@ -375,6 +450,7 @@ class ModelCenterPage(QWidget):
         else:
             self.detail_layout.addWidget(self._capability_panel(profile))
             self.detail_layout.addWidget(self._identity_panel(profile))
+            self.detail_layout.addWidget(self._artifact_definition_panel(profile))
         self.detail_layout.addWidget(self._benchmark_panel(name))
         self.detail_layout.addStretch(1)
 
@@ -389,12 +465,54 @@ class ModelCenterPage(QWidget):
         grid = QGridLayout()
         grid.setHorizontalSpacing(20)
         grid.setVerticalSpacing(10)
-        capabilities = sorted(profile.capabilities, key=lambda item: item.capability)
-        for index, capability in enumerate(capabilities):
-            if capability.capability in {"instruction_following", "reasoning", "code_generation",
-                                         "tool_calling", "structured_output", "vision"}:
-                grid.addWidget(CapabilityBar(capability.capability, profile), index // 2, index % 2)
+        columns = 1 if self.width() < 760 else 2
+        visible = [
+            capability for capability in sorted(
+                profile.capabilities, key=lambda item: item.capability
+            )
+            if capability.capability in {
+                "instruction_following", "reasoning", "code_generation",
+                "tool_calling", "structured_output", "vision",
+            }
+        ]
+        for index, capability in enumerate(visible):
+            grid.addWidget(
+                CapabilityBar(capability.capability, profile),
+                index // columns, index % columns,
+            )
+        for column in range(columns):
+            grid.setColumnStretch(column, 1)
         card.body.addLayout(grid)
+        all_dimensions = QTableWidget(len(profile.capabilities), 4)
+        all_dimensions.setHorizontalHeaderLabels(
+            ["Dimension", "Status", "Score", "Evidence / method"]
+        )
+        all_dimensions.verticalHeader().setVisible(False)
+        all_dimensions.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        all_dimensions.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        all_dimensions.setMinimumHeight(220)
+        all_dimensions.setMaximumHeight(330)
+        all_dimensions.horizontalHeader().setStretchLastSection(True)
+        for row, capability in enumerate(profile.capabilities):
+            name_item = QTableWidgetItem(capability.capability.replace("_", " ").title())
+            status_item = QTableWidgetItem(capability.status.replace("_", " "))
+            score_item = QTableWidgetItem(
+                f"{capability.score:.0f}" if capability.score is not None else "—"
+            )
+            method_item = QTableWidgetItem(
+                capability.method or "; ".join(capability.evidence[:1]) or "Not assessed"
+            )
+            method_item.setToolTip(
+                "\n".join(capability.evidence + capability.limitations)[:1600]
+                or "No evidence recorded."
+            )
+            all_dimensions.setItem(row, 0, name_item)
+            all_dimensions.setItem(row, 1, status_item)
+            all_dimensions.setItem(row, 2, score_item)
+            all_dimensions.setItem(row, 3, method_item)
+        all_dimensions.resizeColumnsToContents()
+        all_dimensions.setColumnWidth(3, max(180, all_dimensions.columnWidth(3)))
+        card.body.addWidget(all_dimensions)
         evidence = QTextBrowser()
         evidence.setMinimumHeight(150)
         rationale = "".join(
@@ -457,6 +575,77 @@ class ModelCenterPage(QWidget):
         card.body.addWidget(source)
         return card
 
+    def _artifact_definition_panel(self, profile: ModelProfile) -> QWidget:
+        card = Card(margins=(17, 14, 17, 13))
+        card.body.addWidget(SectionHeader(
+            "Artifact definition",
+            "Observed template, lineage and format metadata from Ollama.",
+        ))
+        card.body.addWidget(divider())
+        intelligence = profile.intelligence if isinstance(profile.intelligence, dict) else {}
+        required = intelligence.get("required_features") or []
+        base_models = intelligence.get("base_models") or []
+        values = [
+            ("FORMAT", str(intelligence.get("format") or profile.family or "—")),
+            ("PARENT", str(intelligence.get("parent_model") or "none declared")),
+            ("LICENSE", str(intelligence.get("license") or "not disclosed")),
+            ("BASE MODELS", ", ".join(str(item) for item in base_models) or "none declared"),
+            ("REQUIRED FEATURES", ", ".join(str(item) for item in required) or "none declared"),
+            ("EMBEDDING WIDTH", str(intelligence.get("embedding_length") or "—")),
+        ]
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(22)
+        grid.setVerticalSpacing(8)
+        columns = 1 if self.width() < 980 else 3
+        for index, (heading, value) in enumerate(values):
+            row = index // columns
+            column = (index % columns) * 2
+            grid.addWidget(label(heading, "MetricLabel"), row, column)
+            grid.addWidget(label(value, "Body", wrap=True), row, column + 1)
+        for column in range(columns):
+            grid.setColumnStretch(column * 2 + 1, 1)
+        card.body.addLayout(grid)
+        template = str(intelligence.get("template") or "")
+        modelfile = str(intelligence.get("modelfile") or "")
+        actions = [
+            button("View template", variant="Ghost", on_click=lambda: self._show_text(
+                f"Template · {profile.model_name}", template
+            )) if template else None,
+            button("View Modelfile", variant="Ghost", on_click=lambda: self._show_text(
+                f"Modelfile · {profile.model_name}", modelfile
+            )) if modelfile else None,
+        ]
+        row = QHBoxLayout()
+        for action in actions:
+            if action is not None:
+                row.addWidget(action)
+        if template or modelfile:
+            row.addStretch(1)
+            card.body.addLayout(row)
+        else:
+            card.body.addWidget(label(
+                "Ollama did not return a template or Modelfile for this artifact. "
+                "Missing metadata remains unknown.",
+                "Faint", wrap=True,
+            ))
+        return card
+
+    def _show_text(self, title: str, content: str) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.resize(760, 560)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(18, 16, 18, 14)
+        layout.addWidget(label(title, "SectionTitle"))
+        viewer = QPlainTextEdit()
+        viewer.setReadOnly(True)
+        viewer.setPlainText(content or "Not reported by Ollama.")
+        layout.addWidget(viewer, 1)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        dialog.exec()
+
     def _benchmark_panel(self, name: str) -> QWidget:
         card = Card(margins=(17, 14, 17, 13))
         card.body.addWidget(SectionHeader(
@@ -504,6 +693,56 @@ class ModelCenterPage(QWidget):
                 payload["_path"] = str(path)
                 records.append(payload)
         return sorted(records, key=lambda item: str(item.get("completed_at") or ""))
+
+    def profile_missing(self) -> None:
+        if self._profile_all_worker is not None:
+            return
+        missing = [
+            model.name for model in self.context.models
+            if self.context.repository.get_profile(model.name, model.digest) is None
+        ]
+        if not missing:
+            self.context.notify("Every installed model already has a metadata profile.")
+            self.refresh()
+            return
+        self.profile_all_button.setEnabled(False)
+        self.profile_button.setEnabled(False)
+        self.progress.show()
+        self.context.set_state("planning", f"Profiling {len(missing)} installed models")
+        worker = FunctionWorker(
+            self.context.profiler.profile_inventory,
+            names=missing,
+            run_probes=False,
+            progress=lambda message: worker.signals.progress.emit(message),
+        )
+        self._profile_all_worker = worker
+        worker.signals.progress.connect(self.context.notify)
+        worker.signals.result.connect(self._profile_all_ready)
+        worker.signals.error.connect(self._operation_failed)
+        worker.signals.finished.connect(self._profile_all_finished)
+        self.context.pool.start(worker)
+
+    def _profile_all_ready(self, profiles: list[ModelProfile]) -> None:
+        for profile in profiles:
+            self.context.repository.save_profile(profile)
+        self.context.reload_profiles()
+        self.context.events.data_changed.emit("profiles")
+        self.context.set_state("complete", f"{len(profiles)} model profiles saved")
+        self.context.notify(
+            f"Created metadata profiles for {len(profiles)} installed models. "
+            "Empirical probes remain explicitly unassessed."
+        )
+        self.refresh()
+        self.render_selected()
+
+    def _profile_all_finished(self) -> None:
+        self.progress.hide()
+        self._profile_all_worker = None
+        self.profile_button.setEnabled(bool(self._selected))
+        self.refresh()
+        from PySide6.QtCore import QTimer
+
+        QTimer.singleShot(2600, lambda: self.context.set_state("standby", "Local intelligence ready"))
 
     def profile_selected(self) -> None:
         if not self._selected:
@@ -588,6 +827,18 @@ class ModelCenterPage(QWidget):
         destination.write_text(
             json.dumps(report.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8"
         )
+        profile = self.context.profile_for(report.model_name)
+        if profile is not None and profile.digest == report.model_digest:
+            summary = report.profile_summary()
+            operational = profile.operational if isinstance(profile.operational, dict) else {}
+            history = operational.get("benchmark_history")
+            history = list(history) if isinstance(history, list) else []
+            operational["benchmark_history"] = (history + [summary])[-12:]
+            operational["latest_benchmark"] = summary
+            profile.operational = operational
+            self.context.repository.save_profile(profile)
+            self.context.reload_profiles()
+            self.context.events.data_changed.emit("profiles")
         self.context.set_state("complete", f"Benchmark completed for {report.model_name}")
         self.context.notify(f"Benchmark saved · {report.score:.0f}/100 · {destination.name}")
         self.render_selected()

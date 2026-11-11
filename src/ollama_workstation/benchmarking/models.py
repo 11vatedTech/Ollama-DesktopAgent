@@ -86,6 +86,32 @@ class BenchmarkRun:
             if self.total_attempts else 0.0
         )
 
+    def profile_summary(self) -> dict[str, Any]:
+        """Return the bounded evidence attached to a model profile.
+
+        The full report remains an immutable JSON artifact. This summary is
+        intentionally small enough to keep routing decisions explainable and
+        fast, while preserving the suite/digest/manifest binding.
+        """
+        speeds = [
+            case.mean_generation_tokens_per_second for case in self.cases
+            if case.mean_generation_tokens_per_second is not None
+        ]
+        return {
+            "run_id": self.run_id,
+            "suite": f"{self.suite_id}@{self.suite_version}",
+            "manifest_sha256": self.manifest_sha256,
+            "model_digest": self.model_digest,
+            "score": self.score,
+            "passed": self.total_passed,
+            "attempts": self.total_attempts,
+            "mean_generation_tokens_per_second": (
+                sum(speeds) / len(speeds) if speeds else None
+            ),
+            "completed_at": self.completed_at,
+            "capabilities": sorted({case.capability for case in self.cases}),
+        }
+
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["total_attempts"] = self.total_attempts

@@ -289,7 +289,7 @@ class WorkforcePage(QWidget):
 
     def _build(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(26, 22, 26, 0)
+        root.setContentsMargins(26, 22, 26, 9)
         root.setSpacing(14)
         self.review_button = button("Review plan", variant="Primary", on_click=self.review_plan)
         self.run_button = button("Approve and execute", on_click=self.execute_plan)
@@ -304,9 +304,11 @@ class WorkforcePage(QWidget):
             actions=[self.new_agent_button, self.review_button, self.run_button, self.cancel_button],
         ))
         split = QSplitter(Qt.Orientation.Horizontal)
+        self.split = split
+        self._narrow_split: bool | None = None
         split.setChildrenCollapsible(False)
-        self.left_scroll = self._scroll_column(self._left_column(), minimum_width=430)
-        self.right_scroll = self._scroll_column(self._right_column(), minimum_width=270)
+        self.left_scroll = self._scroll_column(self._left_column(), minimum_width=380)
+        self.right_scroll = self._scroll_column(self._right_column(), minimum_width=230)
         split.addWidget(self.left_scroll)
         split.addWidget(self.right_scroll)
         split.setStretchFactor(0, 1)
@@ -455,6 +457,27 @@ class WorkforcePage(QWidget):
         self.context.events.compose_workforce.connect(self.compose_objective)
         self.context.events.theme_changed.connect(self._apply_motion)
         self._apply_motion()
+        self._apply_responsive_state()
+
+    def showEvent(self, event: Any) -> None:
+        super().showEvent(event)
+        self._apply_responsive_state()
+
+    def resizeEvent(self, event: Any) -> None:
+        super().resizeEvent(event)
+        self._apply_responsive_state()
+
+    def _apply_responsive_state(self) -> None:
+        if not hasattr(self, "split"):
+            return
+        narrow = self.width() < 700
+        if narrow == self._narrow_split:
+            return
+        self.split.setOrientation(
+            Qt.Orientation.Vertical if narrow else Qt.Orientation.Horizontal
+        )
+        self.split.setSizes([420, 260] if narrow else [860, 320])
+        self._narrow_split = narrow
 
     def _apply_motion(self) -> None:
         self.core.set_motion(
@@ -728,12 +751,29 @@ class WorkforcePage(QWidget):
         self.state_detail.setText(message[:180])
         if self._activity_id:
             self.context.activity.update(self._activity_id, message)
-        if kind.startswith("child_"):
-            self.context.set_state("executing", message)
-        elif kind == "workforce_approved":
-            self.context.set_state("delegating", "Approved · dispatching specialists")
+        task = self.plan.task_map().get(task_id) if self.plan and task_id else None
+        if kind == "workforce_approved":
+            self.context.set_state("workforce_delegation", "Approved · dispatching specialists")
         elif kind == "task_started":
-            self.context.set_state("delegating", f"Delegating {task_id}")
+            if task is not None and task.verdict_required:
+                self.context.set_state("verifying", f"Independent verification · {task_id}")
+            else:
+                self.context.set_state("workforce_delegation", f"Delegating {task_id}")
+        elif kind in {"child_tool_started", "child_tool_completed"}:
+            self.context.set_state("tool_execution", message)
+        elif kind == "child_thinking":
+            self.context.set_state("generating", message)
+        elif kind == "verification_recorded":
+            self.context.set_state("verifying", message)
+        elif kind in {"verification_failed", "verification_rejected"}:
+            self.context.set_state("error", message)
+        elif kind.startswith("child_"):
+            self.context.set_state("workforce_delegation", message)
+        elif kind == "workforce_completed":
+            self.context.set_state(
+                "complete" if "completed" in message.casefold() else "warning",
+                message,
+            )
         self._append_journal(kind, message)
 
     def _append_journal(self, kind: str, message: str) -> None:
@@ -768,7 +808,7 @@ class WorkforcePage(QWidget):
 
     def _run_failed(self, message: str) -> None:
         cancelled = self._cancel is not None and self._cancel.is_set()
-        self.context.set_state("standby" if cancelled else "warning",
+        self.context.set_state("standby" if cancelled else "error",
                                "Workforce cancelled" if cancelled else "Workforce failed")
         if not cancelled:
             QMessageBox.critical(self, "Workforce execution failed", message[:2400])

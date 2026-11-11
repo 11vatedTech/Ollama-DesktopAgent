@@ -103,41 +103,55 @@ class CommandCenterPage(QWidget):
         top.addWidget(Pill("LOCAL-FIRST", "violet"))
         top.addStretch(1)
         copy.addLayout(top)
-        title = label("Your intelligence environment, online.", "HeroTitle", wrap=True)
-        copy.addWidget(title)
+        self.hero_title = label("Your intelligence environment, online.", "HeroTitle", wrap=True)
+        copy.addWidget(self.hero_title)
         self.hero_copy = label(
             "Ollama is the inference floor. Model intelligence, specialist agents and every "
             "execution trace stay on this machine.",
             "HeroCopy",
             wrap=True,
         )
+        self.hero_copy.setMinimumWidth(0)
+        self.hero_copy.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
+        copy_widget.setMinimumWidth(0)
         copy.addWidget(self.hero_copy)
         copy.addSpacing(6)
 
-        stats = QHBoxLayout()
-        stats.setSpacing(22)
         self.stat_models = self._hero_stat("MODELS", "—", "installed locally")
         self.stat_gpu = self._hero_stat("GPU", "—", "runtime headroom")
         self.stat_active = self._hero_stat("ACTIVE", "0", "operations in flight")
         self.stat_attention = self._hero_stat("ATTENTION", "0", "items requiring review")
-        for stat in (self.stat_models, self.stat_gpu, self.stat_active, self.stat_attention):
-            stats.addWidget(stat)
-        stats.addStretch(1)
-        copy.addLayout(stats)
+        self.stats_widget = QWidget()
+        self.stats_grid = QGridLayout(self.stats_widget)
+        self.stats_grid.setContentsMargins(0, 0, 0, 0)
+        self.stats_grid.setHorizontalSpacing(22)
+        self.stats_grid.setVerticalSpacing(7)
+        self.stat_widgets = [
+            self.stat_models, self.stat_gpu, self.stat_active, self.stat_attention,
+        ]
+        copy.addWidget(self.stats_widget)
         copy.addSpacing(6)
 
-        quick = QHBoxLayout()
-        quick.setSpacing(8)
-        quick.addWidget(button("Start conversation", variant="Primary",
-                               on_click=lambda: self.context.navigate("chat")))
-        quick.addWidget(button("Profile a model", on_click=lambda: self.context.navigate("models")))
-        quick.addWidget(button("Compose workforce", on_click=lambda: self.context.navigate("workforce")))
-        quick.addStretch(1)
-        copy.addLayout(quick)
+        self.quick_widget = QWidget()
+        self.quick_grid = QGridLayout(self.quick_widget)
+        self.quick_grid.setContentsMargins(0, 0, 0, 0)
+        self.quick_grid.setHorizontalSpacing(8)
+        self.quick_grid.setVerticalSpacing(7)
+        self.quick_buttons = [
+            button("Start conversation", variant="Primary",
+                   on_click=lambda: self.context.navigate("chat")),
+            button("Profile a model", on_click=lambda: self.context.navigate("models")),
+            button("Compose workforce", on_click=lambda: self.context.navigate("workforce")),
+        ]
+        copy.addWidget(self.quick_widget)
         self.hero_copy_widget = copy_widget
         self.hero_grid.addWidget(self.core, 0, 0, Qt.AlignmentFlag.AlignVCenter)
         self.hero_grid.addWidget(copy_widget, 0, 1)
         self._hero_narrow: bool | None = None
+        self._layout_stats(4)
+        self._layout_quick(3)
         return hero
 
     @staticmethod
@@ -161,6 +175,26 @@ class CommandCenterPage(QWidget):
         widget._value.setText(value)  # type: ignore[attr-defined]
         if detail is not None:
             widget._detail.setText(detail)  # type: ignore[attr-defined]
+
+    def _layout_stats(self, columns: int) -> None:
+        for widget in self.stat_widgets:
+            self.stats_grid.removeWidget(widget)
+        for index in range(4):
+            self.stats_grid.setColumnStretch(index, 0)
+        for index, widget in enumerate(self.stat_widgets):
+            self.stats_grid.addWidget(widget, index // columns, index % columns)
+        for index in range(columns):
+            self.stats_grid.setColumnStretch(index, 1)
+
+    def _layout_quick(self, columns: int) -> None:
+        for widget in self.quick_buttons:
+            self.quick_grid.removeWidget(widget)
+        for index in range(3):
+            self.quick_grid.setColumnStretch(index, 0)
+        for index, widget in enumerate(self.quick_buttons):
+            self.quick_grid.addWidget(widget, index // columns, index % columns)
+        for index in range(columns):
+            self.quick_grid.setColumnStretch(index, 1)
 
     def _telemetry_grid(self) -> QGridLayout:
         self.telemetry_grid = QGridLayout()
@@ -277,13 +311,15 @@ class CommandCenterPage(QWidget):
             for index in range(3):
                 self.hero_grid.setColumnStretch(index, 0)
             if narrow:
+                # Put the human-readable brief before the large core at compact
+                # widths so the primary action is not pushed below the fold.
+                self.hero_grid.addWidget(self.hero_copy_widget, 0, 0)
                 self.hero_grid.addWidget(
-                    self.core, 0, 0, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop
+                    self.core, 1, 0, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop
                 )
-                self.hero_grid.addWidget(self.hero_copy_widget, 1, 0)
                 self.hero_grid.setColumnStretch(0, 1)
-                self.core.setMinimumSize(240, 240)
-                self.core.setMaximumSize(320, 320)
+                self.core.setMinimumSize(220, 220)
+                self.core.setMaximumSize(300, 300)
             else:
                 self.hero_grid.addWidget(self.core, 0, 0, Qt.AlignmentFlag.AlignVCenter)
                 self.hero_grid.addWidget(self.hero_copy_widget, 0, 1)
@@ -292,6 +328,20 @@ class CommandCenterPage(QWidget):
                 self.core.setMaximumWidth(390)
                 self.core.setMaximumHeight(16777215)
             self._hero_narrow = narrow
+        # The compact page must reflow its action rows on every resize, not just
+        # when the breakpoint changes. Otherwise a width captured at 1120 px
+        # remains fixed when the window later reaches 900 px.
+        available = max(280, self.width() - 150)
+        self.hero_copy_widget.setMaximumWidth(available if narrow else 16777215)
+        self.hero_copy_widget.setSizePolicy(
+            QSizePolicy.Policy.Ignored if narrow else QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Preferred,
+        )
+        self.hero_title.setMaximumWidth(available if narrow else 16777215)
+        self.hero_copy.setMaximumWidth(available if narrow else 16777215)
+        self.hero_copy.setMinimumWidth(0)
+        self._layout_stats(2 if narrow else 4)
+        self._layout_quick(2 if narrow else 3)
         self._layout_telemetry(3 if narrow else 5)
         self._layout_lower(2 if narrow else 3)
 
@@ -333,7 +383,14 @@ class CommandCenterPage(QWidget):
         self.online_pill.set_tone("green" if online else "red")
         count = len(self.context.models)
         profile_count = len(self.context.profiles)
-        self._set_hero_stat(self.stat_models, str(count), f"{profile_count} profiled")
+        empirical_count = sum(
+            1 for profile in self.context.profiles
+            if any(item.status in {"passed", "partial", "failed"}
+                   for item in profile.capabilities)
+        )
+        self._set_hero_stat(
+            self.stat_models, str(count), f"{profile_count} metadata profiles"
+        )
         gpus = self.context.telemetry.get("nvidia_gpus") or []
         if gpus:
             gpu = gpus[0]
@@ -343,7 +400,8 @@ class CommandCenterPage(QWidget):
                 f"{gpu.get('memory_free_mib') or '—'} MiB free",
             )
         self.hero_copy.setText(
-            f"{count} local model(s) discovered. {profile_count} carry an evidence-backed profile. "
+            f"{count} local models discovered. {profile_count} metadata profiles; "
+            f"{empirical_count} with empirical capability evidence. "
             "Every action below is executed on this machine."
             if online else
             "Ollama is not answering at the configured endpoint. Local records remain available; "

@@ -33,6 +33,14 @@ PAGE_ORDER = (
     "settings",
 )
 
+MATRIX_SIZES = (
+    (1280, 800),
+    (1024, 768),
+    (900, 700),
+)
+
+MATRIX_PAGES = ("command", "chat", "models", "workforce")
+
 
 class GalleryCapture:
     def __init__(self, output: Path) -> None:
@@ -44,6 +52,8 @@ class GalleryCapture:
         self.original_page = self.window.settings.last_page
         self.index = 0
         self.narrow_index = 0
+        self.matrix_size_index = 0
+        self.matrix_page_index = 0
 
     def start(self) -> None:
         QTimer.singleShot(7000, self._begin)
@@ -60,12 +70,19 @@ class GalleryCapture:
     def _prepare_demo_pages(self) -> None:
         """Put read-only, genuine data on otherwise quiet pages for the gallery."""
         model_page = self.window.pages["models"]
-        profiled = next(
-            (
-                model for model in self.window.context.models
-                if self.window.context.profile_for(model.name) is not None
-            ),
-            None,
+        def evidence_score(model: object) -> int:
+            profile = self.window.context.profile_for(getattr(model, "name", ""))
+            if profile is None:
+                return -1
+            return sum(
+                1 for item in profile.capabilities
+                if item.status in {"passed", "partial", "failed"}
+            )
+
+        profiled = max(
+            self.window.context.models,
+            key=evidence_score,
+            default=None,
         )
         if profiled is not None:
             model_page._select_name(profiled.name)
@@ -117,7 +134,35 @@ class GalleryCapture:
             self.narrow_index = 2
             QTimer.singleShot(120, lambda: self._capture_compact("workforce"))
             return
-        self._finish()
+        self._capture_matrix_size()
+
+    def _capture_matrix_size(self) -> None:
+        if self.matrix_size_index >= len(MATRIX_SIZES):
+            self._finish()
+            return
+        width, height = MATRIX_SIZES[self.matrix_size_index]
+        self.matrix_page_index = 0
+        self.window.resize(width, height)
+        QTimer.singleShot(650, self._capture_matrix_page)
+
+    def _capture_matrix_page(self) -> None:
+        width, height = MATRIX_SIZES[self.matrix_size_index]
+        key = MATRIX_PAGES[self.matrix_page_index]
+        self.window.navigate(key, persist=False)
+        QTimer.singleShot(520, lambda: self._save_matrix_page(width, height, key))
+
+    def _save_matrix_page(self, width: int, height: int, key: str) -> None:
+        path = self.output / f"windows-{width}x{height}-{key}.png"
+        image = self.window.grab()
+        if not image.save(str(path), "PNG"):
+            raise RuntimeError(f"Could not save {path}")
+        print(f"captured matrix {width}x{height} {key} -> {path.name} ({image.width()}x{image.height()})")
+        self.matrix_page_index += 1
+        if self.matrix_page_index < len(MATRIX_PAGES):
+            QTimer.singleShot(120, self._capture_matrix_page)
+            return
+        self.matrix_size_index += 1
+        QTimer.singleShot(120, self._capture_matrix_size)
 
     def _finish(self) -> None:
         page = self.window.pages["command"]
@@ -148,7 +193,10 @@ def main() -> int:
     gallery = GalleryCapture(args.output)
     gallery.start()
     app.exec()
-    print(f"gallery complete: {len(PAGE_ORDER)} desktop, 3 compact")
+    print(
+        f"gallery complete: {len(PAGE_ORDER)} desktop, 3 compact, "
+        f"{len(MATRIX_SIZES) * len(MATRIX_PAGES)} responsive"
+    )
     return 0
 
 

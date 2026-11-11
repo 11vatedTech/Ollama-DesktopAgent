@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 from ollama_workstation.models.model_intelligence import inspect_ollama_model
-from ollama_workstation.models.routing import ModelRouter, NoEligibleModel, RoutingRequest
+from ollama_workstation.models.routing import (
+    ModelRouter,
+    NoEligibleModel,
+    RoutingRequest,
+    infer_task_capabilities,
+)
 from ollama_workstation.models.schemas import CapabilityResult, ModelProfile, ModelRef
 
 HOST = {
@@ -123,6 +128,50 @@ def test_router_speed_priority_and_preferred_fallback_chain() -> None:
     assert len(decision.fallback_chain) == 2
     assert decision.selected is not None
     assert decision.selected.model_name in {"fast:7b", "slow:7b"}
+
+
+def test_preferred_capabilities_rank_without_hard_filtering() -> None:
+    coder, coder_intel = model("coder:7b", capabilities=["completion"])
+    general, general_intel = model("general:7b", capabilities=["completion"])
+    profiles = [
+        profile("coder:7b", CapabilityResult("code_generation", "passed", 95, 0.9)),
+        profile("general:7b", CapabilityResult("reasoning", "passed", 95, 0.9)),
+    ]
+    decision = ModelRouter().rank(
+        [general, coder],
+        request=RoutingRequest(preferred_capabilities=("code_generation",)),
+        profiles=profiles,
+        intelligence={"coder:7b": coder_intel, "general:7b": general_intel},
+        host=HOST,
+    )
+    assert decision.selected is not None
+    assert decision.selected.model_name == "coder:7b"
+    assert decision.selected.details["preferred_observed"] == ["code_generation"]
+    assert len(decision.fallback_chain) == 2
+
+
+def test_task_inference_returns_soft_capability_hints() -> None:
+    assert "code_generation" in infer_task_capabilities("Refactor this Python bug and add tests")
+    assert "structured_output" in infer_task_capabilities("Extract the record into strict JSON")
+    assert "vision" in infer_task_capabilities("Inspect this screenshot")
+    assert infer_task_capabilities("Say hello") == ()
+
+
+def test_benchmark_profile_evidence_influences_quality_and_speed() -> None:
+    fast, fast_intel = model("bench:7b", size=3_000_000_000)
+    p = profile("bench:7b")
+    p.operational["latest_benchmark"] = {
+        "score": 88.0,
+        "mean_generation_tokens_per_second": 42.0,
+    }
+    route = ModelRouter().rank(
+        [fast], request=RoutingRequest(), profiles=[p],
+        intelligence={"bench:7b": fast_intel}, host=HOST,
+    ).selected
+    assert route is not None
+    assert route.quality == 88.0
+    assert route.speed_tokens_per_second == 42.0
+    assert route.details["declared_only"] is True
 
 
 def test_no_eligible_model_exposes_explanations() -> None:

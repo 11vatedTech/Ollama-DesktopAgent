@@ -45,7 +45,7 @@ It returns exit code 2 when Ollama is unhealthy or SQLite integrity fails.
 Environment:
 
 - Windows 11, Python 3.12.13
-- Ollama 0.40.15, 15 installed models
+- Ollama 0.40.16, 15 installed models
 - NVIDIA GeForce RTX 5070 Ti Laptop GPU, 12 GiB VRAM
 - Local SSD; no network model calls in the microbenchmarks
 
@@ -65,9 +65,12 @@ controlled benchmark.
 | 64 concurrent checkpoint writes, 8 threads | 500.31 ms total | max worker 498.89 ms |
 | Intelligence core paint, 410 × 410 offscreen | 5.43 ms median | 240 frames; mean 5.77 ms, p95 8.01 ms, max 9.84 ms; paint-only, not end-to-end FPS |
 
-The live three-agent delivery workflow took 17 seconds end-to-end in the same
-environment, including model inference, artifact writes and verification. See
-[Workforce orchestration](WORKFORCE.md) for the evidence and run ID.
+The live profiling and benchmark runs added latency consistent with local model
+inference rather than UI overhead: the two-repeat profile used 16 calls and
+averaged 44.22 tok/s; the two-repeat core benchmark scored 8/12. A CLI
+analysis workflow and a desktop `WorkforcePage` workflow both completed with
+`verification_passed=true`; their run IDs and the separate fail-closed run are
+recorded in [Workforce orchestration](WORKFORCE.md).
 
 ### Interpretation
 
@@ -82,17 +85,20 @@ environment, including model inference, artifact writes and verification. See
 
 ## Reliability checks
 
-- Full local test suite: Python 3.12.13 (164 passed, 4 skipped) and 3.11.15
-  (157 passed, 5 skipped).
-- Seven focused desktop UI tests pass offscreen; 12 native Windows captures were
-  visually inspected for the desktop and compact workspaces.
-- Static checks: Ruff and `compileall`.
+- Full local test suite on Python 3.12.13: **185 passed, 4 skipped**. Python 3.11
+  and fresh hosted coverage for this increment remain pending after push.
+- Ten focused desktop UI tests pass offscreen; 24 native Windows captures were
+  visually inspected across desktop, compact, 1280 × 800, 1024 × 768 and
+  900 × 700.
+- Static checks: Ruff and `compileall` pass.
 - Live provider tests: opt-in with `OLLAMA_LIVE=1`; metadata, chat and embeddings.
-- Live desktop checks: `qwen2.5-coder:7b` returned `STREAM_OK`, an active stream
-  stopped cleanly, and a three-task workforce run correctly failed closed when
-  its verifier returned `VERDICT: FAIL`.
+- Live desktop checks: `qwen2.5-coder:7b` returned `STREAM_OK` and an active
+  stream stopped cleanly. CLI run `23dc040f-1aa3-40d1-882a-b3a2c7f6b6e0` and
+  desktop run `beee5cd1-342a-449b-994b-e47d3a53d9be` completed with
+  `verification_passed=true`; failure run
+  `fb65bbb1-064e-4be6-9937-a40c2d3acd30` correctly blocked a claimed write.
 - Real MCP stdio and Streamable HTTP integration tests remain part of the suite
   when the `mcp` extra is installed.
-- Hosted CI run 42977464138 passed all four matrix jobs (Ubuntu/Windows,
-  Python 3.11/3.12). The Windows jobs ran seven desktop UI tests; Ubuntu 3.12
-  reported 158 passed / 4 skipped in the full suite.
+- Hosted CI run 42977911248 passed all four matrix jobs at the previous pushed
+  head. This increment needs its own matrix result; do not infer it from the
+  earlier run.

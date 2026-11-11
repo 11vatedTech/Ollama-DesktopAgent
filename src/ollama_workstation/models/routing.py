@@ -25,6 +25,7 @@ class NoEligibleModel(RuntimeError):
 @dataclass(frozen=True, slots=True)
 class RoutingRequest:
     required_capabilities: tuple[str, ...] = ()
+    preferred_capabilities: tuple[str, ...] = ()
     context_tokens: int = 0
     minimum_quality: float = 0.0
     require_verified: bool = False
@@ -109,6 +110,34 @@ _DECLARED_TO_CAPABILITY = {
     "embedding": "embedding",
 }
 
+_TASK_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (("code", "python", "typescript", "javascript", "refactor", "bug", "test",
+      "function", "repository", "compile", "debug"), ("code_generation", "code_comprehension")),
+    (("json", "schema", "structured", "extract", "fields"), ("structured_output",)),
+    (("tool", "api", "function call", "mcp", "search the web"), ("tool_calling",)),
+    (("image", "vision", "screenshot", "photo", "diagram"), ("vision",)),
+    (("plan", "workflow", "dependency", "steps", "orchestrate"), ("planning",)),
+    (("reason", "prove", "logic", "compare", "analyze", "analyse"), ("reasoning",)),
+    (("summarize", "summary", "condense", "abstract"), ("summarization",)),
+    (("write", "draft", "rewrite", "copy", "story", "blog"), ("creative_writing",)),
+    (("context", "document", "long", "transcript", "whole file"), ("long_context",)),
+)
+
+
+def infer_task_capabilities(text: str) -> tuple[str, ...]:
+    """Infer soft capability preferences from a task without hard-filtering models.
+
+    These are routing hints, not benchmark claims. They raise the ranking of
+    models with observed or declared evidence but never make an otherwise
+    eligible local model impossible to select.
+    """
+    normalized = " ".join(str(text or "").casefold().split())
+    matches: list[str] = []
+    for terms, capabilities in _TASK_HINTS:
+        if any(term in normalized for term in terms):
+            matches.extend(capabilities)
+    return tuple(dict.fromkeys(matches))
+
 
 def _available_memory(host: dict[str, Any] | None) -> int | None:
     """Return the largest single usable memory pool, not a false GPU+RAM sum."""
@@ -177,6 +206,24 @@ def _profile_speed(profile: ModelProfile | None) -> float | None:
         speed = value.get("mean_generation_tokens_per_second")
         if isinstance(speed, (int, float)) and not isinstance(speed, bool) and speed > 0:
             return float(speed)
+    benchmark = profile.operational.get("latest_benchmark", {}) if isinstance(profile.operational, dict) else {}
+    if isinstance(benchmark, dict):
+        speed = benchmark.get("mean_generation_tokens_per_second")
+        if isinstance(speed, (int, float)) and not isinstance(speed, bool) and speed > 0:
+            return float(speed)
+    return None
+
+
+def _profile_benchmark_quality(profile: ModelProfile | None) -> float | None:
+    """Use a deterministic benchmark score only as a fallback quality signal."""
+    if profile is None or not isinstance(profile.operational, dict):
+        return None
+    benchmark = profile.operational.get("latest_benchmark")
+    if not isinstance(benchmark, dict):
+        return None
+    score = benchmark.get("score")
+    if isinstance(score, (int, float)) and not isinstance(score, bool):
+        return max(0.0, min(100.0, float(score)))
     return None
 
 
@@ -197,13 +244,20 @@ class ModelRouter:
         normalized_required = tuple(
             dict.fromkeys(_CAPABILITY_ALIASES.get(item, item) for item in request.required_capabilities)
         )
+        normalized_preferred = tuple(
+            dict.fromkeys(
+                _CAPABILITY_ALIASES.get(item, item)
+                for item in request.preferred_capabilities
+            )
+        )
         candidates: list[ModelRoute] = []
         for model in models:
             profile = profile_map.get(model.name)
             intel = (intelligence or {}).get(model.name)
             candidates.append(
                 self._evaluate(
-                    model, profile, intel, request, normalized_required, available
+                    model, profile, intel, request, normalized_required,
+                    normalized_preferred, available,
                 )
             )
         candidates.sort(key=lambda item: (item.eligible, item.score), reverse=True)
@@ -228,6 +282,7 @@ class ModelRouter:
         intelligence: ModelIntelligence | None,
         request: RoutingRequest,
         required: tuple[str, ...],
+        preferred: tuple[str, ...],
         available: int | None,
     ) -> ModelRoute:
         if model.name in request.excluded_models:
@@ -323,7 +378,7 @@ class ModelRouter:
         elif required and all(capability in declared for capability in required):
             quality = 55.0
         else:
-            quality = 60.0
+            quality = _profile_benchmark_quality(profile) or 60.0
         if profile is not None and profile.overall_reliability is not None:
             quality = 0.7 * quality + 0.3 * (profile.overall_reliability * 100.0)
         if quality < request.minimum_quality:
@@ -355,6 +410,16 @@ class ModelRouter:
             + 0.10 * context_fit
             + 0.10 * resource_fit
         )
+        preferred_observed = [
+            capability for capability in preferred
+            if _effective_score(_capability_result(profile, capability)) is not None
+        ]
+        preferred_declared = [
+            capability for capability in preferred
+            if capability in declared and capability not in preferred_observed
+        ]
+        if preferred_observed or preferred_declared:
+            score += min(8.0, 2.0 * len(preferred_observed) + 1.0 * len(preferred_declared))
         if speed_weight:
             score = score * (1.0 - 0.25 * speed_weight) + 25.0 * speed_weight * speed_fit
         if model.name in request.preferred_models:
@@ -367,6 +432,10 @@ class ModelRouter:
             reason += "; memory estimate unavailable"
         if speed is None:
             reason += "; latency profile unavailable"
+        if preferred_observed:
+            reason += "; preferred evidence: " + ", ".join(preferred_observed)
+        elif preferred_declared:
+            reason += "; preferred declared-only: " + ", ".join(preferred_declared)
         return ModelRoute(
             model.name, model.digest, True, score, reason,
             declared_capabilities=tuple(sorted(declared)),
@@ -384,5 +453,8 @@ class ModelRouter:
                 "speed_fit": speed_fit,
                 "coverage": coverage,
                 "declared_only": not observed_scores,
+                "preferred_capabilities": list(preferred),
+                "preferred_observed": preferred_observed,
+                "preferred_declared": preferred_declared,
             },
         )

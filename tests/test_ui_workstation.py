@@ -10,7 +10,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QThreadPool  # noqa: E402
+from PySide6.QtCore import Qt, QThreadPool  # noqa: E402
 from PySide6.QtGui import QImage  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
@@ -27,8 +27,15 @@ from ollama_workstation.config import AppPaths, Settings  # noqa: E402
 from ollama_workstation.ollama.client import OllamaClient  # noqa: E402
 from ollama_workstation.profiling.profiler import ModelProfiler  # noqa: E402
 from ollama_workstation.storage.repository import Repository  # noqa: E402
-from ollama_workstation.ui.formatting import render_markdown  # noqa: E402
-from ollama_workstation.ui.intelligence_core import IntelligenceCore, IntelligenceState  # noqa: E402
+from ollama_workstation.ui.components import PageHeader, button  # noqa: E402
+from ollama_workstation.ui.formatting import conversation_to_markdown, render_markdown  # noqa: E402
+from ollama_workstation.ui.intelligence_core import (  # noqa: E402
+    STATE_TRANSITIONS,
+    IntelligenceCore,
+    IntelligenceState,
+    coerce_state,
+    validate_transition,
+)
 from ollama_workstation.ui.pages.chat import ChatPage  # noqa: E402
 from ollama_workstation.ui.pages.command_center import CommandCenterPage  # noqa: E402
 from ollama_workstation.ui.pages.history import HistoryPage  # noqa: E402
@@ -139,6 +146,21 @@ def test_command_center_reflows_between_desktop_and_compact_widths(
     assert page._telemetry_columns == 3
     assert page._lower_columns == 2
     assert page.core.maximumWidth() <= 320
+    assert page.hero_copy_widget.width() <= page.width()
+    _dispose(page, qt_app)
+
+
+def test_model_intelligence_compact_split_is_vertical_and_fits_width(
+    qt_app: QApplication, context: AppContext
+) -> None:
+    page = ModelCenterPage(context)
+    page.setFixedSize(692, 700)
+    page.show()
+    QTest.qWait(30)
+    assert page.split.orientation() == Qt.Orientation.Vertical
+    assert page.detail_scroll.width() <= page.width()
+    assert page.detail_scroll.viewport().width() <= page.width()
+    assert page.model_list.minimumHeight() == 96
     _dispose(page, qt_app)
 
 
@@ -184,7 +206,43 @@ def test_intelligence_core_renders_every_state_and_honors_reduced_motion(
     assert core._timer.interval() == 750
     core.set_motion(reduced=False, intensity=0.9)
     assert core._timer.interval() == 16
+    assert coerce_state("executing") is IntelligenceState.TOOL_EXECUTION
+    assert coerce_state("delegating") is IntelligenceState.WORKFORCE_DELEGATION
+    assert validate_transition(IntelligenceState.STANDBY, IntelligenceState.VERIFYING)
+    assert IntelligenceState.GENERATING in STATE_TRANSITIONS[IntelligenceState.THINKING]
     core.close()
+
+
+def test_page_header_stacks_actions_instead_of_clipping() -> None:
+    header = PageHeader(
+        "test", "Responsive heading", "A subtitle that remains readable.",
+        actions=[button("Primary action"), button("Secondary action"), button("More")],
+    )
+    header.resize(1200, 120)
+    header.show()
+    QApplication.processEvents()
+    assert not header._stacked
+    header.resize(700, 180)
+    QApplication.processEvents()
+    assert header._stacked
+    header.close()
+
+
+def test_conversation_export_is_escaped_and_preserves_artifact_refs() -> None:
+    rendered = conversation_to_markdown(
+        "Test session",
+        [
+            {"role": "user", "content": "Inspect <unsafe>"},
+            {"role": "assistant", "content": "Created result", "status": "completed",
+             "artifacts": ["results/out.md"]},
+        ],
+        model="qwen2.5-coder:7b",
+    )
+    assert "# Test session" in rendered
+    assert "## User" in rendered
+    assert "Inspect <unsafe>" in rendered
+    assert "results/out.md" in rendered
+    assert "qwen2.5-coder:7b" in rendered
 
 
 def test_markdown_escapes_untrusted_html_and_never_emits_javascript_links() -> None:

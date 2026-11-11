@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased — Intelligence Interface 2.0 verification
+
+- Added `profile-all` and robust inventory-wide metadata profiles: all 15 live Ollama artifacts have persistent profiles; metadata-only profiles explicitly mark capabilities unassessed and survive a single metadata-inspection failure.
+- Added model benchmark evidence to profiles and routing. `benchmark` and the Model Intelligence page persist a bounded latest/history summary tied to the suite manifest and model digest; routing can use benchmark quality/speed as a fallback and prompt-derived preferred capabilities as soft ranking signals.
+- Reworked workforce verification around host-owned immutable manifests and a typed `11vated-verifier/1` contract. The verifier receives read-only tools, the host validates every cited path/digest, writes the audit itself, and fail-closes on tamper, missing/empty artifacts, malformed evidence, timeouts or substantive FAIL.
+- Added one provider-enforced schema formatting pass when a verifier returns prose, plus a narrow host-authority rule for factual “missing/empty” claims contradicted by the manifest. The raw model verdict, contradiction, manifest and host decision remain visible in `workforce/verification.json`.
+- Added adversarial verifier tests for fabricated references, missing evidence, malformed JSON, mutation after snapshot, contradictory FAIL, read-only enforcement and bounded failures.
+- Improved responsive behavior: Command hero and action/stat rows reflow, Model Intelligence becomes a vertical inventory/dossier split below 880 px, and status pills wrap. Captured and inspected 24 native Windows screenshots at desktop, compact, 1280 × 800, 1024 × 768 and 900 × 700.
+- Added chat user-message editing with branch-before-message behavior, branch/export controls and clearer artifact inspection.
+- Expanded intelligence-core state mapping and canonical aliases; removed legacy aliases that could disagree with the formal state set.
+- Live local evidence: Ollama 0.40.16, 15 models; `qwen2.5-coder:7b` empirical profile (16 probes, 44.22 tok/s mean), core benchmark 8/12 (66.67) with manifest `9e68732a7f0a648ab6cfaa6584d897be1abed8bbb32de59142a8eead52947f79`; CLI run `23dc040f-1aa3-40d1-882a-b3a2c7f6b6e0` and desktop run `beee5cd1-342a-449b-994b-e47d3a53d9be` completed with `verification_passed=true`; failure run `fb65bbb1-064e-4be6-9937-a40c2d3acd30` correctly blocked a claimed write that never occurred.
+- Full local suite: 185 passed, 4 skipped; 10 focused UI tests; Ruff and `compileall` clean. Fresh hosted CI for this increment remains pending.
+
 ## 0.2.0.dev0 — 2026-11-10
 
 Development increment on the 0.1.0 foundation. This is a pre-release engineering branch and is not production-certified.

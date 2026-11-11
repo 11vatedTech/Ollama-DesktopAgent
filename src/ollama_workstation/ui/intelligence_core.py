@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 import random
+import time
 from enum import StrEnum
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer
@@ -33,11 +34,15 @@ class IntelligenceState(StrEnum):
     THINKING = "thinking"
     PLANNING = "planning"
     ROUTING = "routing"
-    EXECUTING = "executing"
-    DELEGATING = "delegating"
+    GENERATING = "generating"
+    TOOL_EXECUTION = "tool_execution"
+    WORKFORCE_DELEGATION = "workforce_delegation"
     AWAITING_APPROVAL = "awaiting_approval"
+    VERIFYING = "verifying"
     COMPLETE = "complete"
     WARNING = "warning"
+    ERROR = "error"
+    DISCONNECTED = "disconnected"
 
 
 STATE_META: dict[IntelligenceState, tuple[str, str, str]] = {
@@ -46,21 +51,118 @@ STATE_META: dict[IntelligenceState, tuple[str, str, str]] = {
     IntelligenceState.THINKING: ("THINKING", "Reasoning through the request", COLORS["cyan"]),
     IntelligenceState.PLANNING: ("PLANNING", "Structuring the task", COLORS["violet"]),
     IntelligenceState.ROUTING: ("ROUTING", "Selecting local intelligence", COLORS["blue"]),
-    IntelligenceState.EXECUTING: ("EXECUTING", "Tool and model activity", COLORS["cyan"]),
-    IntelligenceState.DELEGATING: ("DELEGATING", "Coordinating specialist agents", COLORS["violet"]),
+    IntelligenceState.GENERATING: ("GENERATING", "Streaming local model output", COLORS["cyan"]),
+    IntelligenceState.TOOL_EXECUTION: ("TOOL EXECUTION", "Host-authorized tool activity", COLORS["cyan"]),
+    IntelligenceState.WORKFORCE_DELEGATION: (
+        "DELEGATING", "Coordinating specialist agents", COLORS["violet"],
+    ),
     IntelligenceState.AWAITING_APPROVAL: (
         "AWAITING APPROVAL",
         "Human decision required",
         COLORS["amber"],
     ),
+    IntelligenceState.VERIFYING: ("VERIFYING", "Independent evidence checks", COLORS["blue"]),
     IntelligenceState.COMPLETE: ("COMPLETE", "Verified activity finished", COLORS["green"]),
     IntelligenceState.WARNING: ("ATTENTION", "A condition needs review", COLORS["red"]),
+    IntelligenceState.ERROR: ("ERROR", "An operational boundary failed", COLORS["red"]),
+    IntelligenceState.DISCONNECTED: ("DISCONNECTED", "Local runtime is unavailable", COLORS["muted"]),
+}
+
+# The visual state graph is intentionally broad enough to accept asynchronous
+# provider/tool events, but invalid transitions remain observable in tests and
+# accessibility metadata instead of being silently invented as progress.
+STATE_TRANSITIONS: dict[IntelligenceState, frozenset[IntelligenceState]] = {
+    IntelligenceState.STANDBY: frozenset({
+        IntelligenceState.LISTENING, IntelligenceState.THINKING,
+        IntelligenceState.PLANNING, IntelligenceState.ROUTING,
+        IntelligenceState.GENERATING, IntelligenceState.TOOL_EXECUTION,
+        IntelligenceState.WORKFORCE_DELEGATION, IntelligenceState.AWAITING_APPROVAL,
+        IntelligenceState.VERIFYING, IntelligenceState.COMPLETE,
+        IntelligenceState.WARNING, IntelligenceState.ERROR,
+        IntelligenceState.DISCONNECTED,
+    }),
+    IntelligenceState.LISTENING: frozenset({
+        IntelligenceState.THINKING, IntelligenceState.GENERATING,
+        IntelligenceState.STANDBY, IntelligenceState.ERROR,
+    }),
+    IntelligenceState.THINKING: frozenset({
+        IntelligenceState.PLANNING, IntelligenceState.ROUTING,
+        IntelligenceState.GENERATING, IntelligenceState.TOOL_EXECUTION,
+        IntelligenceState.WORKFORCE_DELEGATION, IntelligenceState.AWAITING_APPROVAL,
+        IntelligenceState.VERIFYING, IntelligenceState.COMPLETE,
+        IntelligenceState.WARNING, IntelligenceState.ERROR, IntelligenceState.STANDBY,
+    }),
+    IntelligenceState.PLANNING: frozenset({
+        IntelligenceState.ROUTING, IntelligenceState.GENERATING,
+        IntelligenceState.TOOL_EXECUTION, IntelligenceState.WORKFORCE_DELEGATION,
+        IntelligenceState.AWAITING_APPROVAL, IntelligenceState.STANDBY,
+        IntelligenceState.WARNING, IntelligenceState.ERROR,
+    }),
+    IntelligenceState.ROUTING: frozenset({
+        IntelligenceState.GENERATING, IntelligenceState.TOOL_EXECUTION,
+        IntelligenceState.WORKFORCE_DELEGATION, IntelligenceState.WARNING,
+        IntelligenceState.ERROR, IntelligenceState.STANDBY,
+    }),
+    IntelligenceState.GENERATING: frozenset({
+        IntelligenceState.TOOL_EXECUTION, IntelligenceState.VERIFYING,
+        IntelligenceState.COMPLETE, IntelligenceState.WARNING,
+        IntelligenceState.ERROR, IntelligenceState.STANDBY,
+    }),
+    IntelligenceState.TOOL_EXECUTION: frozenset({
+        IntelligenceState.GENERATING, IntelligenceState.VERIFYING,
+        IntelligenceState.WORKFORCE_DELEGATION, IntelligenceState.COMPLETE,
+        IntelligenceState.WARNING, IntelligenceState.ERROR, IntelligenceState.STANDBY,
+    }),
+    IntelligenceState.WORKFORCE_DELEGATION: frozenset({
+        IntelligenceState.TOOL_EXECUTION, IntelligenceState.VERIFYING,
+        IntelligenceState.AWAITING_APPROVAL, IntelligenceState.COMPLETE,
+        IntelligenceState.WARNING, IntelligenceState.ERROR, IntelligenceState.STANDBY,
+    }),
+    IntelligenceState.AWAITING_APPROVAL: frozenset({
+        IntelligenceState.WORKFORCE_DELEGATION, IntelligenceState.TOOL_EXECUTION,
+        IntelligenceState.GENERATING, IntelligenceState.WARNING,
+        IntelligenceState.ERROR, IntelligenceState.STANDBY,
+    }),
+    IntelligenceState.VERIFYING: frozenset({
+        IntelligenceState.COMPLETE, IntelligenceState.WARNING,
+        IntelligenceState.ERROR, IntelligenceState.STANDBY,
+    }),
+    IntelligenceState.COMPLETE: frozenset({
+        IntelligenceState.STANDBY, IntelligenceState.THINKING,
+        IntelligenceState.LISTENING, IntelligenceState.ERROR,
+        IntelligenceState.DISCONNECTED,
+    }),
+    IntelligenceState.WARNING: frozenset({
+        IntelligenceState.STANDBY, IntelligenceState.THINKING,
+        IntelligenceState.ERROR, IntelligenceState.DISCONNECTED,
+    }),
+    IntelligenceState.ERROR: frozenset({
+        IntelligenceState.STANDBY, IntelligenceState.DISCONNECTED,
+        IntelligenceState.THINKING,
+    }),
+    IntelligenceState.DISCONNECTED: frozenset({
+        IntelligenceState.STANDBY, IntelligenceState.ERROR,
+    }),
+}
+
+_STATE_ALIASES = {
+    "executing": IntelligenceState.TOOL_EXECUTION,
+    "delegating": IntelligenceState.WORKFORCE_DELEGATION,
 }
 
 
+def validate_transition(current: IntelligenceState, target: IntelligenceState) -> bool:
+    """Return whether an event boundary is valid in the declared state graph."""
+    return current is target or target in STATE_TRANSITIONS.get(current, frozenset())
+
+
 def coerce_state(value: str | IntelligenceState) -> IntelligenceState:
+    if isinstance(value, IntelligenceState):
+        return _STATE_ALIASES.get(value.value, value)
+    if value in _STATE_ALIASES:
+        return _STATE_ALIASES[value]
     try:
-        return value if isinstance(value, IntelligenceState) else IntelligenceState(value)
+        return IntelligenceState(value)
     except ValueError:
         return IntelligenceState.STANDBY
 
@@ -85,6 +187,9 @@ class IntelligenceCore(QWidget):
         self._compact = compact
         self._caption = caption
         self._hover = False
+        self._quality = 1.0
+        self._frame_times: list[float] = []
+        self.last_transition_valid = True
         self.setMouseTracking(True)
         self.setAccessibleName("Intelligence core")
         self.setAccessibleDescription(
@@ -124,6 +229,7 @@ class IntelligenceCore(QWidget):
     ) -> None:
         next_state = coerce_state(state)
         changed = next_state is not self._state
+        self.last_transition_valid = validate_transition(self._state, next_state)
         self._state = next_state
         self._detail = detail.strip()
         self.setAccessibleDescription(
@@ -138,6 +244,18 @@ class IntelligenceCore(QWidget):
     @property
     def state(self) -> IntelligenceState:
         return self._state
+
+    @property
+    def frame_stats(self) -> dict[str, float]:
+        samples = sorted(self._frame_times[-120:])
+        if not samples:
+            return {"samples": 0.0, "mean_ms": 0.0, "p95_ms": 0.0, "quality": self._quality}
+        return {
+            "samples": float(len(samples)),
+            "mean_ms": sum(samples) / len(samples) * 1000.0,
+            "p95_ms": samples[min(len(samples) - 1, int(len(samples) * 0.95))] * 1000.0,
+            "quality": self._quality,
+        }
 
     def set_audio_level(self, level: float) -> None:
         self._audio_level = max(0.0, min(1.0, float(level)))
@@ -171,9 +289,12 @@ class IntelligenceCore(QWidget):
             IntelligenceState.ROUTING,
         }:
             speed *= 1.35
-        elif self._state is IntelligenceState.DELEGATING:
+        elif self._state is IntelligenceState.WORKFORCE_DELEGATION:
             speed *= 1.15
-        elif self._state in {IntelligenceState.COMPLETE, IntelligenceState.WARNING}:
+        elif self._state in {
+            IntelligenceState.COMPLETE, IntelligenceState.WARNING,
+            IntelligenceState.ERROR, IntelligenceState.DISCONNECTED,
+        }:
             speed *= 0.55
         self._phase = (self._phase + speed) % math.tau
         self.update()
@@ -195,6 +316,7 @@ class IntelligenceCore(QWidget):
         super().leaveEvent(event)  # type: ignore[arg-type]
 
     def paintEvent(self, _event: object) -> None:
+        started = time.perf_counter()
         painter = QPainter(self)
         painter.setRenderHints(
             QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform
@@ -216,22 +338,47 @@ class IntelligenceCore(QWidget):
         self._draw_orbits(painter, center, radius, accent_color, phase, intensity)
         self._draw_ticks(painter, center, radius, accent_color, phase)
         self._draw_particles(painter, center, radius, accent_color, phase, intensity)
-        if self._state is IntelligenceState.DELEGATING:
+        if self._state is IntelligenceState.WORKFORCE_DELEGATION:
             self._draw_delegation(painter, center, radius, accent_color, phase)
         if self._state is IntelligenceState.LISTENING:
             self._draw_waveform(painter, center, radius, accent_color, phase)
         self._draw_sphere(painter, center, radius, accent_color, phase)
-        if self._state in {IntelligenceState.EXECUTING, IntelligenceState.THINKING}:
+        if self._state in {
+            IntelligenceState.THINKING, IntelligenceState.TOOL_EXECUTION,
+            IntelligenceState.GENERATING, IntelligenceState.VERIFYING,
+        }:
             self._draw_energy_pulses(painter, center, radius, accent_color, phase)
+        if self._state in {IntelligenceState.TOOL_EXECUTION, IntelligenceState.VERIFYING}:
+            self._draw_scan_sweep(painter, center, radius, accent_color, phase)
         if self._state is IntelligenceState.AWAITING_APPROVAL:
             self._draw_approval_marker(painter, center, radius, accent_color, phase)
         if self._state is IntelligenceState.COMPLETE:
             self._draw_completion_marker(painter, center, radius, accent_color)
-        if self._state is IntelligenceState.WARNING:
+        if self._state in {IntelligenceState.WARNING, IntelligenceState.ERROR}:
             self._draw_warning_marker(painter, center, radius, accent_color)
+        if self._state is IntelligenceState.DISCONNECTED:
+            self._draw_disconnected_marker(painter, center, radius, accent_color)
         if self._caption:
             self._draw_caption(painter, rect, center, radius, label, accent_color)
         painter.end()
+        self._record_frame(time.perf_counter() - started)
+
+    def _record_frame(self, elapsed: float) -> None:
+        if self._reduced_motion:
+            return
+        self._frame_times.append(elapsed)
+        if len(self._frame_times) > 120:
+            self._frame_times = self._frame_times[-120:]
+        if len(self._frame_times) < 60:
+            return
+        ordered = sorted(self._frame_times)
+        p95 = ordered[int(len(ordered) * 0.95)]
+        if p95 > 0.015 and self._quality > 0.55:
+            self._quality = 0.55
+            self._timer.setInterval(24)
+        elif p95 < 0.008 and self._quality < 1.0:
+            self._quality = 1.0
+            self._timer.setInterval(16 if not self._reduced_motion else 750)
 
     def _draw_aura(
         self, painter: QPainter, center: QPointF, radius: float, accent: QColor
@@ -315,7 +462,9 @@ class IntelligenceCore(QWidget):
     ) -> None:
         painter.save()
         painter.translate(center)
-        for orbit, angle, speed, size, brightness in self._particles:
+        for index, (orbit, angle, speed, size, brightness) in enumerate(self._particles):
+            if self._quality < 0.8 and index % 2:
+                continue
             current = angle + phase * speed * (0.5 + intensity)
             x = math.cos(current) * radius * orbit
             y = math.sin(current) * radius * orbit * 0.66
@@ -424,6 +573,52 @@ class IntelligenceCore(QWidget):
         painter.setBrush(conical)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawEllipse(center, radius * 0.65, radius * 0.65)
+
+    def _draw_scan_sweep(
+        self,
+        painter: QPainter,
+        center: QPointF,
+        radius: float,
+        accent: QColor,
+        phase: float,
+    ) -> None:
+        painter.save()
+        clip = QPainterPath()
+        clip.addEllipse(center, radius * 0.69, radius * 0.69)
+        painter.setClipPath(clip)
+        progress = (phase * 0.28) % 1.0
+        y = center.y() - radius * 0.62 + progress * radius * 1.24
+        gradient = QRadialGradient(QPointF(center.x(), y), radius * 0.7)
+        gradient.setColorAt(0.0, with_alpha(accent.name(), 90))
+        gradient.setColorAt(0.55, with_alpha(accent.name(), 32))
+        gradient.setColorAt(1.0, with_alpha(accent.name(), 0))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(gradient)
+        painter.drawRect(QRectF(
+            center.x() - radius, y - radius * 0.16,
+            radius * 2, radius * 0.32,
+        ))
+        painter.setPen(QPen(with_alpha("#d9fbff", 145), 1.0))
+        painter.drawLine(
+            QPointF(center.x() - radius * 0.58, y),
+            QPointF(center.x() + radius * 0.58, y),
+        )
+        painter.restore()
+
+    def _draw_disconnected_marker(
+        self,
+        painter: QPainter,
+        center: QPointF,
+        radius: float,
+        accent: QColor,
+    ) -> None:
+        painter.save()
+        painter.translate(center)
+        painter.setPen(QPen(with_alpha(accent.name(), 190), max(1.5, radius * 0.018)))
+        length = radius * 0.12
+        painter.drawLine(QPointF(-length, -length), QPointF(length, length))
+        painter.drawLine(QPointF(length, -length), QPointF(-length, length))
+        painter.restore()
 
     def _draw_energy_pulses(
         self,

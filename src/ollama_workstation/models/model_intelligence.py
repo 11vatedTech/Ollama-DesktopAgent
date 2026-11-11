@@ -83,6 +83,10 @@ class ModelIntelligence:
     finetune: str = ""
     base_models: tuple[str, ...] = ()
     system_prompt: str = ""
+    template: str = ""
+    modelfile: str = ""
+    parent_model: str = ""
+    required_features: tuple[str, ...] = ()
     inventory_size_bytes: int = 0
     modified_at: str = ""
     resource_estimate: ModelResourceEstimate | None = None
@@ -115,6 +119,7 @@ class ModelIntelligence:
         payload["tags"] = list(self.tags)
         payload["languages"] = list(self.languages)
         payload["base_models"] = list(self.base_models)
+        payload["required_features"] = list(self.required_features)
         payload["evidence"] = [dict(item) for item in self.evidence]
         payload["limitations"] = list(self.limitations)
         payload["resource_estimate"] = (
@@ -129,7 +134,10 @@ class ModelIntelligence:
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> ModelIntelligence:
         values = dict(payload)
-        for key in ("declared_capabilities", "tags", "languages", "base_models"):
+        for key in (
+            "declared_capabilities", "tags", "languages", "base_models",
+            "required_features",
+        ):
             raw = values.get(key) or ()
             values[key] = tuple(str(item) for item in raw) if isinstance(raw, (list, tuple)) else ()
         values["evidence"] = tuple(
@@ -289,6 +297,10 @@ def inspect_ollama_model(
     bits = _quantization_bits(quantization)
     tags = _copy_strings(info.get("general.tags"))
     languages = _copy_strings(info.get("general.languages"))
+    required_features = _copy_strings(
+        show.get("requires") or show.get("required_features")
+        or info.get("general.required_features")
+    )
     base_models: list[str] = []
     for index in range(8):
         name = info.get(f"general.base_model.{index}.name")
@@ -334,6 +346,17 @@ def inspect_ollama_model(
          "source": "Ollama /api/show"},
         {"claim": "Declared capabilities", "value": list(capabilities),
          "level": "observed", "source": "Ollama /api/show capabilities"},
+        {"claim": "Artifact format", "value": str(details.get("format") or "unknown"),
+         "level": "observed", "source": "Ollama /api/show details.format"},
+        {"claim": "Template", "value": "reported" if show.get("template") else "not reported",
+         "level": "observed" if show.get("template") else "unknown",
+         "source": "Ollama /api/show template"},
+        {"claim": "Modelfile", "value": "reported" if show.get("modelfile") else "not reported",
+         "level": "observed" if show.get("modelfile") else "unknown",
+         "source": "Ollama /api/show modelfile"},
+        {"claim": "Parent model", "value": str(details.get("parent_model") or "none declared"),
+         "level": "observed" if details.get("parent_model") else "unknown",
+         "source": "Ollama /api/show details.parent_model"},
         {"claim": "Memory footprint", "value": estimate.total_bytes,
          "level": "inferred", "source": "Host estimate from artifact size and KV geometry"},
         {"claim": "Capability quality", "value": "not established by metadata", "level": "unknown",
@@ -367,6 +390,10 @@ def inspect_ollama_model(
         finetune=str(info.get("general.finetune") or ""),
         base_models=tuple(base_models),
         system_prompt=str(show.get("system") or "")[:4_000],
+        template=str(show.get("template") or "")[:20_000],
+        modelfile=str(show.get("modelfile") or "")[:50_000],
+        parent_model=str(details.get("parent_model") or ""),
+        required_features=required_features,
         inventory_size_bytes=model.size_bytes,
         modified_at=model.modified_at,
         resource_estimate=estimate,

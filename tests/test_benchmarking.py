@@ -96,6 +96,12 @@ def test_benchmark_runner_is_repeatable_and_records_a_hashed_manifest() -> None:
     assert report.cases[0].mean_generation_tokens_per_second == 20.0
     assert report.host["os"] == "test-host"
     assert report.to_dict()["score"] == 100.0
+    summary = report.profile_summary()
+    assert summary["score"] == 100.0
+    assert summary["suite"] == "11vated-core@1.0.0"
+    assert summary["manifest_sha256"] == report.manifest_sha256
+    assert summary["mean_generation_tokens_per_second"] == 20.0
+    assert "instruction_following" in summary["capabilities"]
 
 
 def test_benchmark_runner_redacts_output_preview_and_error_text(monkeypatch: pytest.MonkeyPatch) -> None:

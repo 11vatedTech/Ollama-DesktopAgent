@@ -1,9 +1,9 @@
 # 11vatedTech Intelligence Interface
 
-**Status:** Implemented, locally verified on Windows and covered by hosted CI.
-The interface is a PySide6/Qt client of the existing local application
-services. It is not production-certified; the limits of the current evidence are
-listed below.
+**Status:** Implemented and locally verified on Windows. This increment still
+needs a fresh hosted-CI result; the previous green CI run predates it. The
+interface is a PySide6/Qt client of the existing local application services. It
+is not production-certified; the limits of the current evidence are listed below.
 
 The desktop shell presents the workstation as nine coordinated workspaces. It
 uses a local-only visual language built from shared tokens and widgets, with a
@@ -50,8 +50,10 @@ not a completed screen-reader, switch-input, high-contrast or WCAG audit.
 | Advanced Chat | conversation rail, chat, context panel | context panel collapses; **Show context** restores it as a pinned panel |
 | Workforce Studio | left plan/graph/assignments and right state/roster/runs | both columns scroll independently; no page-level horizontal clipping |
 
-The breakpoints are 1050 px for Command Center and 1030 px for Chat. The gallery
-captures 1480 × 940 and 1120 × 720 logical windows.
+The breakpoints are 1050 px for Command Center, 1030 px for Chat and 880 px for
+the Model Intelligence split. The gallery also exercises 1280 × 800, 1024 × 768
+and 900 × 700 logical windows; at 900 px the Model inventory stacks above a
+scrollable dossier so no horizontal clipping is introduced.
 
 ## Workspaces
 
@@ -73,38 +75,39 @@ captures 1480 × 940 and 1120 × 720 logical windows.
 
 | Layer | Evidence | Result |
 |---|---|---|
-| Focused UI tests | `QT_QPA_PLATFORM=offscreen pytest tests/test_ui_workstation.py -q` | 7 passed |
-| Full suite, Python 3.12.13 | `pytest -q` | 164 passed, 4 skipped |
-| Full suite, Python 3.11.15 | `pytest -q` | 157 passed, 5 skipped |
+| Focused UI tests | `QT_QPA_PLATFORM=offscreen pytest tests/test_ui_workstation.py -q` | 10 passed |
+| Full suite, Python 3.12.13 | `pytest -q` | 185 passed, 4 skipped |
 | Static checks | Ruff and `compileall` over `src`, `tests` and the gallery script | passed |
-| Hosted CI | GitHub Actions run [42977464138](https://github.com/11vatedTech/Ollama-DesktopAgent/actions/runs/42977464138) | all four Windows/Ubuntu × Python 3.11/3.12 jobs passed; Windows UI job passed 7 tests |
-| Live local completion | `qwen2.5-coder:7b` through Advanced Chat, 15 models / Ollama 0.40.15 | returned `STREAM_OK`; persisted two messages |
-| Live cancellation | Chat request stopped after the first streamed token | UI reached `standby` / `Generation stopped`; Stop disabled; conversation persisted |
-| Bounded workforce | Delivery plan through Workforce Studio, `qwen2.5-coder:7b` | three tasks ran; verifier returned `VERDICT: FAIL`; host reported `verification_failed` and did not claim success |
-
-The workforce result is intentionally reported as a failure. The verifier wrote
-`workforce/verification.md` beginning with `VERDICT: FAIL` while claiming it
-could not find the file, so the host's fail-closed verdict was correct. This
-exercises the failure path; it is not evidence of a successful workforce run.
+| Hosted CI | GitHub Actions run [42977911248](https://github.com/11vatedTech/Ollama-DesktopAgent/actions/runs/42977911248) | previous pushed head: four Windows/Ubuntu × Python 3.11/3.12 jobs passed; current increment still needs its push/CI result |
+| Live local profile | `qwen2.5-coder:7b`, Ollama 0.40.16, two repeats per probe | 16 probe calls; 44.22 tok/s mean; reasoning/structured output/actions passed; vision and tool calling unsupported; code generation failed; long-context and other dimensions unassessed |
+| Live local benchmark | `qwen2.5-coder:7b`, `11vated-core@1.0.0`, two repeats | 8/12 passed, score 66.67, manifest `9e68732a…f79`; full profile now carries this benchmark summary |
+| Bounded workforce (CLI) | Analysis plan, `qwen2.5-coder:7b`, run `23dc040f-1aa3-40d1-882a-b3a2c7f6b6e0` | completed with `verification_passed=true`; prose verifier was schema-normalized; host audit recorded |
+| Bounded workforce (desktop) | Real `WorkforcePage`, run `beee5cd1-342a-449b-994b-e47d3a53d9be` | completed with `verification_passed=true`; audit recorded model verdict `FAIL`, host decision `PASS`, contradiction override `true` |
+| Workforce failure path | Desktop run `fb65bbb1-064e-4be6-9937-a40c2d3acd30` | analysis returned a completion claim without writing the artifact; host blocked verification and reported `verification_failed` |
 
 ### Visually inspected
 
-Twelve native Windows captures were generated and inspected:
+Twenty-four native Windows captures were generated and inspected:
 
 - desktop: Command Center, Chat, Model Intelligence, Workforce, Agent
   Operations, Integration Hub, System Laboratory, Run History, Settings;
-- compact: Command Center, Chat, Workforce.
+- compact: Command Center, Chat, Workforce;
+- responsive matrix: Command, Chat, Model Intelligence and Workforce at
+  1280 × 800, 1024 × 768 and 900 × 700.
 
 Confirmed in the final captures: all nine workspaces render with the shared
-shell; the Command Center and Chat reflow without horizontal clipping; Chat's
-context panel collapses; Workforce's two columns scroll vertically; selected
-run rows render two lines; Settings shows the effective `120` timeout, `12` step
-budget and workspace path; live inventory, one saved profile and host telemetry
-appear in the appropriate pages.
+shell; the Command Center reflows its stat and action rows without horizontal
+clipping; Chat's context panel collapses; Model Intelligence switches to a
+vertical inventory/dossier split at compact widths and the dossier status pills
+wrap; Workforce columns and the execution journal scroll; selected run rows
+render two lines; Settings shows the effective `120` timeout, `12` step budget
+and workspace path. Live inventory, 15 metadata profiles, one empirical profile
+and host telemetry appear in the appropriate pages.
 
-Not yet inspected: intermediate widths, 4K/high-DPI scaling beyond the host's
+Not visually or semantically verified: 4K/high-DPI scaling beyond the host's
 Windows scaling, light theme, screen readers, high-contrast mode, touch input,
-and clean Windows VM/client hardware.
+clean Windows VM/client hardware and exhaustive keyboard traversal. A native
+screenshot is visual evidence, not a certification of those surfaces.
 
 ### Performance
 
@@ -116,8 +119,9 @@ composition, other widgets and the user's GPU/driver are excluded.
 
 ## Screenshot gallery
 
-Desktop captures are 2220 × 1410 pixels; compact captures are 1680 × 1080 pixels
-because Windows scales the 1480 × 940 and 1120 × 720 logical windows.
+Desktop captures are 2220 × 1410 pixels; compact captures are 1680 × 1080
+pixels because Windows scales the 1480 × 940 and 1120 × 720 logical windows.
+The responsive matrix adds 1920 × 1200, 1536 × 1152 and 1350 × 1050 captures.
 
 | Workspace | Desktop | Compact |
 |---|---|---|
@@ -130,6 +134,15 @@ because Windows scales the 1480 × 940 and 1120 × 720 logical windows.
 | System Laboratory | [view](../tests/screenshots/windows-laboratory.png) | — |
 | Run History | [view](../tests/screenshots/windows-history.png) | — |
 | Settings | [view](../tests/screenshots/windows-settings.png) | — |
+
+Responsive matrix: [Command 1280](../tests/screenshots/windows-1280x800-command.png),
+[Command 1024](../tests/screenshots/windows-1024x768-command.png),
+[Command 900](../tests/screenshots/windows-900x700-command.png),
+[Models 1280](../tests/screenshots/windows-1280x800-models.png),
+[Models 1024](../tests/screenshots/windows-1024x768-models.png),
+[Models 900](../tests/screenshots/windows-900x700-models.png),
+[Chat 900](../tests/screenshots/windows-900x700-chat.png),
+[Workforce 900](../tests/screenshots/windows-900x700-workforce.png).
 
 ## Reproduce
 

@@ -377,6 +377,15 @@ def build_parser() -> argparse.ArgumentParser:
     profile.add_argument("--metadata-only", action="store_true")
     profile.add_argument("--repeats", type=int, default=1, choices=range(1, 6),
                          help="Repeat each local smoke probe 1-5 times (more reliable, slower)")
+    profile_all = commands.add_parser(
+        "profile-all",
+        help="Create persistent profiles for every installed model",
+    )
+    profile_all.add_argument(
+        "--probes", action="store_true",
+        help="Run the full smoke probe suite for every model (slow and memory-intensive)",
+    )
+    profile_all.add_argument("--repeats", type=int, default=1, choices=range(1, 6))
     benchmark = commands.add_parser(
         "benchmark", help="Run a repeatable, independently scored local benchmark suite"
     )
@@ -479,6 +488,16 @@ def main(argv: list[str] | None = None) -> int:
             destination.parent.mkdir(parents=True, exist_ok=True)
             payload = json.dumps(report.to_dict(), indent=2, ensure_ascii=False)
             destination.write_text(payload, encoding="utf-8")
+            profile = repository.get_profile(args.model, model_ref.digest)
+            if profile is not None:
+                summary = report.profile_summary()
+                operational = profile.operational if isinstance(profile.operational, dict) else {}
+                history = operational.get("benchmark_history")
+                history = list(history) if isinstance(history, list) else []
+                operational["benchmark_history"] = (history + [summary])[-12:]
+                operational["latest_benchmark"] = summary
+                profile.operational = operational
+                repository.save_profile(profile)
             print(json.dumps({
                 "report": str(destination),
                 "run_id": report.run_id,
@@ -502,6 +521,36 @@ def main(argv: list[str] | None = None) -> int:
             (paths.profiles_dir / f"{safe}.json").write_text(
                 json.dumps(profile.to_dict(), indent=2), encoding="utf-8")
             print(json.dumps(profile.to_dict(), indent=2, ensure_ascii=False))
+            return 0
+        if args.command == "profile-all":
+            profiler = ModelProfiler(client, settings.keep_alive)
+            profiles = profiler.profile_inventory(
+                run_probes=args.probes,
+                progress=lambda message: print(message, file=sys.stderr),
+                repeats=args.repeats,
+            )
+            for profile in profiles:
+                repository.save_profile(profile)
+                safe = profile.model_name.replace("/", "_").replace(":", "_")
+                (paths.profiles_dir / f"{safe}.json").write_text(
+                    json.dumps(profile.to_dict(), indent=2), encoding="utf-8"
+                )
+            print(json.dumps({
+                "profiles": len(profiles),
+                "run_probes": bool(args.probes),
+                "models": [
+                    {
+                        "model": profile.model_name,
+                        "digest": profile.digest,
+                        "title": profile.professional_title,
+                        "assessed_capabilities": sum(
+                            1 for item in profile.capabilities
+                            if item.status != "not_assessed"
+                        ),
+                    }
+                    for profile in profiles
+                ],
+            }, indent=2, ensure_ascii=False))
             return 0
         if args.command == "research":
             if not settings.enable_remote_model_research:

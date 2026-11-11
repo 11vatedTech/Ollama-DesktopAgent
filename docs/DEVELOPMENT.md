@@ -56,7 +56,7 @@ python -m pytest tests/test_ui_workstation.py -q
 Remove-Item Env:QT_QPA_PLATFORM
 ```
 
-They cover all nine workspace constructors, Command and Chat responsive layout, every intelligence-core state and reduced-motion timer, Markdown escaping, conversation repository persistence, and effective Settings values. The Windows CI job installs the desktop extra and runs the same file after its import check.
+They cover all nine workspace constructors, Command/Chat responsive layout, the compact Model vertical split, every intelligence-core state and reduced-motion timer, Markdown escaping, conversation repository persistence, and effective Settings values. The current local result is 10 passed; the Windows CI job installs the desktop extra and runs the same file after its import check.
 
 Regenerate the native Windows gallery with Ollama running and at least one model installed:
 
@@ -64,7 +64,7 @@ Regenerate the native Windows gallery with Ollama running and at least one model
 python scripts/capture_ui_gallery.py --output tests/screenshots
 ```
 
-Use the native Windows Qt platform for gallery captures. The `offscreen` platform reports no font families on the current host. The script captures nine desktop pages, then resizes to the compact window and captures Command, Chat and Workforce. Review [Desktop Intelligence Interface](UI_INTERFACE.md) for the evidence matrix and known gaps.
+Use the native Windows Qt platform for gallery captures. The `offscreen` platform reports no font families on the current host. The script captures nine desktop pages, three compact views, and the 1280 × 800, 1024 × 768 and 900 × 700 responsive matrix for Command, Chat, Model Intelligence and Workforce. Review [Desktop Intelligence Interface](UI_INTERFACE.md) for the evidence matrix and known gaps.
 
 ## Manual Windows integration test
 

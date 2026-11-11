@@ -1,0 +1,99 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from ollama_workstation.agents.verification import (
+    ArtifactManifest,
+    StructuredVerdict,
+    VerificationProtocolError,
+    canonical_artifact_path,
+    validate_verdict_evidence,
+)
+
+
+def _verdict(evidence: list[dict[str, str]], verdict: str = "PASS") -> str:
+    return json.dumps({
+        "schema_version": 1,
+        "verdict": verdict,
+        "summary": "Observed evidence.",
+        "evidence": evidence,
+    })
+
+
+def test_manifest_hashes_and_detects_mutation(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "workforce" / "result.md"
+    target.parent.mkdir()
+    target.write_text("first", encoding="utf-8")
+    manifest = ArtifactManifest.build(workspace, ["workforce/result.md"])
+    assert manifest.files[0].sha256
+    assert manifest.verify_unchanged(workspace) == ()
+    target.write_text("other", encoding="utf-8")
+    errors = manifest.verify_unchanged(workspace)
+    assert errors and "digest changed" in errors[0]
+
+
+def test_manifest_rejects_escapes_and_missing_artifacts(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    for path in ("../outside.md", "/etc/passwd", "C:/Windows/win.ini", "~/.ssh/id_rsa"):
+        with pytest.raises(VerificationProtocolError):
+            canonical_artifact_path(path)
+    with pytest.raises(VerificationProtocolError, match="missing"):
+        ArtifactManifest.build(workspace, ["workforce/missing.md"])
+
+
+def test_structured_verdict_requires_schema_and_pass_evidence() -> None:
+    with pytest.raises(VerificationProtocolError, match="schema_version"):
+        StructuredVerdict.parse('{"verdict":"PASS","summary":"x","evidence":[]}')
+    with pytest.raises(VerificationProtocolError, match="evidence"):
+        StructuredVerdict.parse(_verdict([]))
+    with pytest.raises(VerificationProtocolError, match="JSON"):
+        StructuredVerdict.parse("VERDICT: PASS")
+    parsed = StructuredVerdict.parse(
+        "```json\n" + _verdict([
+            {"artifact": "workforce/result.md", "observation": "non-empty"},
+        ]) + "\n```"
+    )
+    assert parsed.verdict == "PASS"
+    assert parsed.evidence[0].artifact == "workforce/result.md"
+
+
+def test_evidence_must_cite_every_manifest_artifact(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "workforce").mkdir()
+    (workspace / "workforce" / "analysis.md").write_text("a", encoding="utf-8")
+    (workspace / "workforce" / "result.md").write_text("r", encoding="utf-8")
+    manifest = ArtifactManifest.build(
+        workspace, ["workforce/analysis.md", "workforce/result.md"]
+    )
+    only_one = StructuredVerdict.parse(_verdict([
+        {"artifact": "workforce/analysis.md", "observation": "a"},
+    ]))
+    errors = validate_verdict_evidence(only_one, manifest)
+    assert any("did not cite" in error for error in errors)
+    complete = StructuredVerdict.parse(_verdict([
+        {"artifact": "workforce/analysis.md", "observation": "a"},
+        {"artifact": "workforce/result.md", "observation": "r"},
+    ]))
+    assert validate_verdict_evidence(complete, manifest) == ()
+
+
+def test_evidence_sha_must_match_manifest(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    target = workspace / "result.txt"
+    target.write_text("content", encoding="utf-8")
+    manifest = ArtifactManifest.build(workspace, ["result.txt"])
+    parsed = StructuredVerdict.parse(_verdict([{
+        "artifact": "result.txt",
+        "observation": "content",
+        "sha256": "0" * 64,
+    }]))
+    errors = validate_verdict_evidence(parsed, manifest)
+    assert any("sha256" in error for error in errors)

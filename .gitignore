@@ -18,3 +18,5 @@ build/
 Thumbs.db
 .live-*/
 .test-logs/
+
+.artifacts/

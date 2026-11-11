@@ -175,6 +175,40 @@ def pretty_json(value: object) -> str:
     return json.dumps(value, indent=2, ensure_ascii=False, default=str)
 
 
+def conversation_to_markdown(
+    title: str,
+    messages: list[dict[str, object]],
+    *,
+    model: str = "",
+) -> str:
+    """Create a portable, local-only conversation export."""
+    lines = [f"# {title or 'Intelligence session'}", ""]
+    if model:
+        lines.extend([f"Model: `{model}`", ""])
+    lines.append(f"Messages: {len(messages)}")
+    lines.append("")
+    for message in messages:
+        role = str(message.get("role") or "assistant")
+        heading = "User" if role == "user" else "11vated Intelligence"
+        meta = " · ".join(
+            str(message[key]) for key in ("model", "mode", "status")
+            if message.get(key)
+        )
+        lines.append(f"## {heading}" + (f" · {meta}" if meta else ""))
+        lines.append("")
+        content = str(message.get("content") or "").strip()
+        if message.get("error"):
+            lines.append("> This message records a failed or stopped operation.")
+            lines.append("")
+        lines.append(content or "*No content recorded.*")
+        artifacts = message.get("artifacts")
+        if isinstance(artifacts, list) and artifacts:
+            lines.extend(["", "Artifacts:"])
+            lines.extend(f"- `{item}`" for item in artifacts)
+        lines.extend(["", "---", ""])
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def file_url(path: str) -> str:
     normalized = path.replace("\\", "/")
     if not normalized.startswith("/"):

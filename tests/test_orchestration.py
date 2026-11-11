@@ -53,15 +53,28 @@ def assignment(task_id: str, *, read_only: bool = False) -> AgentAssignment:
     return AgentAssignment(task_id, MODEL, make_profile(), read_only)
 
 
+def verdict(
+    evidence: list[dict[str, str]],
+    *,
+    outcome: str = "PASS",
+    summary: str = "The cited artifacts satisfy the acceptance criteria.",
+) -> str:
+    return json.dumps({
+        "schema_version": 1,
+        "verdict": outcome,
+        "summary": summary,
+        "evidence": evidence,
+        "confidence": 0.8,
+    })
+
+
 def test_analysis_plan_executes_dependency_order_and_verifier_verdict(tmp_path: Path) -> None:
     client = ScriptedClient([
         assistant(calls=[write_call("workforce/analysis.md", "Observed files.")]),
         assistant("Analysis written."),
-        assistant(calls=[write_call(
-            "workforce/verification.md",
-            "VERDICT: PASS\n\nanalysis.md contains observations.",
-        )]),
-        assistant("Verification written."),
+        assistant(verdict([
+            {"artifact": "workforce/analysis.md", "observation": "Observed files."},
+        ])),
     ])
     repository = Repository(tmp_path / "state.sqlite3")
     plan = WorkforcePlanner.analysis_plan("Document the workspace.")
@@ -90,8 +103,10 @@ def test_delivery_plan_requires_plan_and_task_approval(tmp_path: Path) -> None:
         assistant("analysis done"),
         assistant(calls=[write_call("workforce/result.md", "result")]),
         assistant("result done"),
-        assistant(calls=[write_call("workforce/verification.md", "VERDICT: PASS")]),
-        assistant("verified"),
+        assistant(verdict([
+            {"artifact": "workforce/analysis.md", "observation": "analysis"},
+            {"artifact": "workforce/result.md", "observation": "result"},
+        ])),
     ])
     result = WorkforceOrchestrator(client, None).run(
         WorkforcePlanner.delivery_plan("Implement the change."), tmp_path / "workspace",
@@ -126,7 +141,7 @@ def test_missing_artifact_fails_verification_without_claiming_completion(tmp_pat
         {"analyse": assignment("analyse"), "verify": assignment("verify")},
         approval=lambda _message: True,
     )
-    assert result.status == "failed"
+    assert result.status == "verification_failed"
     assert result.tasks[0].status == "verification_failed"
     assert result.tasks[0].verification[0]["passed"] is False
     assert result.tasks[1].status == "blocked"
@@ -149,11 +164,13 @@ def test_blocked_dependency_prevents_downstream_execution(tmp_path: Path) -> Non
     assert result.tasks[1].error and "dependency" in result.tasks[1].error.lower()
 
 
-def test_verifier_final_verdict_is_persisted_as_an_audit_artifact(tmp_path: Path) -> None:
+def test_verifier_structured_verdict_is_persisted_by_the_host(tmp_path: Path) -> None:
     client = ScriptedClient([
         assistant(calls=[write_call("workforce/analysis.md", "Observed files.")]),
         assistant("Analysis written."),
-        assistant("FINAL: VERDICT: PASS\n\nanalysis.md contains observations."),
+        assistant(verdict([
+            {"artifact": "workforce/analysis.md", "observation": "Observed files."},
+        ])),
     ])
     result = WorkforceOrchestrator(client, None).run(
         WorkforcePlanner.analysis_plan("Document the workspace."),
@@ -161,11 +178,187 @@ def test_verifier_final_verdict_is_persisted_as_an_audit_artifact(tmp_path: Path
         {"analyse": assignment("analyse"), "verify": assignment("verify")},
         approval=lambda _message: True,
     )
-    verification = tmp_path / "workspace" / "workforce" / "verification.md"
+    verification = tmp_path / "workspace" / "workforce" / "verification.json"
     assert result.status == "completed"
     assert result.tasks[1].verdict == "PASS"
     assert verification.is_file()
-    assert "VERDICT: PASS" in verification.read_text(encoding="utf-8")
+    payload = json.loads(verification.read_text(encoding="utf-8"))
+    assert payload["recorded_by"] == "host"
+    assert payload["verdict"]["verdict"] == "PASS"
+    assert payload["manifest"]["files"][0]["path"] == "workforce/analysis.md"
+    assert payload["host_checks"][0]["passed"] is True
+
+
+def test_verifier_pass_without_evidence_is_rejected(tmp_path: Path) -> None:
+    client = ScriptedClient([
+        assistant(calls=[write_call("workforce/analysis.md", "Observed files.")]),
+        assistant("Analysis written."),
+        assistant(verdict([], summary="Trust me.")),
+    ])
+    result = WorkforceOrchestrator(client, None).run(
+        WorkforcePlanner.analysis_plan("Document the workspace."),
+        tmp_path / "workspace",
+        {"analyse": assignment("analyse"), "verify": assignment("verify")},
+    )
+    assert result.status == "verification_failed"
+    assert result.tasks[1].status == "verification_failed"
+    assert result.tasks[1].verification[0]["kind"] == "structured_verdict"
+    assert "evidence" in result.tasks[1].verification[0]["detail"].lower()
+    assert not (tmp_path / "workspace" / "workforce" / "verification.json").exists()
+
+
+def test_verifier_fabricated_artifact_reference_is_rejected(tmp_path: Path) -> None:
+    client = ScriptedClient([
+        assistant(calls=[write_call("workforce/analysis.md", "Observed files.")]),
+        assistant("Analysis written."),
+        assistant(verdict([
+            {"artifact": "workforce/nonexistent.md", "observation": "invented"},
+        ])),
+    ])
+    result = WorkforceOrchestrator(client, None).run(
+        WorkforcePlanner.analysis_plan("Document the workspace."),
+        tmp_path / "workspace",
+        {"analyse": assignment("analyse"), "verify": assignment("verify")},
+    )
+    assert result.status == "verification_failed"
+    assert "manifest" in result.tasks[1].verification[0]["detail"].lower()
+    assert result.verification_passed is False
+
+
+def test_verifier_cannot_mutate_the_artifacts_it_is_inspecting(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+
+    class TamperingClient(ScriptedClient):
+        def chat(self, model: str, messages: list[dict[str, object]], **kwargs: object) -> dict[str, object]:
+            response = super().chat(model, messages, **kwargs)
+            if len(self.calls) == 3:
+                (workspace / "workforce" / "analysis.md").write_text(
+                    "changed after the host snapshot", encoding="utf-8"
+                )
+            return response
+
+    client = TamperingClient([
+        assistant(calls=[write_call("workforce/analysis.md", "Observed files.")]),
+        assistant("Analysis written."),
+        assistant(verdict([
+            {"artifact": "workforce/analysis.md", "observation": "Observed files."},
+        ])),
+    ])
+    result = WorkforceOrchestrator(client, None).run(
+        WorkforcePlanner.analysis_plan("Document the workspace."),
+        workspace,
+        {"analyse": assignment("analyse"), "verify": assignment("verify")},
+    )
+    assert result.status == "verification_failed"
+    assert result.verification_passed is False
+    audit = json.loads(
+        (workspace / "workforce" / "verification.json").read_text(encoding="utf-8")
+    )
+    assert audit["recorded_by"] == "host"
+    assert audit["tamper_check"]
+    assert audit["host_checks"][0]["passed"] is False
+
+
+def test_prose_verifier_is_normalized_through_a_schema_enforced_host_review(tmp_path: Path) -> None:
+    client = ScriptedClient([
+        assistant(calls=[write_call("workforce/analysis.md", "Observed files.")]),
+        assistant("Analysis written."),
+        assistant("FAIL: I could not find the artifact."),
+        assistant(verdict([
+            {"artifact": "workforce/analysis.md", "observation": "Observed files."},
+        ])),
+    ])
+    result = WorkforceOrchestrator(client, None).run(
+        WorkforcePlanner.analysis_plan("Document the workspace."),
+        tmp_path / "workspace",
+        {"analyse": assignment("analyse"), "verify": assignment("verify")},
+    )
+    assert result.status == "completed"
+    assert result.tasks[1].verdict == "PASS"
+    assert result.tasks[1].verification[0]["source"] == "model_verifier_schema_normalized"
+    assert len(client.calls) == 4
+    assert client.calls[-1][0]["role"] == "system"  # normalization sends a contract
+    audit = json.loads(
+        (tmp_path / "workspace" / "workforce" / "verification.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert audit["recorded_by"] == "host"
+    assert audit["host_checks"][0]["source"] == "model_verifier_schema_normalized"
+
+
+def test_factually_contradicted_verifier_fail_cannot_override_host_acceptance(
+    tmp_path: Path,
+) -> None:
+    client = ScriptedClient([
+        assistant(calls=[write_call("workforce/analysis.md", "Observed files.")]),
+        assistant("Analysis written."),
+        assistant(verdict([
+            {"artifact": "workforce/analysis.md", "observation": "The file is empty."},
+        ], outcome="FAIL", summary="The artifact is empty.")),
+    ])
+    result = WorkforceOrchestrator(client, None).run(
+        WorkforcePlanner.analysis_plan("Document the workspace."),
+        tmp_path / "workspace",
+        {"analyse": assignment("analyse"), "verify": assignment("verify")},
+    )
+    assert result.status == "completed"
+    assert result.verification_passed is True
+    assert result.tasks[1].verdict == "FAIL"
+    assert result.tasks[1].status == "completed"
+    check = result.tasks[1].verification[0]
+    assert check["host_override"] is True
+    assert check["contradictions"]
+    audit = json.loads(
+        (tmp_path / "workspace" / "workforce" / "verification.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert audit["verdict"]["verdict"] == "FAIL"
+    assert audit["host_decision"] == "PASS"
+    assert audit["host_override"] is True
+
+
+def test_verifier_fail_is_fail_closed_even_with_valid_evidence(tmp_path: Path) -> None:
+    client = ScriptedClient([
+        assistant(calls=[write_call("workforce/analysis.md", "Observed files.")]),
+        assistant("Analysis written."),
+        assistant(verdict([
+            {"artifact": "workforce/analysis.md", "observation": "content is insufficient"},
+        ], outcome="FAIL", summary="The analysis does not cover the objective.")),
+    ])
+    result = WorkforceOrchestrator(client, None).run(
+        WorkforcePlanner.analysis_plan("Document the workspace."),
+        tmp_path / "workspace",
+        {"analyse": assignment("analyse"), "verify": assignment("verify")},
+    )
+    assert result.status == "verification_failed"
+    assert result.tasks[1].verdict == "FAIL"
+    audit = json.loads(
+        (tmp_path / "workspace" / "workforce" / "verification.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert audit["verdict"]["verdict"] == "FAIL"
+
+
+def test_verifier_malformed_json_is_rejected(tmp_path: Path) -> None:
+    client = ScriptedClient([
+        assistant(calls=[write_call("workforce/analysis.md", "Observed files.")]),
+        assistant("Analysis written."),
+        assistant("VERDICT: PASS because I said so."),
+        # The schema-enforced formatter also fails to produce JSON: the host
+        # must remain fail-closed rather than inventing a verdict.
+        assistant("still not JSON"),
+    ])
+    result = WorkforceOrchestrator(client, None).run(
+        WorkforcePlanner.analysis_plan("Document the workspace."),
+        tmp_path / "workspace",
+        {"analyse": assignment("analyse"), "verify": assignment("verify")},
+    )
+    assert result.status == "verification_failed"
+    assert result.tasks[1].verification[0]["passed"] is False
+    assert not (tmp_path / "workspace" / "workforce" / "verification.json").exists()
 
 
 def test_step_limit_is_not_retried_and_cannot_claim_completion(tmp_path: Path) -> None:

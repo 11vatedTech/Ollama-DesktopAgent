@@ -63,6 +63,52 @@ def test_profiler_runs_all_v1_smoke_probes_and_records_unknowns() -> None:
 
 
 
+def test_profile_inventory_covers_every_artifact_even_when_one_show_fails() -> None:
+    class PartialInventory(FakeOllama):
+        def list_models(self):
+            return [
+                {"name": "good:latest", "size": 123, "digest": "sha256:good",
+                 "details": {"family": "qwen", "parameter_size": "7B"}},
+                {"name": "broken:latest", "size": 456, "digest": "sha256:broken",
+                 "details": {"family": "unknown"}},
+            ]
+
+        def show_model(self, name: str):
+            if name == "broken:latest":
+                raise RuntimeError("provider metadata unavailable")
+            return super().show_model(name)
+
+    profiler = ModelProfiler(PartialInventory())
+    profiles = profiler.profile_inventory(run_probes=False)
+    by_name = {profile.model_name: profile for profile in profiles}
+    assert set(by_name) == {"good:latest", "broken:latest"}
+    assert by_name["good:latest"].family == "qwen"
+    assert by_name["broken:latest"].family == "unknown"
+    assert by_name["broken:latest"].operational["metadata_error"] == "RuntimeError"
+    assert all(
+        capability.status == "not_assessed"
+        for capability in by_name["broken:latest"].capabilities
+    )
+
+
+def test_profile_inventory_can_select_a_subset_and_reports_progress() -> None:
+    messages: list[str] = []
+    profiles = ModelProfiler(FakeOllama()).profile_inventory(
+        names=["example:latest"], run_probes=False, progress=messages.append,
+    )
+    assert [profile.model_name for profile in profiles] == ["example:latest"]
+    assert any("example:latest" in message for message in messages)
+
+
+def test_a_failed_single_probe_is_recorded_as_failed_not_partial() -> None:
+    result = ModelProfiler._result(
+        "instruction_following", False, {}, "local smoke probe", "wrong token"
+    )
+    assert result.status == "failed"
+    assert result.score == 0.0
+    assert result.passed == 0
+
+
 def test_probe_metrics_exclude_raw_model_message_payloads() -> None:
     class SensitiveFake(FakeOllama):
         def chat(self, model, messages, **kwargs):

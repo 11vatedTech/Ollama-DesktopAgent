@@ -22,6 +22,16 @@ from ollama_workstation.agents.binding import validate_installed_model_binding
 from ollama_workstation.agents.memory import MemoryStore
 from ollama_workstation.agents.runtime import AgentEvent, AgentResult, AgentRuntime
 from ollama_workstation.agents.tools import ToolError, WorkspaceTools
+from ollama_workstation.agents.verification import (
+    DEFAULT_VERDICT_PATH,
+    VERIFIER_PROTOCOL,
+    ArtifactManifest,
+    StructuredVerdict,
+    VerificationProtocolError,
+    canonical_artifact_path,
+    validate_verdict_evidence,
+    verdict_output_schema,
+)
 from ollama_workstation.models.schemas import ModelProfile, ModelRef, utc_now
 from ollama_workstation.observability import log_event, redact_data, redact_text
 from ollama_workstation.storage.repository import Repository
@@ -317,15 +327,13 @@ class WorkforcePlanner:
                 TaskSpec(
                     task_id="verify", role="repository_analysis",
                     objective=(
-                        "Independently inspect workforce/analysis.md and the workspace. Read the "
-                        "analysis once, compare it with the objective, then write "
-                        "workforce/verification.md exactly once beginning with 'VERDICT: PASS' or "
-                        "'VERDICT: FAIL', followed by concise evidence. Do not search for unrelated "
-                        "files and do not repeat a successful write. After writing, return "
-                        "FINAL: VERDICT: PASS or FINAL: VERDICT: FAIL."
+                        "Independently verify the completed deliverables against the host "
+                        "acceptance criteria and immutable artifact manifest supplied in the "
+                        "execution contract. Inspect every manifest artifact with read-only tools. "
+                        "Do not write or modify any file. Return only the structured JSON verdict "
+                        "contract. A PASS must cite every manifest artifact with an observation."
                     ),
-                    depends_on=("analyse",), max_steps=10, read_only=False,
-                    verification=(VerificationCheck("file_contains", "workforce/verification.md", "VERDICT:"),),
+                    depends_on=("analyse",), max_steps=10, read_only=True,
                     verdict_required=True,
                 ),
             ),
@@ -365,15 +373,13 @@ class WorkforcePlanner:
                 TaskSpec(
                     task_id="verify", role="repository_analysis",
                     objective=(
-                        "Independently inspect the workspace, workforce/analysis.md and "
-                        "workforce/result.md. Read the artifacts once, verify the delivery against "
-                        "the objective, then write workforce/verification.md exactly once beginning "
-                        "with 'VERDICT: PASS' or 'VERDICT: FAIL' and cite concrete evidence. After "
-                        "writing, return FINAL: VERDICT: PASS or FINAL: VERDICT: FAIL. Do not modify "
-                        "source files."
+                        "Independently verify the completed deliverables against the host "
+                        "acceptance criteria and immutable artifact manifest supplied in the "
+                        "execution contract. Inspect every manifest artifact with read-only tools. "
+                        "Do not write or modify any file. Return only the structured JSON verdict "
+                        "contract. A PASS must cite every manifest artifact with an observation."
                     ),
-                    depends_on=("deliver",), max_steps=12,
-                    verification=(VerificationCheck("file_contains", "workforce/verification.md", "VERDICT:"),),
+                    depends_on=("deliver",), max_steps=12, read_only=True,
                     verdict_required=True,
                 ),
             ),
@@ -608,12 +614,36 @@ class WorkforceOrchestrator:
                     data=item.data,
                 )
 
+            manifest: ArtifactManifest | None = None
+            acceptance: list[dict[str, Any]] = []
+            if task.verdict_required:
+                try:
+                    acceptance = self._acceptance_criteria(
+                        plan, results_by_id, exclude_task_id=task.task_id
+                    )
+                    manifest = ArtifactManifest.build(
+                        workspace,
+                        [str(item["target"]) for item in acceptance],
+                    )
+                except VerificationProtocolError as exc:
+                    execution = self._blocked(
+                        task, "verification_failed",
+                        f"The host could not build the verifier artifact manifest: {exc}",
+                    )
+                    executions.append(execution)
+                    results_by_id[task.task_id] = execution
+                    status_by_id[task.task_id] = execution.status
+                    self._save_task(identifier, task, execution)
+                    record("verification_rejected", execution.error, task_id=task.task_id)
+                    continue
+
             execution = self._execute_task(
                 task, assignment, workspace, dependency_context,
                 max_steps=min(task.max_steps, remaining_steps),
                 timeout_seconds=min(task.timeout_seconds, max(1.0, plan.max_wall_seconds - (time.monotonic() - started_monotonic))),
                 run_id=identifier, cancel_event=cancel_event, record=record,
-                child_event=child_trace,
+                child_event=child_trace, plan_objective=plan.objective,
+                manifest=manifest, acceptance=acceptance,
             )
             executions.append(execution)
             results_by_id[task_id] = execution
@@ -628,7 +658,12 @@ class WorkforceOrchestrator:
                 error=execution.error, verdict=execution.verdict,
             )
             if execution.status in {"failed", "timed_out", "cancelled", "rejected", "verification_failed"}:
-                record("task_failed", execution.error or execution.final_message, task_id=task.task_id)
+                record(
+                    "verification_failed" if execution.status == "verification_failed"
+                    else "task_failed",
+                    execution.error or execution.final_message,
+                    task_id=task.task_id, verdict=execution.verdict,
+                )
 
         verification = self._aggregate_verification(executions)
         verification_passed = verification["passed"]
@@ -645,6 +680,9 @@ class WorkforceOrchestrator:
             status = "timed_out"
         elif any(item.status == "rejected" for item in executions):
             status = "rejected"
+        elif any(item.status == "verification_failed" for item in executions):
+            status = "verification_failed"
+            final = self._aggregate_message(executions, workspace, False)
         return self._finish(
             identifier, plan, executions, status, final, started,
             verification_passed, "", record,
@@ -664,6 +702,9 @@ class WorkforceOrchestrator:
         cancel_event: Event | None,
         record: Callable[..., None],
         child_event: Callable[[AgentEvent], None] | None,
+        plan_objective: str,
+        manifest: ArtifactManifest | None,
+        acceptance: list[dict[str, Any]],
     ) -> TaskExecution:
         started = time.monotonic()
         attempt = 0
@@ -698,7 +739,10 @@ class WorkforceOrchestrator:
                         memory_store=MemoryStore(self.repository) if self.repository else None,
                     ).run(
                         assignment.model_name, assignment.profile,
-                        self._task_prompt(task, dependency_context), tool_registry,
+                        self._task_prompt(
+                            task, dependency_context, plan_objective,
+                            manifest, acceptance,
+                        ), tool_registry,
                         event=child_event, cancel_event=local_cancel,
                     )
                 except BaseException as exc:  # child failure must not kill the supervisor
@@ -748,43 +792,26 @@ class WorkforceOrchestrator:
                     [], "", (time.monotonic() - started) * 1000.0,
                 )
             verdict = ""
+            checks: list[dict[str, Any]] = []
             if task.verdict_required:
-                # An artifact written by the verifier is stronger evidence than
-                # its prose. Read it first so a stale PASS/FAIL file cannot
-                # contradict the persisted verdict.
-                for check in task.verification:
-                    if check.kind != "file_contains":
-                        continue
-                    verdict_path = (workspace / check.target).resolve()
-                    try:
-                        verdict_path.relative_to(workspace.resolve())
-                        if verdict_path.is_file():
-                            verdict = self._extract_verdict(
-                                verdict_path.read_text(encoding="utf-8", errors="replace")[:200_000]
-                            )
-                    except (OSError, ValueError):
-                        pass
-                    if verdict:
-                        break
-                if not verdict:
-                    verdict = self._extract_verdict(result.final_message)
-                if verdict:
-                    # Some models return a valid verdict without following the
-                    # write_file instruction. Persist the host-observed verdict
-                    # so the audit artifact exists without trusting prose alone.
-                    self._persist_verdict(
-                        task, workspace, result.final_message, record
-                    )
-            checks = self._check_artifacts(task.verification, workspace)
-            if task.verdict_required and verdict not in {"PASS", "FAIL"}:
-                checks.append({
-                    "kind": "model_verdict", "target": "final_message",
-                    "passed": False, "detail": "Verifier did not return VERDICT: PASS or FAIL.",
-                })
+                checks = self._evaluate_verifier(
+                    task, workspace, result.final_message, manifest,
+                    acceptance, record, assignment.model_name,
+                )
+                verdict = next(
+                    (str(item.get("verdict") or "") for item in checks
+                     if item.get("kind") == "structured_verdict"),
+                    "",
+                )
+            else:
+                checks = self._check_artifacts(task.verification, workspace)
             failed_checks = [item for item in checks if not item.get("passed")]
+            host_override = any(item.get("host_override") for item in checks)
             last = TaskExecution(
                 task.task_id, task.role,
-                "verification_failed" if failed_checks or verdict == "FAIL" else "completed",
+                "verification_failed"
+                if failed_checks or (verdict == "FAIL" and not host_override)
+                else "completed",
                 assignment.model_name, result.run_id, attempt, result.final_message,
                 "", checks, verdict, (time.monotonic() - started) * 1000.0,
             )
@@ -800,45 +827,321 @@ class WorkforceOrchestrator:
             attempts=attempt, error="Task produced no result.", duration_ms=(time.monotonic() - started) * 1000.0,
         )
 
+    def _evaluate_verifier(
+        self,
+        task: TaskSpec,
+        workspace: Path,
+        text: str,
+        manifest: ArtifactManifest | None,
+        acceptance: list[dict[str, Any]],
+        record: Callable[..., None],
+        model_name: str,
+    ) -> list[dict[str, Any]]:
+        """Validate a verifier response against the host snapshot, not its prose.
+
+        A model can produce a useful observation without obeying the JSON
+        contract. In that case the host performs one provider-enforced
+        formatting pass over the immutable manifest. The resulting evidence is
+        still checked against host paths and digests; this is not a free-form
+        PASS shortcut.
+        """
+        if manifest is None:
+            return [{
+                "kind": "structured_verdict", "target": "final_message",
+                "passed": False, "verdict": "",
+                "detail": "host artifact manifest was unavailable",
+            }]
+        tamper = manifest.verify_unchanged(workspace)
+        source = "model_verifier"
+        try:
+            parsed = StructuredVerdict.parse(text)
+        except VerificationProtocolError as exc:
+            record(
+                "verification_normalizing",
+                "Verifier returned prose instead of the typed contract; "
+                "requesting a schema-enforced verdict over the host manifest.",
+                task_id=task.task_id, first_error=str(exc),
+            )
+            synthesized = self._synthesize_verdict(
+                task, model_name, text, workspace, manifest, acceptance, record
+            )
+            if synthesized is None:
+                return [{
+                    "kind": "structured_verdict", "target": "final_message",
+                    "passed": False, "verdict": "",
+                    "detail": (
+                        f"Verifier contract failed: {exc}; "
+                        "schema-enforced normalization failed."
+                    ),
+                    "tampered": list(tamper),
+                }]
+            try:
+                parsed = StructuredVerdict.parse(synthesized)
+                source = "model_verifier_schema_normalized"
+            except VerificationProtocolError as normalized_exc:
+                return [{
+                    "kind": "structured_verdict", "target": "final_message",
+                    "passed": False, "verdict": "",
+                    "detail": "Schema-enforced verifier output was still invalid: "
+                    + str(normalized_exc),
+                    "tampered": list(tamper),
+                }]
+        evidence_errors = list(validate_verdict_evidence(parsed, manifest))
+        contradictions = self._contradicted_claims(parsed, manifest)
+        host_acceptance = self._host_acceptance(acceptance, workspace)
+        host_checks_passed = bool(host_acceptance) and all(
+            item.get("passed") for item in host_acceptance
+        )
+        host_override = bool(
+            parsed.verdict == "FAIL"
+            and contradictions
+            and host_checks_passed
+            and not tamper
+            and not evidence_errors
+        )
+        errors = list(tamper) + evidence_errors
+        passed = (parsed.verdict == "PASS" and not errors) or host_override
+        check = {
+            "kind": "structured_verdict", "target": "final_message",
+            "passed": passed, "verdict": parsed.verdict,
+            "evidence_count": len(parsed.evidence),
+            "manifest_paths": list(manifest.paths),
+            "source": source,
+            "host_override": host_override,
+            "contradictions": contradictions,
+            "host_acceptance": host_acceptance,
+            "detail": "" if passed else (
+                parsed.verdict == "FAIL"
+                and "Verifier reported FAIL."
+                or "; ".join(errors)
+                or "Verifier did not pass the host evidence contract."
+            ),
+        }
+        if host_override:
+            check["detail"] = (
+                "Model verifier FAIL contradicted the immutable host manifest; "
+                "deterministic acceptance checks passed."
+            )
+            record(
+                "verification_host_override",
+                "Host acceptance passed despite a factually contradicted model verdict.",
+                task_id=task.task_id,
+                contradictions=contradictions,
+            )
+        recorded = self._persist_verdict(
+            task, workspace, parsed, manifest, acceptance, checks=[check],
+            errors=errors, tamper=tamper, record=record,
+        )
+        if not recorded:
+            check["passed"] = False
+            check["detail"] = (
+                ("Verifier reported FAIL. " if passed else "")
+                + "Host could not write the verifier audit artifact."
+            ).strip()
+        return [check]
+
+    @staticmethod
+    def _contradicted_claims(
+        verdict: StructuredVerdict, manifest: ArtifactManifest
+    ) -> list[str]:
+        """Find factual claims that the immutable host snapshot disproves.
+
+        This deliberately does not overturn subjective quality disagreements.
+        It only catches claims such as "missing" or "empty" for a file whose
+        manifest record has a nonzero size and unchanged digest.
+        """
+        contradictions: list[str] = []
+        for item in verdict.evidence:
+            record = manifest.record_for(item.artifact)
+            if record is None:
+                continue
+            claim = f"{item.observation} {verdict.summary}".casefold()
+            missing = any(
+                phrase in claim
+                for phrase in ("missing", "does not exist", "not found", "no file")
+            )
+            empty = any(phrase in claim for phrase in ("empty", "0 bytes", "zero bytes"))
+            if missing:
+                contradictions.append(
+                    f"{record.path}: model claimed missing, but the manifest records a file"
+                )
+            elif empty and record.size_bytes > 0:
+                contradictions.append(
+                    f"{record.path}: model claimed empty, but the manifest records "
+                    f"{record.size_bytes} bytes"
+                )
+        return list(dict.fromkeys(contradictions))
+
+    def _host_acceptance(
+        self, acceptance: list[dict[str, Any]], workspace: Path
+    ) -> list[dict[str, Any]]:
+        """Evaluate the host's deterministic acceptance criteria."""
+        checks: list[VerificationCheck] = []
+        for item in acceptance:
+            try:
+                checks.append(VerificationCheck.from_dict(item))
+            except ValueError:
+                checks.append(VerificationCheck("file_exists", str(item.get("target") or "")))
+        return self._check_artifacts(tuple(checks), workspace)
+
+    def _synthesize_verdict(
+        self,
+        task: TaskSpec,
+        model_name: str,
+        model_text: str,
+        workspace: Path,
+        manifest: ArtifactManifest,
+        acceptance: list[dict[str, Any]],
+        record: Callable[..., None],
+    ) -> str | None:
+        """Ask the assigned model to format a verdict using only host evidence."""
+        artifacts: list[dict[str, Any]] = []
+        for item in manifest.files:
+            path = (workspace / item.path).resolve()
+            try:
+                path.relative_to(workspace.resolve())
+                excerpt = path.read_text(encoding="utf-8", errors="replace")[:3000]
+            except (OSError, ValueError):
+                excerpt = ""
+            artifacts.append({
+                "path": item.path,
+                "sha256": item.sha256,
+                "size_bytes": item.size_bytes,
+                "content_excerpt": redact_text(excerpt),
+            })
+        contract = {
+            "task": task.objective,
+            "host_acceptance": acceptance,
+            "host_artifacts": artifacts,
+            "model_verifier_response": redact_text(model_text)[:6000],
+            "rules": [
+                "The host owns the artifact manifest; do not claim a listed artifact is missing.",
+                "Cite every host artifact by its exact path in evidence.",
+                "A PASS requires evidence for every host artifact.",
+                "Return only one JSON object matching the schema.",
+            ],
+        }
+        try:
+            response = self.client.chat(
+                model_name,
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a verification formatter. Do not use tools and do not "
+                            "modify files. Judge only the immutable host evidence supplied. "
+                            "Return the required JSON object with no prose."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": json.dumps(contract, indent=2, ensure_ascii=False),
+                    },
+                ],
+                output_format=verdict_output_schema(),
+                keep_alive=self.keep_alive,
+            )
+            message = response.get("message") or {}
+            content = str(message.get("content") or "").strip()
+            if content:
+                record(
+                    "verification_normalized",
+                    "A schema-enforced verifier verdict was returned for host validation.",
+                    task_id=task.task_id, artifact_count=len(manifest.files),
+                )
+                return content
+        except Exception as exc:
+            record(
+                "verification_normalization_failed",
+                f"Schema-enforced verifier formatting failed: {type(exc).__name__}.",
+                task_id=task.task_id,
+            )
+        return None
+
     @staticmethod
     def _persist_verdict(
         task: TaskSpec,
         workspace: Path,
-        text: str,
+        verdict: StructuredVerdict,
+        manifest: ArtifactManifest,
+        acceptance: list[dict[str, Any]],
+        *,
+        checks: list[dict[str, Any]],
+        errors: list[str],
+        tamper: tuple[str, ...],
         record: Callable[..., None],
-    ) -> None:
-        """Materialize a verifier verdict when the child omitted its audit file."""
-        if not text.strip():
-            return
-        for check in task.verification:
-            if check.kind != "file_contains":
-                continue
-            target = (workspace / check.target).resolve()
-            try:
-                target.relative_to(workspace.resolve())
-                # Never replace an existing verifier artifact, even if the
-                # child's final prose happened to omit the verdict token.
-                if target.exists():
-                    continue
-                target.parent.mkdir(parents=True, exist_ok=True)
-                temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
-                temporary.write_text(text.rstrip() + "\n", encoding="utf-8")
-                temporary.replace(target)
-                record(
-                    "verification_recorded",
-                    "Verifier returned a verdict without its audit artifact; "
-                    "the host persisted the verdict.",
-                    task_id=task.task_id,
-                    target=check.target,
-                )
-                return
-            except (OSError, ValueError):
-                continue
+    ) -> bool:
+        """Write the host-owned audit record; the verifier remains read-only."""
+        target = (workspace / DEFAULT_VERDICT_PATH).resolve()
+        try:
+            target.relative_to(workspace.resolve())
+            target.parent.mkdir(parents=True, exist_ok=True)
+            host_decision = "PASS" if checks and all(
+                item.get("passed") for item in checks
+            ) else "FAIL"
+            host_override = any(item.get("host_override") for item in checks)
+            payload = {
+                "protocol": VERIFIER_PROTOCOL,
+                "verdict": verdict.to_dict(),
+                "host_decision": host_decision,
+                "host_override": host_override,
+                "host_decision_summary": (
+                    "Host acceptance checks passed; the model verdict was factually "
+                    "contradicted by the immutable manifest."
+                    if host_override else ""
+                ),
+                "manifest": manifest.to_dict(),
+                "acceptance": acceptance,
+                "host_checks": checks,
+                "verification_errors": errors,
+                "tamper_check": list(tamper),
+                "recorded_by": "host",
+                "recorded_at": utc_now(),
+            }
+            temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
+            temporary.write_text(
+                json.dumps(payload, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            temporary.replace(target)
+            record(
+                "verification_recorded",
+                "Host recorded the structured verifier audit artifact.",
+                task_id=task.task_id, target=DEFAULT_VERDICT_PATH,
+                verdict=verdict.verdict,
+            )
+            return True
+        except (OSError, ValueError) as exc:
+            record(
+                "verification_artifact_failed",
+                f"The host could not write the verifier audit artifact: {exc}",
+                task_id=task.task_id,
+            )
+            return False
 
     @staticmethod
-    def _extract_verdict(text: str) -> str:
-        match = re.search(r"VERDICT\s*:\s*(PASS|FAIL)\b", text, flags=re.I)
-        return match.group(1).upper() if match else ""
+    def _acceptance_criteria(
+        plan: WorkforcePlan,
+        results: Mapping[str, TaskExecution],
+        *,
+        exclude_task_id: str,
+    ) -> list[dict[str, Any]]:
+        criteria: list[dict[str, Any]] = []
+        for task in plan.tasks:
+            if task.task_id == exclude_task_id:
+                continue
+            result = results.get(task.task_id)
+            if result is None or result.status != "completed":
+                continue
+            for check in task.verification:
+                criteria.append({
+                    "task_id": task.task_id,
+                    "kind": check.kind,
+                    "target": canonical_artifact_path(check.target),
+                    "expected": check.expected,
+                })
+        # A valid verifier run needs at least one host-visible deliverable.
+        return criteria
 
     @staticmethod
     def _check_artifacts(checks: tuple[VerificationCheck, ...], workspace: Path) -> list[dict[str, Any]]:
@@ -895,9 +1198,16 @@ class WorkforceOrchestrator:
         )
 
     @staticmethod
-    def _task_prompt(task: TaskSpec, dependency_context: str) -> str:
-        return (
+    def _task_prompt(
+        task: TaskSpec,
+        dependency_context: str,
+        plan_objective: str,
+        manifest: ArtifactManifest | None,
+        acceptance: list[dict[str, Any]],
+    ) -> str:
+        prompt = (
             f"Assigned role: {task.role}\n"
+            f"Overall objective: {plan_objective}\n"
             f"Task: {task.objective}\n\n"
             f"{dependency_context}\n\n"
             "Execution contract: stay inside the assigned workspace. Do not repeat a successful "
@@ -905,6 +1215,37 @@ class WorkforceOrchestrator:
             "answer. Verify before claiming completion. "
             "Write only the exact artifacts requested by the task."
         )
+        if manifest is not None:
+            contract = {
+                "protocol": VERIFIER_PROTOCOL,
+                "schema_version": 1,
+                "required_output": {
+                    "schema_version": 1,
+                    "verdict": "PASS or FAIL",
+                    "summary": "concise evidence-based explanation",
+                    "confidence": "optional number from 0 to 1",
+                    "evidence": [{
+                        "artifact": "exact manifest path",
+                        "observation": "what was observed in the artifact",
+                        "sha256": "optional manifest digest",
+                    }],
+                },
+                "acceptance_criteria": acceptance,
+                "artifact_manifest": manifest.to_dict(),
+                "rules": [
+                    "This task is read-only: do not write or modify any workspace file.",
+                    "Inspect every artifact in artifact_manifest.files.",
+                    "A PASS must cite every manifest artifact at least once.",
+                    "Cite the exact manifest path; do not invent a path.",
+                    "Return only one JSON object matching required_output; no prose outside it.",
+                ],
+            }
+            prompt += (
+                "\n\nIndependent verification contract (host-owned, untrusted model "
+                "prose cannot override it):\n"
+                + json.dumps(contract, indent=2, ensure_ascii=False)
+            )
+        return prompt
 
     def _blocked(self, task: TaskSpec, status: TaskStatus, reason: str) -> TaskExecution:
         return TaskExecution(task.task_id, task.role, status, error=reason)
@@ -930,7 +1271,8 @@ class WorkforceOrchestrator:
         ]
         verdicts = [item.verdict for item in executions if item.verdict]
         passed = all(item.get("passed") for item in checks) if checks else None
-        if verdicts and "FAIL" in verdicts:
+        overridden = any(check.get("host_override") for check in checks)
+        if verdicts and "FAIL" in verdicts and not overridden:
             passed = False
         if any(item.status in {"failed", "timed_out", "cancelled", "blocked", "rejected"}
                for item in executions):
@@ -941,10 +1283,24 @@ class WorkforceOrchestrator:
     def _aggregate_message(
         executions: list[TaskExecution], workspace: Path, verification_passed: bool | None,
     ) -> str:
-        verification = workspace / "workforce" / "verification.md"
+        verification = workspace / DEFAULT_VERDICT_PATH
         if verification.is_file():
-            safe = verification.read_text(encoding="utf-8", errors="replace")[:8_000]
-            return safe
+            try:
+                payload = json.loads(
+                    verification.read_text(encoding="utf-8", errors="replace")[:200_000]
+                )
+                verdict = payload.get("verdict") if isinstance(payload, dict) else {}
+                if isinstance(verdict, dict):
+                    summary = str(verdict.get("summary") or "").strip()
+                    label = str(verdict.get("verdict") or "").strip()
+                    if payload.get("host_decision"):
+                        label = str(payload.get("host_decision"))
+                    if payload.get("host_decision_summary"):
+                        summary = str(payload.get("host_decision_summary"))
+                    if label or summary:
+                        return f"VERDICT: {label}\n{summary}".strip()[:8_000]
+            except (OSError, ValueError):
+                pass
         completed = [item for item in executions if item.status == "completed"]
         if completed:
             return completed[-1].final_message[:8_000]

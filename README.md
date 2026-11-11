@@ -4,7 +4,7 @@
 
 A local-first, Windows-first desktop agent workstation from 11vatedTech. Its defining subsystem is the **Universal Agentification Engine**: inventory a model, research its origin, test its real capabilities, assign an evidence-backed professional identity, then equip it with a bounded execution harness.
 
-> **Release status: v0.2 development increment on the 0.1.0 foundation — locally verified, not production-certified.** The branch adds a structured publisher dossier, repeatable local profiling, hardware/inference telemetry, model-digest enforcement, scoped project memory, expanded identity/workforce roles, host-side tool-schema validation, an encrypted durable recovery boundary, a host-controlled multi-agent workforce, hardware-aware model routing and a redesigned nine-workspace desktop/CLI workflow. The broader production gates are tracked in [Production Readiness](docs/PRODUCTION_READINESS.md).
+> **Release status: v0.2 development increment on the 0.1.0 foundation — locally verified, not production-certified.** The branch adds a structured publisher dossier, persistent metadata profiles for every installed artifact, repeatable local profiling, a provider-enforced independent verifier contract, a versioned benchmark suite that feeds profiles and routing, hardware/inference telemetry, model-digest enforcement, scoped project memory, expanded identity/workforce roles, host-side tool-schema validation, an encrypted durable recovery boundary, a host-controlled multi-agent workforce, hardware-aware model routing and a redesigned nine-workspace desktop/CLI workflow. The broader production gates are tracked in [Production Readiness](docs/PRODUCTION_READINESS.md).
 
 ## Product thesis
 
@@ -26,18 +26,18 @@ The core is provider/harness/UI separated. The desktop shell does not duplicate 
 
 ## Desktop intelligence interface
 
-The PySide6 shell is organized as nine workspaces: **Command Center**, **Advanced Chat**, **Model Intelligence**, **Workforce Studio**, **Agent Operations**, **Integration Hub**, **System Laboratory**, **Run History & Recovery** and **Settings**. It uses shared design tokens and components, a custom `QPainter` intelligence core, real inventory/profile/telemetry data, streamed chat with cooperative stop, local conversation persistence, workforce approvals and the existing durable recovery controls. Reduced-motion mode and compact layouts are available from the same shell.
+The PySide6 shell is organized as nine workspaces: **Command Center**, **Advanced Chat**, **Model Intelligence**, **Workforce Studio**, **Agent Operations**, **Integration Hub**, **System Laboratory**, **Run History & Recovery** and **Settings**. It uses shared design tokens and components, a custom `QPainter` intelligence core, real inventory/profile/telemetry data, streamed chat with cooperative stop, local conversation persistence, workforce approvals and the existing durable recovery controls. Reduced-motion mode and compact layouts are available from the same shell; the current gallery covers 1480 × 940, 1120 × 720, 1280 × 800, 1024 × 768 and 900 × 700.
 
 ![Command Center](tests/screenshots/windows-command.png)
 
-The interface is documented with its validation matrix, screenshot gallery and known limitations in [Desktop Intelligence Interface](docs/UI_INTERFACE.md). It is a local engineering surface, not a production-certified UI: full accessibility, intermediate viewport and clean-VM validation remain open.
+The interface is documented with its validation matrix, screenshot gallery and known limitations in [Desktop Intelligence Interface](docs/UI_INTERFACE.md). It is a local engineering surface, not a production-certified UI: a fresh hosted-CI run for this increment, screen-reader/high-contrast validation and clean-VM validation remain open.
 
 ## Implemented in the current development branch (pre-release v0.2)
 
 | Capability | Status |
 |---|---|
 | Ollama health, model inventory, model metadata and loaded-model inspection | Implemented |
-| Local model smoke probes | Implemented; not a full benchmark suite |
+| Local model smoke probes and inventory-wide metadata profiles | Implemented; `profile-all` covers every installed artifact; empirical smoke probes and benchmark evidence remain per-model and explicitly unassessed when not run |
 | Evidence-backed professional title and expanded role taxonomy | Implemented; provisional pending role qualification |
 | Model intelligence metadata and evidence-aware routing | Implemented; declared-only routing is marked provisional and unverified |
 | Opt-in Hugging Face model-card research | Implemented in CLI and desktop; explicit repository selection required; lexical match is only a hint |
@@ -95,6 +95,8 @@ python -m ollama_workstation
 
 ```powershell
 11vated models
+11vated profile-all
+11vated profile-all --probes
 11vated profile qwen2.5-coder:7b --metadata-only
 11vated profile qwen2.5-coder:7b --repeats 3
 11vated benchmark qwen2.5-coder:7b --suite core --repeats 3
@@ -139,9 +141,11 @@ Checkpoint payloads are encrypted at rest with AES-256-GCM using a 32-byte key s
 
 `ModelRouter` ranks installed artifacts by required capability, context, memory envelope, observed quality, speed preference and explicit fallback chain. Observed capability scores take precedence; declared-only metadata is permitted only for provisional routing and is labelled `unverified`.
 
-The **Workforce** page and `11vated workforce` command execute a host-validated DAG. Children run sequentially against the assigned workspace with tool policy and step/time budgets. Plans and consequential task boundaries require approval. A task completes only when the child runtime reports `completed` and host artifact checks pass; a separate verifier must return `VERDICT: PASS`. Step-limit termination, missing artifacts and verifier `FAIL` cannot be presented as success. Every task and child event is stored in a SHA-256 hash-chained workforce journal. See [Workforce orchestration](docs/WORKFORCE.md).
+The **Workforce** page and `11vated workforce` command execute a host-validated DAG. Children run sequentially against the assigned workspace with tool policy and step/time budgets. Plans and consequential task boundaries require approval. A task completes only when the child runtime reports `completed` and host artifact checks pass. An independent read-only verifier receives the acceptance criteria and an immutable manifest, must return the typed `11vated-verifier/1` JSON verdict, and the host rechecks paths, sizes and SHA-256 values before writing the audit. Prose is normalized through one provider-enforced schema pass; a malformed result, missing evidence, changed artifact or substantive `FAIL` remains fail-closed. A model claim that a nonzero manifest artifact is missing or empty is recorded as a contradiction and cannot override passed deterministic acceptance checks. Every task and child event is stored in a SHA-256 hash-chained workforce journal. See [Workforce orchestration](docs/WORKFORCE.md).
 
 `11vated doctor` and the rotating JSONL log under the application data directory provide structured operational evidence without uploading telemetry. See [Operations and performance](docs/OPERATIONS.md).
+
+Current local evidence on this host: Ollama 0.40.16, 15 installed models, 15 metadata profiles, one empirical profile (`qwen2.5-coder:7b`), and a `66.67/100` core benchmark (8/12 trials). A live CLI analysis workflow (`23dc040f-1aa3-40d1-882a-b3a2c7f6b6e0`) and a desktop `WorkforcePage` workflow (`beee5cd1-342a-449b-994b-e47d3a53d9be`) both completed with `verification_passed=true`; a separate desktop run (`fb65bbb1-064e-4be6-9937-a40c2d3acd30`) correctly failed because the model claimed a write it never performed.
 
 ## Privacy and security
 
@@ -213,7 +217,7 @@ ruff check .
 python -m compileall -q src
 ```
 
-CI is configured for Python 3.11/3.12 on Windows and Ubuntu and installs the `mcp` extra so the real transport suite runs in every matrix leg. Local Windows Python 3.11 and 3.12 runs pass compile, Ruff and the full pytest suite; the opt-in live Ollama tests are skipped unless `OLLAMA_LIVE=1`, and one platform-conditional test is skipped. The GitHub Actions matrix is the authoritative cross-platform result; do not infer Linux coverage until the pushed matrix completes. The Windows packaging workflow builds a PyInstaller distribution; installer signing and release certification remain open gates.
+CI is configured for Python 3.11/3.12 on Windows and Ubuntu and installs the `mcp` extra so the real transport suite runs in every matrix leg. The latest local Windows Python 3.12.13 run reports **185 passed, 4 skipped**, with Ruff and `compileall` clean; the current increment still needs a fresh hosted matrix result, and the opt-in live Ollama tests remain skipped unless `OLLAMA_LIVE=1`. The GitHub Actions matrix is the authoritative cross-platform result; do not infer Linux or Python 3.11 coverage until the pushed matrix completes. The Windows packaging workflow builds a PyInstaller distribution; installer signing and release certification remain open gates.
 
 ## Research sources
 
