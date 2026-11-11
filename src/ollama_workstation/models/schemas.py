@@ -72,6 +72,9 @@ class ModelProfile:
     capabilities: list[CapabilityResult] = field(default_factory=list)
     known_limitations: list[str] = field(default_factory=list)
     operational: dict[str, Any] = field(default_factory=dict)
+    # Normalized Ollama artifact metadata. Kept as a mapping so old profiles
+    # remain readable and new evidence fields can evolve without a schema break.
+    intelligence: dict[str, Any] = field(default_factory=dict)
     identity_rationale: list[str] = field(default_factory=list)
     identity_confidence: float = 0.0
     profile_version: int = 1

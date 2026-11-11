@@ -60,6 +60,38 @@ class OllamaClient:
         models = self._request("GET", "/api/ps").get("models", [])
         return models if isinstance(models, list) else []
 
+    def embed(self, model: str, input_text: str | list[str], *,
+              keep_alive: str = "5m") -> list[list[float]]:
+        """Return local embedding vectors using Ollama's native /api/embed."""
+        if not isinstance(input_text, (str, list)):
+            raise TypeError("embed input must be a string or a list of strings")
+        if isinstance(input_text, list) and not all(isinstance(item, str) for item in input_text):
+            raise TypeError("every embedding input must be a string")
+        if isinstance(input_text, str) and not input_text.strip():
+            raise ValueError("embedding input cannot be empty")
+        if isinstance(input_text, list) and (not input_text or not all(item.strip() for item in input_text)):
+            raise ValueError("embedding input list must contain non-empty strings")
+        payload = {"model": model, "input": input_text, "keep_alive": keep_alive}
+        data = self._request("POST", "/api/embed", payload)
+        raw = data.get("embeddings")
+        if not isinstance(raw, list) or not all(isinstance(item, list) for item in raw):
+            raise OllamaError("Ollama returned an invalid embeddings payload")
+        vectors: list[list[float]] = []
+        for vector in raw:
+            try:
+                values = [float(value) for value in vector]
+            except (TypeError, ValueError) as exc:
+                raise OllamaError("Ollama returned a non-numeric embedding vector") from exc
+            if not values:
+                raise OllamaError("Ollama returned an empty embedding vector")
+            vectors.append(values)
+        expected = 1 if isinstance(input_text, str) else len(input_text)
+        if len(vectors) != expected:
+            raise OllamaError(
+                f"Ollama returned {len(vectors)} embedding(s) for {expected} input(s)"
+            )
+        return vectors
+
     def chat(self, model: str, messages: list[dict[str, Any]], *,
              tools: list[dict[str, Any]] | None = None,
              output_format: dict[str, Any] | str | None = None,

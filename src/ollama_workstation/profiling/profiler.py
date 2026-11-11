@@ -8,6 +8,7 @@ from collections.abc import Callable
 from typing import Any
 
 from ollama_workstation.models.identity import assign_identity
+from ollama_workstation.models.model_intelligence import inspect_ollama_model
 from ollama_workstation.models.schemas import (
     CapabilityResult,
     Evidence,
@@ -49,16 +50,17 @@ class ModelProfiler:
         declared = [str(item).lower() for item in raw if isinstance(item, str)] if isinstance(raw, list) else []
         families = details.get("families")
         family = str(families[0] if isinstance(families, list) and families else details.get("family") or "unknown")
-        context = next((value for key, value in info.items() if key.endswith(".context_length")), None)
+        intelligence = inspect_ollama_model(model, show)
         profile = ModelProfile(
             model_name=model_name, digest=model.digest, generated_at=utc_now(),
-            family=str(details.get("family") or family),
-            parameter_size=str(details.get("parameter_size") or info.get("general.parameter_count") or "unknown"),
-            quantization=str(details.get("quantization_level") or "unknown"),
-            architecture=str(info.get("general.architecture") or family),
-            context_length=int(context) if isinstance(context, (int, float)) else None,
+            family=intelligence.family,
+            parameter_size=intelligence.parameter_size,
+            quantization=intelligence.quantization,
+            architecture=intelligence.architecture,
+            context_length=intelligence.context_length,
             declared_capabilities=declared,
-            declared_purpose=self._declared_purpose(model_name, family),
+            declared_purpose=self._declared_purpose(model_name, intelligence.family),
+            intelligence=intelligence.to_dict(),
             origin_evidence=[
                 Evidence("Installed model", model_name, "observed", "Ollama /api/tags and /api/show",
                          "https://github.com/ollama/ollama/blob/main/docs/api.md"),
@@ -76,6 +78,9 @@ class ModelProfiler:
                          notes="Never infer training data from a model name."),
                 Evidence("Ollama artifact digest", model.digest or "not available",
                          "observed", "Ollama /api/tags"),
+                Evidence("Memory envelope", json.dumps(intelligence.resource_estimate.as_dict()
+                         if intelligence.resource_estimate else {}, sort_keys=True),
+                         "inferred", "Host estimate"),
             ],
             operational={"inventory_size_bytes": model.size_bytes, "modified_at": model.modified_at,
                          "ollama_digest": model.digest, "probe_profile": "local_low_cost_v1"},
