@@ -220,7 +220,7 @@ These are research references, not approved runtime dependencies. For every prop
 
 | Gate | Required evidence | Current state |
 |---|---|---|
-| G0 — Repository foundation | CI, typed boundaries, install and launch | Implemented baseline; CI must be green |
+| G0 — Repository foundation | CI, typed boundaries, install and launch | Implemented baseline; hosted CI is green for the pushed UI branch (run 42977464138) |
 | G1 — Model dossier | Publisher fields, source links, explicit match confirmation, hash, unknown handling | v0.2 increment implemented; needs CI and live model-card validation |
 | G2 — Empirical profiling | Repeated tests, host/GPU telemetry, expanded task suites, repeatability, confidence and resource metrics | Partial; repeated smoke probes and a six-case deterministic 11vated-core runner with host-side scoring, per-trial evidence and a hashed manifest are implemented. Specialist/held-out suites and role thresholds remain open |
 | G3 — Agentification | Protocol adapters, strict host-side tool argument validation, bounded recovery and digest binding | Partial; native/structured/guided paths and workspace tool schema validation implemented |
@@ -242,6 +242,6 @@ On the Windows development host (Python 3.12.13 and 3.11.15, Ollama 0.40.15, 15 
 - Live provider checks cover real version/inventory, `/api/show` metadata, non-empty chat completion and 768-dimensional embeddings. A real `qwen2.5-coder:7b` desktop chat returned `STREAM_OK`; an active stream was stopped and surfaced as `Generation stopped`.
 - A three-agent live delivery workflow with `qwen2.5-coder:7b` completed in 17 seconds (run `cb917844-fcc4-4080-b7bd-eee6082aa523`): analysis artifact, root `greeting.txt`, delivery report, independent verifier `PASS`, host artifact checks, CLI exit 0.
 - A later desktop-driven, three-task delivery run through Workforce Studio exercised the failure path: the verifier wrote `VERDICT: FAIL` and claimed its own verification file was missing, and the host correctly reported `verification_failed` rather than success. The desktop run path is now interactively exercised; a successful desktop-driven workforce run remains to be demonstrated.
-- Real MCP stdio and Streamable HTTP integration tests pass locally on Windows. Hosted CI and Linux coverage have not yet run for this branch.
+- Real MCP stdio and Streamable HTTP integration tests pass locally on Windows. Hosted CI run [42977464138](https://github.com/11vatedTech/Ollama-DesktopAgent/actions/runs/42977464138) passed all four jobs (Ubuntu and Windows, Python 3.11 and 3.12); the Windows jobs ran the seven desktop UI tests after installing PySide6, and Ubuntu 3.12 reported 158 passed / 4 skipped.
 
 A release may not be called production-certified until all applicable gates pass on the supported Windows hardware/software matrix. Feature presence alone is not proof of production readiness.

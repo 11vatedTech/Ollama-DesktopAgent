@@ -1,8 +1,9 @@
 # 11vatedTech Intelligence Interface
 
-**Status:** Implemented and locally verified on Windows. The interface is a
-PySide6/Qt client of the existing local application services. It is not
-production-certified; the limits of the current evidence are listed below.
+**Status:** Implemented, locally verified on Windows and covered by hosted CI.
+The interface is a PySide6/Qt client of the existing local application
+services. It is not production-certified; the limits of the current evidence are
+listed below.
 
 The desktop shell presents the workstation as nine coordinated workspaces. It
 uses a local-only visual language built from shared tokens and widgets, with a
@@ -76,6 +77,7 @@ captures 1480 × 940 and 1120 × 720 logical windows.
 | Full suite, Python 3.12.13 | `pytest -q` | 164 passed, 4 skipped |
 | Full suite, Python 3.11.15 | `pytest -q` | 157 passed, 5 skipped |
 | Static checks | Ruff and `compileall` over `src`, `tests` and the gallery script | passed |
+| Hosted CI | GitHub Actions run [42977464138](https://github.com/11vatedTech/Ollama-DesktopAgent/actions/runs/42977464138) | all four Windows/Ubuntu × Python 3.11/3.12 jobs passed; Windows UI job passed 7 tests |
 | Live local completion | `qwen2.5-coder:7b` through Advanced Chat, 15 models / Ollama 0.40.15 | returned `STREAM_OK`; persisted two messages |
 | Live cancellation | Chat request stopped after the first streamed token | UI reached `standby` / `Generation stopped`; Stop disabled; conversation persisted |
 | Bounded workforce | Delivery plan through Workforce Studio, `qwen2.5-coder:7b` | three tasks ran; verifier returned `VERDICT: FAIL`; host reported `verification_failed` and did not claim success |

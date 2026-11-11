@@ -65,7 +65,7 @@ Development increment on the 0.1.0 foundation. This is a pre-release engineering
 ### Research and quality
 - Added dated primary-source research and benchmark-validity register.
 - Documented explicit release gates, competitor constraints, reproducibility manifest and measured autonomy metric.
-- Local Windows Python 3.12.13 passed 164 tests with 4 skipped; Python 3.11.15 passed 157 with 5 skipped. Ruff and `compileall` pass, including the real MCP transport suite. The seven focused desktop UI tests pass offscreen. Opt-in live Ollama tests pass with `OLLAMA_LIVE=1`. Hosted CI results are reported separately after push; Linux coverage is not inferred from local runs.
+- Local Windows Python 3.12.13 passed 164 tests with 4 skipped; Python 3.11.15 passed 157 with 5 skipped. Ruff and `compileall` pass, including the real MCP transport suite. The seven focused desktop UI tests pass offscreen. Opt-in live Ollama tests pass with `OLLAMA_LIVE=1`. Hosted CI run 42977464138 passed all four Windows/Ubuntu Python 3.11/3.12 jobs, including the seven desktop UI tests on Windows; local results remain distinct from hosted coverage.
 - Added structured JSONL logging with rotation and redaction, plus a `doctor` diagnostic snapshot. Added measured startup, inventory, routing, tool, checkpoint, recovery, concurrency and desktop-construction timings in Operations documentation.
 - Added real MCP stdio and Streamable HTTP transport certification tests; mocks remain supplemental.
 

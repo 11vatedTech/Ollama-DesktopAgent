@@ -93,5 +93,6 @@ environment, including model inference, artifact writes and verification. See
   its verifier returned `VERDICT: FAIL`.
 - Real MCP stdio and Streamable HTTP integration tests remain part of the suite
   when the `mcp` extra is installed.
-- Hosted CI results are reported separately after the branch is pushed; local
-  results do not establish Linux or hosted-runner coverage.
+- Hosted CI run 42977464138 passed all four matrix jobs (Ubuntu/Windows,
+  Python 3.11/3.12). The Windows jobs ran seven desktop UI tests; Ubuntu 3.12
+  reported 158 passed / 4 skipped in the full suite.
