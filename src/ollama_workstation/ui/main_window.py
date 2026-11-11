@@ -38,6 +38,11 @@ from ollama_workstation.agents.mcp_gateway import (
     MCPToolGateway,
 )
 from ollama_workstation.agents.memory import MemoryStore
+from ollama_workstation.agents.recovery import (
+    RecoveryCandidate,
+    RecoveryStatus,
+    load_recovery_candidates,
+)
 from ollama_workstation.agents.runtime import AgentRuntime
 from ollama_workstation.agents.tools import WorkspaceTools
 from ollama_workstation.benchmarking.runner import BenchmarkRunner
@@ -92,9 +97,11 @@ class MainWindow(QMainWindow):
         self.model_refs: dict[str, ModelRef] = {}
         self.selected_model = ""
         self.run_history_data: list[dict[str, object]] = []
+        self.recovery_data: list[RecoveryCandidate] = []
         self._build()
         self.refresh_models()
         self.refresh_runs()
+        self.refresh_recovery()
 
     def _build(self) -> None:
         root_widget = QWidget()
@@ -256,6 +263,23 @@ class MainWindow(QMainWindow):
         split.addWidget(self.run_history_detail)
         split.setStretchFactor(1, 3)
         layout.addWidget(split, 1)
+        layout.addWidget(QLabel("Recoverable runs (integrity-checked safe boundaries)"))
+        self.recovery_list = QListWidget()
+        self.recovery_list.setMaximumHeight(120)
+        self.recovery_list.currentRowChanged.connect(self.show_recovery)
+        layout.addWidget(self.recovery_list)
+        recovery_actions = QHBoxLayout()
+        resume = QPushButton("Resume verified run")
+        resume.clicked.connect(self.resume_recovery_run)
+        discard = QPushButton("Discard checkpoint")
+        discard.clicked.connect(self.discard_recovery_run)
+        refresh_recovery = QPushButton("Refresh recovery")
+        refresh_recovery.clicked.connect(self.refresh_recovery)
+        recovery_actions.addWidget(resume)
+        recovery_actions.addWidget(discard)
+        recovery_actions.addWidget(refresh_recovery)
+        recovery_actions.addStretch(1)
+        layout.addLayout(recovery_actions)
         return page
 
     def refresh_runs(self) -> None:
@@ -326,6 +350,160 @@ class MainWindow(QMainWindow):
             f"<h2>Objective</h2><p>{html.escape(task)}</p>"
             f"<h2>Event journal ({len(events)} events)</h2>{''.join(event_rows)}"
         )
+
+    def refresh_recovery(self) -> None:
+        """Reload integrity-checked recovery candidates without blocking the UI."""
+        if not hasattr(self, "recovery_list"):
+            return
+        try:
+            candidates = load_recovery_candidates(self.repository)
+        except Exception as exc:
+            self.recovery_data = []
+            self.recovery_list.clear()
+            self.recovery_list.addItem("Recovery scan failed; see status bar.")
+            self.status.setText(f"Recovery scan failed: {type(exc).__name__}")
+            return
+        self.recovery_data = list(candidates)
+        self.recovery_list.clear()
+        labels = {
+            RecoveryStatus.RESUMABLE: "RESUMABLE",
+            RecoveryStatus.NEEDS_REVIEW: "REVIEW REQUIRED",
+            RecoveryStatus.STALE: "STALE",
+            RecoveryStatus.CORRUPT: "CORRUPT",
+            RecoveryStatus.SUPERSEDED: "SUPERSEDED",
+            RecoveryStatus.EXHAUSTED: "BUDGET EXHAUSTED",
+        }
+        for item in candidates:
+            task = " ".join(item.task.split())
+            if len(task) > 56:
+                task = task[:53] + "..."
+            self.recovery_list.addItem(
+                f"{labels[item.status]} · {item.agent_title or 'Agent'} · "
+                f"step {item.step}/{item.step_budget or '?'} · "
+                f"{item.updated_at[:19]} · {task}"
+            )
+        if not candidates:
+            self.recovery_list.addItem("No durable checkpoints require attention.")
+
+    def show_recovery(self, row: int) -> None:
+        """Explain why a checkpoint is or is not eligible for automatic resume."""
+        if row < 0 or row >= len(self.recovery_data):
+            return
+        candidate = self.recovery_data[row]
+        if candidate.status is RecoveryStatus.RESUMABLE:
+            self.status.setText(
+                f"Checkpoint {candidate.run_id[:8]} is resumable at safe step {candidate.step}."
+            )
+            return
+        self.status.setText(f"{candidate.status.value.upper()}: {candidate.reason}")
+
+    def resume_recovery_run(self) -> None:
+        """Resume one eligible checkpoint after explicit user confirmation."""
+        row = self.recovery_list.currentRow()
+        if row < 0 or row >= len(self.recovery_data):
+            return
+        if self.agent_cancel_event is not None:
+            QMessageBox.information(
+                self, "Agent busy", "Wait for the active run to finish or stop it first."
+            )
+            return
+        candidate = self.recovery_data[row]
+        if not candidate.resumable:
+            QMessageBox.information(
+                self, "Run not resumable",
+                f"{candidate.reason}\n\nReview the event journal and discard the checkpoint "
+                "before starting a new run.",
+            )
+            return
+        try:
+            checkpoint = self.repository.get_run_checkpoint(candidate.run_id)
+        except ValueError as exc:
+            self.show_error(f"Checkpoint integrity verification failed: {exc}")
+            return
+        if checkpoint is None:
+            self.refresh_recovery()
+            return
+        payload = checkpoint.get("payload") or {}
+        task = str(payload.get("task") or "")
+        model = str(checkpoint.get("model_name") or "")
+        profile = self.repository.get_profile(
+            model, str(checkpoint.get("model_digest") or "")
+        )
+        if profile is None:
+            QMessageBox.warning(
+                self, "Exact profile unavailable",
+                "The profiled model digest for this checkpoint is no longer stored. "
+                "Refusing to resume.",
+            )
+            return
+        workspace = Path(str(checkpoint.get("workspace") or ""))
+        if not workspace.is_dir():
+            QMessageBox.warning(
+                self, "Workspace missing",
+                f"The bound workspace no longer exists:\n{workspace}",
+            )
+            return
+        confirmed = QMessageBox.question(
+            self, "Resume durable run",
+            f"Resume {candidate.agent_title or 'agent'} at step {candidate.step + 1} "
+            f"of {candidate.step_budget}?\n\n"
+            f"Model: {model}\nWorkspace: {workspace}\n\nTask:\n{task}\n\n"
+            "The exact model digest, workspace and tool manifest are re-verified "
+            "before execution.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirmed != QMessageBox.StandardButton.Yes:
+            return
+        cancel_event = Event()
+        self.agent_cancel_event = cancel_event
+        self.run_agent_button.setEnabled(False)
+        self.cancel_agent_button.setEnabled(True)
+        self.agent_progress.show()
+        self.agent_output.clear()
+        worker = FunctionWorker(
+            lambda: self._run_agent_task(
+                model, profile, task, workspace, cancel_event,
+                lambda message: worker.signals.progress.emit(message),
+                resume_checkpoint=checkpoint,
+            )
+        )
+        worker.signals.progress.connect(
+            lambda message: self.agent_output.append(html.escape(message))
+        )
+        worker.signals.result.connect(self.agent_finished)
+        worker.signals.error.connect(self.show_error)
+        worker.signals.finished.connect(lambda: (
+            self.agent_progress.hide(),
+            self.run_agent_button.setEnabled(True),
+            self.cancel_agent_button.setEnabled(False),
+            setattr(self, "agent_cancel_event", None),
+        ))
+        self.pool.start(worker)
+        self.status.setText(f"Resuming verified run {candidate.run_id[:8]}.")
+
+    def discard_recovery_run(self) -> None:
+        """Delete a checkpoint only after explicit user review."""
+        row = self.recovery_list.currentRow()
+        if row < 0 or row >= len(self.recovery_data):
+            return
+        candidate = self.recovery_data[row]
+        confirmed = QMessageBox.question(
+            self, "Discard checkpoint",
+            f"Discard the durable checkpoint for run {candidate.run_id[:8]}?\n\n"
+            "The event journal and run history are retained; only the recovery snapshot "
+            "is deleted. Review any interrupted tool side effects in the workspace "
+            "separately.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirmed != QMessageBox.StandardButton.Yes:
+            return
+        if self.repository.delete_run_checkpoint(candidate.run_id):
+            self.status.setText(f"Discarded checkpoint {candidate.run_id[:8]}.")
+        else:
+            self.status.setText("Checkpoint was already removed.")
+        self.refresh_recovery()
 
     def _settings(self) -> QWidget:
         page = QWidget()
@@ -733,8 +911,9 @@ class MainWindow(QMainWindow):
     def _run_agent_task(
         self, model: str, profile: ModelProfile, task: str,
         workspace: Path, cancel_event: Event, progress: Callable[[str], None],
+        *, resume_checkpoint: dict[str, object] | None = None,
     ) -> object:
-        """Validate the live model digest and run the bounded agent with local memory."""
+        """Validate the live model digest and run or resume the bounded agent."""
         installed = next(
             (item for item in ModelProfiler(self.client).inventory() if item.name == model),
             None,
@@ -758,6 +937,7 @@ class MainWindow(QMainWindow):
                 model, profile, task, tools,
                 event=lambda item: progress(f"[{item.kind}] {item.message}"),
                 cancel_event=cancel_event,
+                resume_checkpoint=resume_checkpoint,
             )
 
     def agent_finished(self, result: object) -> None:
@@ -770,6 +950,7 @@ class MainWindow(QMainWindow):
             f"<b>{html.escape(result.status)}</b>{notice}<p>{html.escape(safe_message)}</p>"
         )
         self.refresh_runs()
+        self.refresh_recovery()
 
     def save(self) -> None:
         try:

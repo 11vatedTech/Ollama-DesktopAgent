@@ -44,10 +44,11 @@ The core is provider/harness/UI separated. The desktop shell does not duplicate 
 | Structured JSON action fallback and guided text action fallback | Implemented |
 | Workspace-scoped file tools | Implemented with containment, size limits, host schemas, credential-path denial and heuristic secret-value redaction before model context |
 | Optional allow-listed command tool | Implemented but disabled by default; configured executable resolution and human approval required; not a sandbox |
-| SQLite profile, conversation, run and scoped-memory persistence | Implemented; explicit scoped notes, lexical recall/archive, per-event durable run journal and Run History UI. Resume/checkpointing and embeddings remain open |
+| SQLite profile, conversation, run, checkpoint and scoped-memory persistence | Implemented; explicit scoped notes, lexical recall/archive, per-event durable run journal and Run History UI. Embeddings remain open |
+| Durable run recovery | Implemented for single-process local runs: integrity-hashed safe-boundary checkpoints, exact model-digest/workspace/harness/tool-manifest binding, desktop and CLI recovery, fail-closed review for interrupted tools. Multi-process leases remain open |
 | PySide6 desktop shell and headless CLI | Implemented with Model Intelligence, Agent Workspace, Run History and Settings pages; Windows desktop import passes in CI; full interactive QA on supported hardware remains |
 | Evidence-based workforce ranking primitive | Implemented for software, repository, workflow, research, visual, quantitative, data, creative, multilingual and planning roles; qualification is explicit |
-| Full MCP client/server ecosystem, browser/computer-use adapters, durable resumable runs, dynamic multi-agent scheduler, specialist benchmark adapters and role/agent certification | Roadmap |
+| Full MCP client/server ecosystem, browser/computer-use adapters, delegated multi-agent scheduling, specialist benchmark adapters and role/agent certification | Roadmap |
 
 ## Requirements
 
@@ -93,6 +94,27 @@ python -m ollama_workstation
 ```
 
 The profile probe suite makes several model calls and loads the selected model. `--repeats 1..5` repeats each smoke probe and records pass rate, confidence and inference metrics. The separate `benchmark` command runs the versioned six-case `11vated-core` suite with independent exact, numeric, JSON-schema and ordered-term evaluators. It writes a JSON report containing the model digest, manifest SHA-256, per-case trial outcomes, Wilson intervals, latency/throughput and host snapshot. This local core suite is a deterministic diagnostic—not a leaderboard, statistical certification or substitute for SWE-bench, BFCL, OSWorld or specialist audits. Read the [Research Register](docs/RESEARCH_REGISTER.md) before interpreting public benchmark scores.
+
+## Durable run recovery
+
+Agent execution persists an integrity-checked checkpoint at three safe boundaries: immediately before each provider request (`awaiting_model`), before a tool batch (`tool_in_progress`) and after a completed tool batch (`ready`). Each checkpoint is bound to the exact Ollama model digest, canonical workspace, task, harness mode and host tool-manifest hash. An envelope SHA-256 covers every binding column, counter, timestamp and the bounded, redacted conversation payload, so altering a stored workspace, digest or freshness timestamp invalidates recovery instead of silently resuming different execution.
+
+Recovery is fail-closed:
+
+- `ready` and `awaiting_model` checkpoints are resumable only when the stored profile digest is available, the installed Ollama digest still matches and the rebuilt tool manifest is identical.
+- A run interrupted during a tool operation becomes `needs_review`. It is never replayed automatically, because the host cannot prove whether the side effect occurred.
+- Corrupt payloads, tampered bindings, unsupported protocols, completed runs and checkpoints older than the 72-hour recovery window are refused.
+- Only completed runs (and deterministic step/context exhaustion) delete their checkpoint. Cancelled and failed runs retain one for explicit review.
+
+CLI:
+
+```powershell
+11vated recover --list
+11vated recover RUN_ID
+11vated recover RUN_ID --discard
+```
+
+The desktop **Run History** page lists the same candidates, explains why each is or is not resumable, requires confirmation before resuming and verifies the live model digest again. Resume reuses the original run ID, appends a `resumed` event to the durable journal and continues within the original step budget rather than granting a fresh one.
 
 ## Privacy and security
 
@@ -157,7 +179,7 @@ ruff check .
 python -m compileall -q src
 ```
 
-CI is configured for Python 3.11/3.12 on Windows and Ubuntu. The last fully validated checkpoint passed compile, Ruff, tests and Windows desktop-import jobs (55 tests at that checkpoint). Newer cancellation, process cleanup and secret-path regression tests are awaiting a completed matrix before they are treated as validated. The Windows packaging workflow builds a PyInstaller distribution; installer signing and release certification remain open gates.
+CI is configured for Python 3.11/3.12 on Windows and Ubuntu. On this branch, Windows Python 3.12 passes compile, Ruff and `pytest` with **112 passed, 1 skipped**; the skip is a platform-conditional test, not a waived failure. The GitHub Actions matrix is the authoritative cross-platform result; do not infer Linux or Python 3.11 coverage from a single local run. The Windows packaging workflow builds a PyInstaller distribution; installer signing and release certification remain open gates.
 
 ## Research sources
 

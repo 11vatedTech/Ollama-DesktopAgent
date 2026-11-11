@@ -25,7 +25,7 @@ Assets include source code, workspaces, local credentials, private keys, Git rep
 - Optional command execution is disabled by default. When explicitly enabled, command names are resolved to configured executable paths, path-form model requests are rejected, shell=False is used, a host approval callback is required, the environment is reduced and a 90-second deadline is enforced.
 - Command cancellation/timeout attempts to terminate the process tree: POSIX uses a dedicated process group; Windows uses taskkill /T /F while the direct parent remains available. This is best-effort process cleanup, not an OS sandbox.
 - Local memory writes are explicit, scope-bound (user/project/agent), credential-redacted and validated. Recalled notes are marked as untrusted data in the system prompt and cannot grant permissions.
-- Run execution is bounded by a configured step limit. Ordered events are journaled to SQLite during execution; crash-interrupted runs remain visible with a running status. The journal is not tamper-proof, and it is not a resumable checkpoint.
+- Run execution is bounded by a configured step limit. Ordered events are journaled to SQLite during execution; crash-interrupted runs remain visible with a running status. Safe-boundary checkpoints record the exact model digest, workspace, task, harness and tool-manifest binding. They are integrity-hashed but not tamper-proof against an attacker who can rewrite both the database and the application code, and the SQLite file is not encrypted at rest. An interrupted tool batch is marked `needs_review` and is never replayed automatically.
 
 ## Known limitations — not production-certified
 
@@ -35,7 +35,7 @@ Assets include source code, workspaces, local credentials, private keys, Git rep
 - Credential path protection and value redaction are heuristic deny-lists/pattern filters; they cannot identify every secret, encoded key, custom token format, renamed credential file or application-specific vault. Never treat them as a complete data-loss-prevention system.
 - The allow_sensitive_files constructor option exists for trusted host integrations, but the desktop does not expose it. Do not enable it for model-controlled tasks.
 - The stop action can close the active HTTP stream, but it cannot guarantee that the Ollama server immediately releases GPU memory or stops all work. Provider cancellation semantics must be verified for each supported Ollama release.
-- The runtime does not yet implement a durable checkpoint/resume protocol, OS sandbox enforcement, network egress firewall, MCP OAuth/protected-resource authorization, browser/computer-use controls, credential broker or signed certification. The optional MCP client supports exact, user-configured tool grants over stdio and Streamable HTTP, but does not sandbox child servers. Do not enable untrusted MCP packages or protected remote servers.
+- The runtime does not yet implement OS sandbox enforcement, a network egress firewall, MCP OAuth/protected-resource authorization, browser/computer-use controls, a credential broker or signed certification. Durable checkpoint/resume is implemented for single-process local runs; multi-process resume leases are not enforced, so do not point two workstation processes at the same database and resume the same run. The optional MCP client supports exact, user-configured tool grants over stdio and Streamable HTTP, but does not sandbox child servers. Do not enable untrusted MCP packages or protected remote servers.
 - Prompt injection is not solved by system prompts. Every adapter, file path and external tool needs host-side policy.
 - Remote Ollama endpoints receive prompts and local project context. Configure a remote endpoint only when its data-handling posture is acceptable.
 
@@ -48,7 +48,7 @@ Assets include source code, workspaces, local credentials, private keys, Git rep
 5. Add sanitized observations and an explicit untrusted-data boundary for files, memory and web content.
 6. Record append-only audit events for run start, model digest, tool request, policy decision, approval, execution, result and verification.
 7. Add in-flight cancellation, process-tree cleanup, CPU/RAM/disk/process-count quotas and cleanup after application crashes.
-8. Add crash-safe run checkpoints and resumable execution with model/harness/policy version binding.
+8. Durable checkpoints bind model/harness/policy/tool manifest and refuse interrupted tools. Extend the same contract to delegated child runs and add multi-process resume leases before broader computer control.
 9. Add SBOM, dependency/license scanning, vulnerability review, signed installers and reproducible Windows packaging.
 10. Threat-model MCP server provenance, remote transport authentication, server capabilities and child-agent permission inheritance. The current client uses explicit per-server tool-name grants and environment-variable references for stdio secrets; OAuth, custom HTTP authorization headers, resource/prompt subscriptions and an MCP server are not implemented. The current client uses explicit per-server tool-name grants and environment-variable references for stdio secrets; OAuth, custom HTTP authorization headers, resource/prompt subscriptions and an MCP server are not implemented.
 

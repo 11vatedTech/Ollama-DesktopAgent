@@ -66,13 +66,13 @@ Provider-specific response handling stays out of profile and agent logic. Stream
 
 ### Agent runtime
 
-`agents/runtime.py` owns the bounded control loop. It supports native tool calls and structured-action fallbacks. The model never directly calls Python functions: the host parses, validates tool names and arguments, applies policy and invokes registered tools.
+`agents/runtime.py` owns the bounded control loop. It supports native tool calls and structured-action fallbacks. The model never directly calls Python functions: the host parses, validates tool names and arguments, applies policy and invokes registered tools. The runtime writes durable checkpoints at model-request and tool-batch boundaries; eligibility and binding verification are centralized in `agents/recovery.py` so the desktop, CLI and runtime enforce one recovery contract.
 
 `agents/tools.py` exposes workspace-scoped list/read/write/search tools and an optional allow-listed command tool. Shell execution is disabled by default and requires host approval.
 
 ### Persistence
 
-`storage/repository.py` stores model profiles, agent run traces and conversation state in SQLite. Profiles are keyed by exact model name and Ollama digest.
+`storage/repository.py` stores model profiles, agent runs, ordered run events, scoped memory and durable run checkpoints in SQLite. Profiles are keyed by exact model name and Ollama digest. Checkpoints carry an envelope SHA-256 over the binding columns, counters, timestamps and bounded payload; a failed integrity check raises instead of returning partial state.
 
 ## Agent execution sequence
 
@@ -122,6 +122,10 @@ Native tool calls are validated by the host. The shell tool is opt-in, allow-lis
 
 The GUI and CLI are clients of the same service layer. No model-specific logic or security policy is implemented in UI code.
 
+### ADR-005: Recovery is a fail-closed boundary, not replay
+
+A checkpoint may only be restored when protocol, integrity, binding, run status and freshness all verify. Tool side effects are not idempotent, so an interrupted tool batch is never replayed; it enters human review. Recovery reuses the original run ID and step budget and appends to the same event journal.
+
 ## Deferred architecture
 
-Streaming event bus, durable resumable runs, MCP/ACP adapters, browser and computer-use environments, sandboxed execution, project memory retrieval, dynamic multi-agent orchestration and hardware-aware model scheduling are explicitly later phases. They must use the same provider, policy, trace and evidence contracts.
+Streaming event bus, MCP/ACP adapters, browser and computer-use environments, sandboxed execution, project memory retrieval, dynamic multi-agent orchestration and hardware-aware model scheduling are explicitly later phases. They must use the same provider, policy, trace and evidence contracts.

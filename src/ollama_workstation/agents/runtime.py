@@ -13,6 +13,11 @@ from threading import Event
 from typing import Any, Protocol
 
 from ollama_workstation.agents.memory import MemoryRecord, MemoryStore
+from ollama_workstation.agents.recovery import (
+    CHECKPOINT_PROTOCOL,
+    DEFAULT_MAX_CHECKPOINT_AGE_SECONDS,
+    verify_resume_checkpoint,
+)
 from ollama_workstation.agents.tools import ToolError, WorkspaceTools
 from ollama_workstation.models.schemas import ModelProfile, utc_now
 from ollama_workstation.ollama.client import OllamaClient
@@ -77,15 +82,18 @@ class AgentRuntime:
     MAX_TOOL_CALLS_PER_STEP = 8
     MAX_TOTAL_TOOL_CALLS = 64
     MAX_TOOL_CALLS_PER_BATCH = 32
+    MAX_CHECKPOINT_CHARS = 600_000
 
     def __init__(self, client: OllamaClient, *, max_steps: int = 12,
                  keep_alive: str = "5m", repository: Any | None = None,
-                 memory_store: MemoryStore | None = None) -> None:
+                 memory_store: MemoryStore | None = None,
+                 checkpoint_max_age_seconds: int = DEFAULT_MAX_CHECKPOINT_AGE_SECONDS) -> None:
         self.client = client
         self.max_steps = max(1, min(max_steps, 40))
         self.keep_alive = keep_alive
         self.repository = repository
         self.memory_store = memory_store
+        self.checkpoint_max_age_seconds = max(0, int(checkpoint_max_age_seconds))
 
     def run(self, model: str, profile: ModelProfile, task: str, tools: AgentToolRegistry,
             *, event: Callable[[AgentEvent], None] | None = None,
@@ -148,13 +156,20 @@ class AgentRuntime:
                         run_id, model, profile.professional_title, safe_task, status,
                         created_at, utc_now(), safe_trace,
                     )
-                    if status not in {"step_limit", "failed", "context_limit"}:
+                    # A completed run needs no recovery. Deterministic budget
+                    # exhaustion cannot succeed on resume either, so it is cleared.
+                    if status in {"completed", "step_limit", "context_limit"}:
                         self.repository.delete_run_checkpoint(run_id)
                 except Exception as exc:
                     record("persistence_error", f"Execution finished but trace persistence failed: {exc}")
             return result
 
-        tool_specs = tools.definitions()
+        # Tool definitions are ordered by name so the manifest binding is stable
+        # across processes and across MCP route ordering.
+        tool_specs = sorted(
+            tools.definitions(),
+            key=lambda entry: str(entry.get("function", {}).get("name", "")),
+        )
         tool_names = [entry["function"]["name"] for entry in tool_specs]
         native_tools = profile.agentability_mode == "native_tools"
         structured = profile.agentability_mode == "structured_actions"
@@ -164,19 +179,13 @@ class AgentRuntime:
         ).hexdigest()
         memories: list[MemoryRecord] = []
         total_tool_calls = 0
+        step_budget = self.max_steps
+        resume_count = 0
         messages: list[dict[str, Any]]
         if resume_checkpoint is not None:
             if self.repository is None:
                 raise RuntimeError("Run recovery requires the persistent repository.")
-            if resume_checkpoint.get("state") not in {"ready", "awaiting_model"}:
-                raise RuntimeError(
-                    "This run stopped during a tool operation. Review the last tool action and its "
-                    "side effects before starting a new run; automatic replay is blocked."
-                )
-            payload = resume_checkpoint.get("payload")
-            if not isinstance(payload, dict) or payload.get("version") != 1:
-                raise ValueError("Unsupported or malformed agent checkpoint version.")
-            expected = {
+            binding = {
                 "model_name": model,
                 "model_digest": profile.digest,
                 "agent_title": profile.professional_title,
@@ -184,27 +193,17 @@ class AgentRuntime:
                 "harness_mode": profile.agentability_mode,
                 "tool_manifest_sha256": tool_manifest,
             }
-            mismatches = [
-                key for key, value in expected.items()
-                if resume_checkpoint.get(key) != value
-            ]
-            if mismatches:
-                raise ValueError(
-                    "Cannot resume because the execution binding changed: "
-                    + ", ".join(mismatches)
-                )
-            if payload.get("task") != str(_sanitize_event_value(task)):
-                raise ValueError("Cannot resume because the saved task does not match this request.")
-            raw_messages = payload.get("messages")
-            if (
-                not isinstance(raw_messages, list)
-                or len(raw_messages) < 2
-                or not all(isinstance(item, dict) for item in raw_messages)
-            ):
-                raise ValueError("The saved checkpoint does not contain a valid conversation.")
-            messages = raw_messages
-            start_step = max(1, int(resume_checkpoint.get("step", 0)) + 1)
-            total_tool_calls = int(resume_checkpoint.get("tool_calls", 0))
+            payload = verify_resume_checkpoint(
+                resume_checkpoint,
+                binding=binding,
+                task=str(_sanitize_event_value(task)),
+                max_age_seconds=self.checkpoint_max_age_seconds,
+            )
+            messages = [dict(item) for item in payload["messages"]]
+            start_step = int(resume_checkpoint["step"]) + 1
+            step_budget = int(payload["step_budget"])
+            total_tool_calls = int(resume_checkpoint["tool_calls"])
+            resume_count = int(payload.get("resume_count", 0)) + 1
             created_at = str(resume_checkpoint.get("created_at") or created_at)
             trace = [
                 AgentEvent(
@@ -220,6 +219,8 @@ class AgentRuntime:
                 "Resumed from an integrity-checked safe execution boundary.",
                 checkpoint_state=resume_checkpoint.get("state"),
                 next_step=start_step,
+                step_budget=step_budget,
+                resume_count=resume_count,
             )
         else:
             if self.memory_store is not None:
@@ -244,40 +245,66 @@ class AgentRuntime:
             record("started", f"Agent started as {profile.professional_title}.",
                    model=model, mode=profile.agentability_mode, workspace=workspace_path)
 
+        def bounded_checkpoint_messages() -> list[dict[str, Any]]:
+            """Keep the system/task prefix and as much recent context as fits.
+
+            The snapshot is redacted and bounded before it reaches SQLite. It is
+            intentionally a safe context snapshot, not an exact conversation
+            replica; restoration still has the full durable event journal.
+            """
+            pinned = messages[:2]
+            tail = list(messages[2:][-60:])
+            while tail:
+                candidate = _sanitize_event_value([*pinned, *tail])
+                encoded = json.dumps(candidate, ensure_ascii=False, default=str)
+                if len(encoded) <= self.MAX_CHECKPOINT_CHARS:
+                    return candidate
+                tail.pop(0)
+            return _sanitize_event_value(pinned)
+
         def persist_checkpoint(
             state: str,
             completed_step: int,
             *,
-            pending_tool: dict[str, Any] | None = None,
-        ) -> None:
+            pending_operations: list[dict[str, Any]] | None = None,
+        ) -> bool:
+            """Persist a safe-boundary snapshot. A failure aborts the run closed."""
             if self.repository is None:
-                return
-            # Preserve the system contract and original objective, plus the most recent
-            # bounded working set. Credentials are redacted before SQLite persistence.
-            recent_messages = [messages[0], messages[1], *messages[2:][-98:]]
+                return True
             snapshot = {
-                "version": 1,
+                "protocol": CHECKPOINT_PROTOCOL,
                 "task": str(_sanitize_event_value(task)),
-                "messages": _sanitize_event_value(recent_messages),
-                "pending_tool": _sanitize_event_value(pending_tool) if pending_tool else None,
+                "messages": bounded_checkpoint_messages(),
+                "pending_operations": _sanitize_event_value(pending_operations or []),
+                "step_budget": step_budget,
+                "resume_count": resume_count,
             }
-            self.repository.save_run_checkpoint(
-                run_id=run_id,
-                model_name=model,
-                model_digest=profile.digest,
-                agent_title=profile.professional_title,
-                workspace=workspace_path,
-                harness_mode=profile.agentability_mode,
-                tool_manifest_sha256=tool_manifest,
-                state=state,
-                step=completed_step,
-                tool_calls=total_tool_calls,
-                payload=snapshot,
-                created_at=created_at,
-                updated_at=utc_now(),
-            )
+            try:
+                self.repository.save_run_checkpoint(
+                    run_id=run_id,
+                    model_name=model,
+                    model_digest=profile.digest,
+                    agent_title=profile.professional_title,
+                    workspace=workspace_path,
+                    harness_mode=profile.agentability_mode,
+                    tool_manifest_sha256=tool_manifest,
+                    state=state,
+                    step=completed_step,
+                    tool_calls=total_tool_calls,
+                    payload=snapshot,
+                    created_at=created_at,
+                    updated_at=utc_now(),
+                )
+                return True
+            except Exception as exc:
+                record(
+                    "checkpoint_error",
+                    "Durable checkpoint persistence failed; execution stopped at the safe boundary.",
+                    error_type=type(exc).__name__,
+                )
+                return False
 
-        for step in range(start_step, start_step + self.max_steps):
+        for step in range(start_step, step_budget + 1):
             if cancel_event is not None and cancel_event.is_set():
                 record("cancelled", "Agent cancellation acknowledged before the next provider request.")
                 return finish("cancelled", "Execution was cancelled by the user.", step - 1)
@@ -291,7 +318,14 @@ class AgentRuntime:
                 if current_size > self.MAX_CONVERSATION_CHARS:
                     record("context_limit", "Current task context exceeds runtime budget.")
                     return finish("context_limit", "Stopped because task context exceeded the safe runtime budget.", step - 1)
-            record("thinking", f"Requesting model response ({step}/{self.max_steps}).", step=step)
+            if not persist_checkpoint("awaiting_model", step - 1):
+                return finish(
+                    "failed",
+                    "Execution stopped because the durable checkpoint could not be saved "
+                    "before the provider request.",
+                    step - 1,
+                )
+            record("thinking", f"Requesting model response ({step}/{step_budget}).", step=step)
             try:
                 request_options: dict[str, Any] = {
                     "tools": tool_specs if native_tools else None,
@@ -362,6 +396,21 @@ class AgentRuntime:
             else:
                 deferred_calls = []
 
+            # The whole batch is one human-review boundary: if the process dies
+            # during any call, the checkpoint remains tool_in_progress and is
+            # never replayed automatically.
+            if calls and not persist_checkpoint(
+                "tool_in_progress",
+                step - 1,
+                pending_operations=[self._call_summary(call) for call in calls],
+            ):
+                return finish(
+                    "failed",
+                    "Execution stopped before the tool batch because the durable checkpoint "
+                    "could not be saved.",
+                    step - 1,
+                )
+
             for call in calls:
                 if cancel_event is not None and cancel_event.is_set():
                     record("cancelled", "Agent cancellation acknowledged before the next tool operation.")
@@ -391,6 +440,19 @@ class AgentRuntime:
                     except ToolError as exc:
                         output = {"error": str(exc)}
                         record("tool_denied", str(exc), tool=name)
+                    except Exception as exc:
+                        record(
+                            "tool_failed",
+                            f"Tool {name} raised an unexpected error; the run remains at a "
+                            "human-review boundary and will not replay automatically.",
+                            tool=name,
+                            error_type=type(exc).__name__,
+                        )
+                        return finish(
+                            "failed",
+                            f"Tool {name} failed unexpectedly; review the workspace before starting again.",
+                            step,
+                        )
                 encoded_output = json.dumps(output, ensure_ascii=False)
                 if len(encoded_output) > self.MAX_TOOL_RESULT_CHARS:
                     encoded_output = json.dumps({
@@ -412,8 +474,35 @@ class AgentRuntime:
                     }),
                 })
 
-        record("limit_reached", f"Stopped at the configured {self.max_steps}-step limit.")
-        return finish("step_limit", "Execution stopped at the maximum step limit. Review the trace and continue with a new task.", self.max_steps)
+            if calls and not persist_checkpoint("ready", step - 1):
+                return finish(
+                    "failed",
+                    "Execution stopped after the tool batch because the durable checkpoint "
+                    "could not be saved.",
+                    step,
+                )
+
+        record("limit_reached", f"Stopped at the configured {step_budget}-step limit.")
+        return finish("step_limit", "Execution stopped at the maximum step limit. Review the trace and continue with a new task.", step_budget)
+
+    @staticmethod
+    def _call_summary(call: Any) -> dict[str, Any]:
+        """Describe a pending tool call without persisting its sensitive arguments."""
+        function = call.get("function") if isinstance(call, dict) else {}
+        function = function if isinstance(function, dict) else {}
+        arguments = function.get("arguments") or {}
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                arguments = {}
+        keys = sorted(str(key) for key in arguments) if isinstance(arguments, dict) else []
+        encoded = json.dumps(arguments, ensure_ascii=False, sort_keys=True, default=str)
+        return {
+            "name": str(function.get("name") or "")[:120],
+            "argument_keys": keys,
+            "arguments_sha256": hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
+        }
 
     @staticmethod
     def _system_prompt(

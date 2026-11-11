@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -13,10 +14,12 @@ from ollama_workstation.agents.binding import validate_installed_model_binding
 from ollama_workstation.agents.identity_package import export_identity_package
 from ollama_workstation.agents.mcp_gateway import CompositeToolRegistry, MCPToolGateway
 from ollama_workstation.agents.memory import MemoryStore
-from ollama_workstation.agents.runtime import AgentRuntime
+from ollama_workstation.agents.recovery import load_recovery_candidates
+from ollama_workstation.agents.runtime import AgentEvent, AgentResult, AgentRuntime
 from ollama_workstation.agents.tools import WorkspaceTools
 from ollama_workstation.benchmarking.runner import BenchmarkRunner
 from ollama_workstation.config import AppPaths, load_settings
+from ollama_workstation.models.schemas import ModelProfile
 from ollama_workstation.ollama.client import OllamaClient, OllamaError
 from ollama_workstation.profiling.profiler import ModelProfiler
 from ollama_workstation.profiling.research import HuggingFaceResearcher, attach_model_card_evidence
@@ -29,6 +32,111 @@ def _services() -> tuple[Any, Any, Any, Any]:
     settings = load_settings(paths.config_file)
     client = OllamaClient(settings.ollama_base_url, settings.request_timeout_seconds)
     return paths, settings, client, Repository(paths.database_file)
+
+
+def _execute_agent(
+    client: Any,
+    settings: Any,
+    repository: Repository,
+    *,
+    model: str,
+    profile: ModelProfile,
+    task: str,
+    workspace: Path,
+    max_steps: int,
+    resume_checkpoint: dict[str, Any] | None,
+    event: Callable[[AgentEvent], None],
+) -> AgentResult:
+    """Run or resume one bounded agent with the same host-tool policy."""
+    def approve(description: str) -> bool:
+        return input(f"APPROVAL REQUIRED: {description}\nAllow? [y/N] ").strip().lower() == "y"
+
+    workspace_tools = WorkspaceTools(
+        workspace, allow_shell=settings.allow_shell_tools,
+        allowed_commands=settings.allowed_commands, approval=approve,
+    )
+    with MCPToolGateway(settings.mcp_servers) as mcp_gateway:
+        tools = CompositeToolRegistry(workspace_tools, mcp_gateway)
+        if mcp_gateway.routes:
+            print(
+                f"[mcp] Connected {len(mcp_gateway.routes)} explicitly approved tool(s).",
+                file=sys.stderr,
+            )
+        return AgentRuntime(
+            client, max_steps=max_steps, keep_alive=settings.keep_alive,
+            repository=repository, memory_store=MemoryStore(repository),
+        ).run(
+            model, profile, task, tools,
+            event=event,
+            resume_checkpoint=resume_checkpoint,
+        )
+
+
+def _recover(args: argparse.Namespace, settings: Any, client: Any,
+             repository: Repository) -> int:
+    """List, resume or discard integrity-verified durable runs."""
+    candidates = load_recovery_candidates(repository)
+    if args.list_only or not args.run_id:
+        print(json.dumps([item.to_dict() for item in candidates], indent=2, ensure_ascii=False))
+        return 0
+    run_id = str(args.run_id)
+    if args.discard:
+        if repository.delete_run_checkpoint(run_id):
+            print(f"Discarded checkpoint for run {run_id}.")
+            return 0
+        print(f"No checkpoint exists for run {run_id}.", file=sys.stderr)
+        return 2
+    candidate = next((item for item in candidates if item.run_id == run_id), None)
+    if candidate is None:
+        print(f"No recoverable checkpoint exists for run {run_id}.", file=sys.stderr)
+        return 2
+    if not candidate.resumable:
+        print(f"Run {run_id} is not resumable: {candidate.reason}", file=sys.stderr)
+        return 2
+    try:
+        checkpoint = repository.get_run_checkpoint(run_id)
+    except ValueError as exc:
+        print(f"Cannot recover run {run_id}: {exc}", file=sys.stderr)
+        return 2
+    if checkpoint is None:
+        print(f"Checkpoint for run {run_id} disappeared before recovery.", file=sys.stderr)
+        return 2
+    payload = checkpoint.get("payload") or {}
+    task = str(payload.get("task") or "")
+    model = str(checkpoint.get("model_name") or "")
+    profile = repository.get_profile(model, str(checkpoint.get("model_digest") or ""))
+    if profile is None:
+        print(
+            "The exact profiled model digest for this run is unavailable; refusing to resume.",
+            file=sys.stderr,
+        )
+        return 2
+    installed = next(
+        (item for item in ModelProfiler(client).inventory() if item.name == model),
+        None,
+    )
+    if installed is None:
+        print(f"Model {model!r} is not installed in the configured Ollama instance.", file=sys.stderr)
+        return 2
+    validate_installed_model_binding(profile, installed)
+    workspace = Path(str(checkpoint.get("workspace") or ""))
+    if not workspace.is_dir():
+        print(f"Checkpoint workspace does not exist: {workspace}", file=sys.stderr)
+        return 2
+    result = _execute_agent(
+        client, settings, repository,
+        model=model, profile=profile, task=task, workspace=workspace,
+        max_steps=args.max_steps, resume_checkpoint=checkpoint,
+        event=lambda item: print(f"[{item.kind}] {item.message}", file=sys.stderr),
+    )
+    safe_message, redacted_count = WorkspaceTools.redact_sensitive_text(result.final_message)
+    if redacted_count:
+        print(
+            f"[security] Redacted {redacted_count} credential-like value(s) from the final response.",
+            file=sys.stderr,
+        )
+    print(safe_message)
+    return 0 if result.status == "completed" else 1
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -61,6 +169,15 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("workspace", type=Path)
     run.add_argument("task")
     run.add_argument("--max-steps", type=int, default=12)
+    recover = commands.add_parser(
+        "recover", help="List, resume or discard durable agent run checkpoints"
+    )
+    recover.add_argument("run_id", nargs="?", help="Checkpoint run ID to resume or discard")
+    recover.add_argument("--list", action="store_true", dest="list_only",
+                         help="List recovery candidates and their eligibility")
+    recover.add_argument("--discard", action="store_true",
+                         help="Delete the selected checkpoint after review")
+    recover.add_argument("--max-steps", type=int, default=12)
     return parser
 
 
@@ -168,31 +285,19 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"Model {args.model!r} is not installed in the configured Ollama instance.", file=sys.stderr)
                 return 2
             validate_installed_model_binding(profile, installed)
-            def approve(description: str) -> bool:
-                return input(f"APPROVAL REQUIRED: {description}\nAllow? [y/N] ").strip().lower() == "y"
-            workspace_tools = WorkspaceTools(
-                args.workspace, allow_shell=settings.allow_shell_tools,
-                allowed_commands=settings.allowed_commands, approval=approve,
+            result = _execute_agent(
+                client, settings, repository,
+                model=args.model, profile=profile, task=args.task, workspace=args.workspace,
+                max_steps=args.max_steps, resume_checkpoint=None,
+                event=lambda item: print(f"[{item.kind}] {item.message}", file=sys.stderr),
             )
-            with MCPToolGateway(settings.mcp_servers) as mcp_gateway:
-                tools = CompositeToolRegistry(workspace_tools, mcp_gateway)
-                if mcp_gateway.routes:
-                    print(
-                        f"[mcp] Connected {len(mcp_gateway.routes)} explicitly approved tool(s).",
-                        file=sys.stderr,
-                    )
-                result = AgentRuntime(
-                    client, max_steps=args.max_steps, keep_alive=settings.keep_alive,
-                    repository=repository, memory_store=MemoryStore(repository),
-                ).run(
-                    args.model, profile, args.task, tools,
-                    event=lambda item: print(f"[{item.kind}] {item.message}", file=sys.stderr),
-                )
             safe_message, redacted_count = WorkspaceTools.redact_sensitive_text(result.final_message)
             if redacted_count:
                 print(f"[security] Redacted {redacted_count} credential-like value(s) from the final response.", file=sys.stderr)
             print(safe_message)
             return 0 if result.status == "completed" else 1
+        if args.command == "recover":
+            return _recover(args, settings, client, repository)
     except (OllamaError, OSError, RuntimeError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

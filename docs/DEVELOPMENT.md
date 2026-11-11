@@ -36,6 +36,15 @@ pytest --cov=ollama_workstation --cov-report=term-missing
 
 Core tests do not require Ollama or a GPU. Live integration tests should be opt-in and record endpoint version, model digest, hardware and task configuration.
 
+Checkpoint recovery is covered by deterministic tests that simulate process death with `SystemExit`; no Ollama server is required:
+
+```powershell
+pytest tests/test_run_recovery.py -q
+11vated recover --list
+```
+
+Recovery tests cover safe-boundary writes, resume without tool replay, interrupted-tool review, binding and tamper rejection, staleness, budget exhaustion, cancelled-run resumption and CLI list/resume/discard.
+
 ## Manual Windows integration test
 
 1. Install Ollama and pull a chat model.
@@ -47,8 +56,9 @@ Core tests do not require Ollama or a GPU. Live integration tests should be opt-
 7. Use a disposable workspace for a read-only inspection task.
 8. Test file creation and confirm overwrites are denied by default.
 9. Confirm shell is not exposed when disabled.
-10. Interrupt a run; verify no false completion is recorded.
-11. Inspect SQLite profile and run records.
+10. Interrupt a run before the next provider request; verify Run History offers an integrity-checked resume and that the original run ID and budget are reused.
+11. Interrupt a run during a tool operation; verify it shows REVIEW REQUIRED and cannot be resumed automatically.
+12. Inspect SQLite profile, run, event and checkpoint records.
 12. Repeat with a model that does not emit native tool calls to test fallback behavior.
 
 ## Desktop packaging

@@ -20,6 +20,14 @@ Development increment on the 0.1.0 foundation. This is a pre-release engineering
 - Credential-like values are redacted from workspace/search/command output, persisted run objectives and event payloads, and final CLI/desktop responses. This is heuristic filtering, not complete DLP.
 - Model-card research callbacks are bound to the initiating model, avoiding cross-model result races.
 
+### Durable execution recovery
+- Checkpoints are now written by normal execution at three safe boundaries: before each provider request, before a tool batch and after a completed tool batch. Previously the persistence helper existed but was never invoked.
+- The checkpoint envelope SHA-256 binds the model digest, workspace, task, harness mode, tool-manifest hash, state, counters, creation/update timestamps and bounded payload, so altering a binding column fails closed.
+- Recovery uses a dedicated protocol version, a 72-hour freshness window, run-status checks and exact task/harness/tool-manifest verification on every resume.
+- An interrupted tool batch is durably marked `needs_review` and cannot be resumed or replayed automatically. Completed runs discard checkpoints; cancelled and failed runs retain them for review.
+- Added `11vated recover --list`, `11vated recover RUN_ID` and `11vated recover RUN_ID --discard`, plus a desktop Run History recovery panel with explicit confirmation.
+- Resume reuses the original run identifier and step budget, appends a `resumed` journal event and never grants a fresh budget.
+
 ### Benchmarking
 - Added the versioned six-case 11vated-core local benchmark runner with independent host-side exact, numeric, JSON-schema and ordered-term scoring, repeated trials, Wilson confidence intervals, latency/throughput metrics and model/manifest digest binding.
 - Added CLI benchmark reports with redacted output previews; this is a local diagnostic suite, not external benchmark certification.
@@ -35,4 +43,4 @@ Development increment on the 0.1.0 foundation. This is a pre-release engineering
 - CI has passed compile, Ruff, tests and Windows desktop import across Windows and Ubuntu with Python 3.11 and 3.12 at validated checkpoints. See PR checks for exact latest results.
 
 ### Not yet production-certified
-OS-enforced sandboxing, durable run checkpoint/resume, full specialist evaluation adapters, role/agent qualification, multi-agent scheduling, MCP/ACP, browser/computer-use adapters, production telemetry/observability, SBOM and signed distribution remain open release gates.
+OS-enforced sandboxing, multi-process resume leases, full specialist evaluation adapters, role/agent qualification, delegated multi-agent scheduling, MCP/ACP, browser/computer-use adapters, production telemetry/observability, SBOM and signed distribution remain open release gates.
