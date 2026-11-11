@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from threading import Event, Thread
 from typing import Any
 
@@ -97,7 +98,8 @@ class OllamaClient:
              output_format: dict[str, Any] | str | None = None,
              options: dict[str, Any] | None = None,
              keep_alive: str = "5m",
-             cancel_event: Event | None = None) -> dict[str, Any]:
+             cancel_event: Event | None = None,
+             stream_callback: Callable[[str, str], None] | None = None) -> dict[str, Any]:
         payload: dict[str, Any] = {"model": model, "messages": messages,
                                    "stream": cancel_event is not None,
                                    "keep_alive": keep_alive}
@@ -108,7 +110,7 @@ class OllamaClient:
         if options:
             payload["options"] = options
         if cancel_event is not None:
-            return self._chat_stream(payload, cancel_event)
+            return self._chat_stream(payload, cancel_event, stream_callback)
         return self._request("POST", "/api/chat", payload)
 
     @staticmethod
@@ -146,7 +148,12 @@ class OllamaClient:
                         str(target_function.get("arguments") or "") + arguments
                     )
 
-    def _chat_stream(self, payload: dict[str, Any], cancel_event: Event) -> dict[str, Any]:
+    def _chat_stream(
+        self,
+        payload: dict[str, Any],
+        cancel_event: Event,
+        stream_callback: Callable[[str, str], None] | None = None,
+    ) -> dict[str, Any]:
         """Read Ollama's NDJSON chat stream and close the HTTP stream on cancellation."""
         if cancel_event.is_set():
             raise OllamaError("Ollama chat request was cancelled before it started")
@@ -194,6 +201,14 @@ class OllamaClient:
                         streamed_message = chunk.get("message")
                         if isinstance(streamed_message, dict):
                             self._merge_stream_message(message, streamed_message)
+                            if stream_callback is not None:
+                                content_delta = streamed_message.get("content")
+                                thinking_delta = streamed_message.get("thinking")
+                                if isinstance(content_delta, str) or isinstance(thinking_delta, str):
+                                    stream_callback(
+                                        content_delta if isinstance(content_delta, str) else "",
+                                        thinking_delta if isinstance(thinking_delta, str) else "",
+                                    )
                         metadata.update({key: value for key, value in chunk.items() if key != "message"})
                         if chunk.get("done") is True:
                             break

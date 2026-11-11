@@ -305,6 +305,57 @@ class Repository:
                        (conversation_id, model_name, title, updated_at,
                         json.dumps(messages, ensure_ascii=False)))
 
+    def list_conversations(self, limit: int = 100) -> list[dict[str, Any]]:
+        bounded = max(1, min(int(limit), 500))
+        with self._connection() as db:
+            rows = db.execute(
+                "SELECT conversation_id,model_name,title,updated_at,messages_json "
+                "FROM conversations ORDER BY updated_at DESC LIMIT ?", (bounded,)
+            ).fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                messages = json.loads(row[4])
+            except (TypeError, ValueError):
+                messages = []
+            preview = ""
+            if isinstance(messages, list):
+                for message in messages:
+                    if isinstance(message, dict) and message.get("role") == "user":
+                        preview = " ".join(str(message.get("content") or "").split())
+                        break
+            result.append({
+                "conversation_id": row[0], "model_name": row[1], "title": row[2],
+                "updated_at": row[3], "preview": preview[:240],
+                "message_count": len(messages) if isinstance(messages, list) else 0,
+            })
+        return result
+
+    def get_conversation(self, conversation_id: str) -> dict[str, Any] | None:
+        with self._connection() as db:
+            row = db.execute(
+                "SELECT conversation_id,model_name,title,updated_at,messages_json "
+                "FROM conversations WHERE conversation_id=?", (conversation_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            messages = json.loads(row[4])
+        except (TypeError, ValueError):
+            messages = []
+        return {
+            "conversation_id": row[0], "model_name": row[1], "title": row[2],
+            "updated_at": row[3],
+            "messages": messages if isinstance(messages, list) else [],
+        }
+
+    def delete_conversation(self, conversation_id: str) -> bool:
+        with self._connection() as db:
+            cursor = db.execute(
+                "DELETE FROM conversations WHERE conversation_id=?", (conversation_id,)
+            )
+            return cursor.rowcount > 0
+
     def list_runs(self, limit: int = 50) -> list[dict[str, Any]]:
         bounded = max(1, min(int(limit), 500))
         with self._connection() as db:

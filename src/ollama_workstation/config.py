@@ -22,6 +22,10 @@ class Settings:
     workspace_root: str = ""
     keep_alive: str = "5m"
     mcp_servers: list[dict[str, Any]] = field(default_factory=list)
+    reduced_motion: bool = False
+    animation_intensity: float = 0.8
+    last_page: str = "command"
+    agent_presets: list[dict[str, Any]] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Settings:
@@ -33,6 +37,18 @@ class Settings:
             if not isinstance(servers, list) or not all(isinstance(item, dict) for item in servers):
                 raise ValueError("mcp_servers must be a list of JSON objects")
             allowed["mcp_servers"] = [dict(item) for item in servers]
+        if "agent_presets" in allowed:
+            presets = allowed["agent_presets"]
+            if not isinstance(presets, list) or not all(isinstance(item, dict) for item in presets):
+                raise ValueError("agent_presets must be a list of JSON objects")
+            allowed["agent_presets"] = [dict(item) for item in presets]
+        if "animation_intensity" in allowed:
+            try:
+                allowed["animation_intensity"] = max(
+                    0.2, min(1.0, float(allowed["animation_intensity"]))
+                )
+            except (TypeError, ValueError):
+                allowed.pop("animation_intensity")
         return cls(**allowed)
 
 

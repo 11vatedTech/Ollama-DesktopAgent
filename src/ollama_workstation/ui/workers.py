@@ -12,6 +12,7 @@ class WorkerSignals(QObject):
     result = Signal(object)
     error = Signal(str)
     progress = Signal(str)
+    stream = Signal(str, str)
     finished = Signal()
 
 
