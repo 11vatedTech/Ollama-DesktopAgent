@@ -192,12 +192,12 @@ class MCPServerSpec:
                     "secret values are referenced by name and are never stored in settings."
                 )
             child_env[child_key] = value
-        if os.name == "nt" and not getattr(sys, "frozen", False):
-            # Own a kill-on-close Job Object so a leaked SDK shutdown cannot
-            # leave server grandchildren behind. A frozen executable cannot
-            # launch this module with -m, so packaged builds use the SDK's own
-            # Job Object until a dedicated supervisor executable is bundled.
-            # POSIX relies on the SDK's process-group termination.
+        if not getattr(sys, "frozen", False):
+            # The supervisor owns a kill-on-close Job Object on Windows and a
+            # dedicated process group on POSIX, so even a graceful SDK shutdown
+            # cannot leave server grandchildren behind. A frozen executable
+            # cannot launch this module with -m, so packaged builds use the
+            # SDK's own cleanup until a dedicated supervisor executable is bundled.
             return StdioServerParameters(
                 command=sys.executable,
                 args=[
@@ -460,8 +460,8 @@ class MCPServerConnection:
                         self._loop.call_soon_threadsafe(self._stop_event.set)
                     if self._serve_task is not None:
                         self._loop.call_soon_threadsafe(self._serve_task.cancel)
-                    # The SDK's shutdown is cancellation-shielded and closes its
-                    # process Job Object. Give it room to finish under load; only
+                    # The SDK's shutdown is cancellation-shielded and completes
+                    # transport cleanup. Give it room to finish under load; only
                     # force the loop down if the bounded cleanup is still stuck.
                     self._thread.join(timeout=10.0)
                     if self._thread.is_alive():

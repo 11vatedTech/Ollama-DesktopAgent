@@ -1,10 +1,10 @@
-"""Windows stdio supervisor for host-owned MCP process-tree cleanup.
+"""Cross-platform stdio supervisor for host-owned MCP process-tree cleanup.
 
-The SDK already attempts a Job Object for its direct child, but shutdown races
-can leave grandchildren alive while the direct child exits. This wrapper is the
-SDK's direct child: it owns a second kill-on-close Job Object containing the
-real server. If the SDK kills the wrapper, the wrapper's job handle closes and
-the server tree is reaped by Windows.
+The SDK starts this module as its direct child. On Windows it owns a second
+kill-on-close Job Object containing the real server. On POSIX it starts the
+server in a dedicated process group and always terminates that group on exit,
+including after a graceful server exit. This closes the SDK gap where a server
+that exits within the graceful shutdown window leaves descendants behind.
 
 The wrapper is a transparent byte proxy. It writes nothing to stdout except the
 server's own protocol output.
@@ -16,10 +16,15 @@ Usage (constructed by MCPServerSpec.client_target):
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import sys
 import threading
+import time
 from typing import Any
+
+POSIX_TERMINATION_GRACE_SECONDS = 1.0
+GROUP_POLL_INTERVAL = 0.02
 
 
 def _create_job() -> Any | None:
@@ -79,6 +84,68 @@ def _close_job(job: Any | None) -> None:
         pass
 
 
+def _group_alive(pgid: int) -> bool:
+    """Probe a POSIX process group; only ESRCH proves it is gone."""
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _terminate_posix_group(pid: int) -> None:
+    """Terminate the server's dedicated process group, including descendants."""
+    if pid <= 0:
+        return
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    except PermissionError:
+        pass
+    deadline = time.monotonic() + POSIX_TERMINATION_GRACE_SECONDS
+    while time.monotonic() < deadline:
+        if not _group_alive(pid):
+            return
+        time.sleep(GROUP_POLL_INTERVAL)
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _stop_child(child: subprocess.Popen[bytes], job: Any | None) -> None:
+    if os.name == "nt":
+        _close_job(job)
+        if job is None:
+            try:
+                child.terminate()
+            except OSError:
+                pass
+        return
+    _terminate_posix_group(child.pid)
+
+
+def _install_shutdown_handlers() -> None:
+    """Make SDK SIGTERM/SIGINT/SIGHUP shutdown pass through the cleanup path."""
+    if os.name == "nt":
+        return
+
+    def _exit_through_finally(signum: int, _frame: Any) -> None:
+        raise SystemExit(128 + signum)
+
+    for name in ("SIGTERM", "SIGINT", "SIGHUP"):
+        signum = getattr(signal, name, None)
+        if signum is None:
+            continue
+        try:
+            signal.signal(signum, _exit_through_finally)
+        except (OSError, ValueError):
+            pass
+
+
 def _pump_stdin(child: subprocess.Popen[bytes]) -> None:
     assert child.stdin is not None
     try:
@@ -116,6 +183,7 @@ def main() -> int:
         return 2
     command = sys.argv[2:]
     job = _create_job()
+    _install_shutdown_handlers()
     try:
         child = subprocess.Popen(
             command,
@@ -124,11 +192,15 @@ def main() -> int:
             stderr=None,
             bufsize=0,
             env=os.environ.copy(),
+            start_new_session=(os.name != "nt"),
         )
     except OSError as exc:
         _close_job(job)
         print(f"mcp_stdio_wrapper: failed to start server: {exc}", file=sys.stderr)
         return 127
+    except BaseException:
+        _close_job(job)
+        raise
     if job is not None:
         _assign_to_job(job, child.pid)
     threading.Thread(target=_pump_stdin, args=(child,), daemon=True).start()
@@ -136,11 +208,12 @@ def main() -> int:
     stdout_pump.start()
     try:
         code = int(child.wait())
-        # Drain remaining protocol output before the wrapper exits.
-        stdout_pump.join(timeout=2.0)
-        return code
     finally:
-        _close_job(job)
+        # The server may have exited cleanly while its descendants remain.
+        _stop_child(child, job)
+    # Drain remaining protocol output before the wrapper exits.
+    stdout_pump.join(timeout=2.0)
+    return code
 
 
 if __name__ == "__main__":
