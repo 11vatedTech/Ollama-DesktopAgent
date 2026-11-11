@@ -4,7 +4,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import socket
 import sys
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -14,12 +17,21 @@ from ollama_workstation.agents.binding import validate_installed_model_binding
 from ollama_workstation.agents.identity_package import export_identity_package
 from ollama_workstation.agents.mcp_gateway import CompositeToolRegistry, MCPToolGateway
 from ollama_workstation.agents.memory import MemoryStore
+from ollama_workstation.agents.orchestration import (
+    AgentAssignment,
+    WorkforceOrchestrator,
+    WorkforcePlan,
+    WorkforcePlanner,
+)
 from ollama_workstation.agents.recovery import load_recovery_candidates
 from ollama_workstation.agents.runtime import AgentEvent, AgentResult, AgentRuntime
 from ollama_workstation.agents.tools import WorkspaceTools
+from ollama_workstation.agents.workforce import WorkforceSelector
 from ollama_workstation.benchmarking.runner import BenchmarkRunner
 from ollama_workstation.config import AppPaths, load_settings
+from ollama_workstation.models.routing import ModelRouter, RoutingRequest
 from ollama_workstation.models.schemas import ModelProfile
+from ollama_workstation.observability import configure_logging, log_event
 from ollama_workstation.ollama.client import OllamaClient, OllamaError
 from ollama_workstation.profiling.profiler import ModelProfiler
 from ollama_workstation.profiling.research import HuggingFaceResearcher, attach_model_card_evidence
@@ -29,6 +41,7 @@ from ollama_workstation.storage.repository import Repository
 def _services() -> tuple[Any, Any, Any, Any]:
     paths = AppPaths.default()
     paths.ensure()
+    configure_logging(paths.logs_dir)
     settings = load_settings(paths.config_file)
     client = OllamaClient(settings.ollama_base_url, settings.request_timeout_seconds)
     return paths, settings, client, Repository(paths.database_file)
@@ -123,12 +136,22 @@ def _recover(args: argparse.Namespace, settings: Any, client: Any,
     if not workspace.is_dir():
         print(f"Checkpoint workspace does not exist: {workspace}", file=sys.stderr)
         return 2
-    result = _execute_agent(
-        client, settings, repository,
-        model=model, profile=profile, task=task, workspace=workspace,
-        max_steps=args.max_steps, resume_checkpoint=checkpoint,
-        event=lambda item: print(f"[{item.kind}] {item.message}", file=sys.stderr),
-    )
+    owner_id = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex}"
+    if not repository.acquire_run_lease(run_id, owner_id, ttl_seconds=300):
+        print(
+            f"Run {run_id} is leased by another workstation process; refusing concurrent resume.",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        result = _execute_agent(
+            client, settings, repository,
+            model=model, profile=profile, task=task, workspace=workspace,
+            max_steps=args.max_steps, resume_checkpoint=checkpoint,
+            event=lambda item: print(f"[{item.kind}] {item.message}", file=sys.stderr),
+        )
+    finally:
+        repository.release_run_lease(run_id, owner_id)
     safe_message, redacted_count = WorkspaceTools.redact_sensitive_text(result.final_message)
     if redacted_count:
         print(
@@ -137,6 +160,211 @@ def _recover(args: argparse.Namespace, settings: Any, client: Any,
         )
     print(safe_message)
     return 0 if result.status == "completed" else 1
+
+
+def _ensure_profile(client: Any, repository: Repository, model: str, *,
+                    run_probes: bool = False) -> tuple[ModelProfile, Any]:
+    """Return an exact installed profile or create a clearly provisional one."""
+    installed = next(
+        (item for item in ModelProfiler(client).inventory() if item.name == model), None
+    )
+    if installed is None:
+        raise ValueError(f"Model {model!r} is not installed in the configured Ollama instance")
+    profile = repository.get_profile(model, installed.digest)
+    if profile is not None:
+        return profile, installed
+    profile = ModelProfiler(client).profile(model, run_probes=run_probes, repeats=1)
+    repository.save_profile(profile)
+    return profile, installed
+
+
+def _workforce(args: argparse.Namespace, settings: Any, client: Any,
+               repository: Repository) -> int:
+    """Plan, select, approve and execute a bounded multi-agent workflow."""
+    if args.workforce_command == "status":
+        if args.run_id:
+            run = repository.get_workforce_run(args.run_id)
+            if run is None:
+                print(f"No workforce run {args.run_id!r}.", file=sys.stderr)
+                return 2
+            print(json.dumps(run, indent=2, ensure_ascii=False))
+        else:
+            print(json.dumps(repository.list_workforce_runs(100), indent=2, ensure_ascii=False))
+        return 0
+
+    if args.plan:
+        plan = WorkforcePlan.from_dict(json.loads(Path(args.plan).read_text(encoding="utf-8")))
+    elif args.mode == "analysis":
+        plan = WorkforcePlanner.analysis_plan(args.task)
+    else:
+        plan = WorkforcePlanner.delivery_plan(args.task)
+    installed = ModelProfiler(client).inventory()
+    profiles = repository.list_profiles()
+    assignments: dict[str, AgentAssignment] = {}
+
+    if args.model:
+        profile, _ = _ensure_profile(
+            client, repository, args.model, run_probes=args.profile_probes
+        )
+        for task in plan.tasks:
+            assignments[task.task_id] = AgentAssignment(
+                task.task_id, profile.model_name, profile, task.read_only
+            )
+    elif args.assign:
+        by_role: dict[str, tuple[ModelProfile, str]] = {}
+        for specification in args.assign:
+            role, separator, model = specification.partition("=")
+            if not separator or not role.strip() or not model.strip():
+                print("Each --assign value must be ROLE=MODEL.", file=sys.stderr)
+                return 2
+            profile, _ = _ensure_profile(
+                client, repository, model.strip(), run_probes=args.profile_probes
+            )
+            by_role[role.strip()] = (profile, model.strip())
+        for task in plan.tasks:
+            selected = by_role.get(task.role)
+            if selected is None:
+                print(f"No model assigned for role {task.role!r}.", file=sys.stderr)
+                return 2
+            profile, model_name = selected
+            assignments[task.task_id] = AgentAssignment(
+                task.task_id, model_name, profile, task.read_only
+            )
+    else:
+        selection = WorkforceSelector.select(
+            [task.to_dict() for task in plan.tasks], profiles, installed
+        )
+        missing = [task.task_id for task in plan.tasks if task.task_id not in selection.assignments]
+        if missing:
+            print(
+                "No evidence-backed workforce assignment is available. Profile candidate models "
+                "first or pass --model MODEL / --assign ROLE=MODEL. Missing: " + ", ".join(missing),
+                file=sys.stderr,
+            )
+            print(json.dumps(selection.to_dict(), indent=2), file=sys.stderr)
+            return 2
+        by_name = {profile.model_name: profile for profile in profiles}
+        for task in plan.tasks:
+            model_name = selection.assignments[task.task_id]
+            profile = by_name.get(model_name)
+            if profile is None:
+                print(f"Selected model {model_name!r} has no saved profile.", file=sys.stderr)
+                return 2
+            assignments[task.task_id] = AgentAssignment(
+                task.task_id, model_name, profile, task.read_only
+            )
+        print(json.dumps(selection.to_dict(), indent=2), file=sys.stderr)
+
+    def approve(message: str) -> bool:
+        print("APPROVAL REQUIRED:\n" + message, file=sys.stderr)
+        if args.yes:
+            print("[approval] granted by --yes", file=sys.stderr)
+            return True
+        try:
+            return input("Allow? [y/N] ").strip().lower() == "y"
+        except EOFError:
+            return False
+
+    owner_id = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex}"
+    run_id = str(uuid.uuid4())
+    if not repository.acquire_run_lease(run_id, owner_id, ttl_seconds=900):
+        print("A workforce run with this identifier is already active.", file=sys.stderr)
+        return 2
+    try:
+        result = WorkforceOrchestrator(
+            client, repository, keep_alive=settings.keep_alive
+        ).run(
+            plan, args.workspace, assignments, run_id=run_id,
+            approval=approve, installed_models=installed, owner_id=owner_id,
+            event=lambda item: print(f"[{item.kind}] {item.message}", file=sys.stderr),
+        )
+    finally:
+        repository.release_run_lease(run_id, owner_id)
+    if args.json:
+        print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
+    else:
+        print(result.final_message)
+        print(
+            f"status={result.status} verification_passed={result.verification_passed} "
+            f"run_id={result.run_id}",
+            file=sys.stderr,
+        )
+    return 0 if result.status == "completed" else 1
+
+
+def _route(args: argparse.Namespace, settings: Any, client: Any,
+           repository: Repository) -> int:
+    """Explain model routing using installed metadata and saved observations."""
+    from ollama_workstation.models.model_intelligence import inspect_ollama_model
+    from ollama_workstation.profiling.telemetry import SystemTelemetry
+
+    models = ModelProfiler(client).inventory()
+    intelligence = {}
+    for model in models:
+        try:
+            intelligence[model.name] = inspect_ollama_model(
+                model, client.show_model(model.name)
+            )
+        except OllamaError:
+            continue
+    decision = ModelRouter().rank(
+        models,
+        request=RoutingRequest(
+            required_capabilities=tuple(args.capability or ()),
+            context_tokens=max(0, int(args.context)),
+            require_verified=bool(args.require_verified),
+        ),
+        profiles=repository.list_profiles(),
+        intelligence=intelligence,
+        host=SystemTelemetry().snapshot(),
+    )
+    print(json.dumps(decision.to_dict(), indent=2, ensure_ascii=False))
+    return 0 if decision.selected is not None else 2
+
+
+def _doctor(settings: Any, client: Any, repository: Repository) -> int:
+    """Emit a local diagnostic snapshot without secrets or model payloads."""
+    from ollama_workstation.profiling.telemetry import SystemTelemetry
+
+    try:
+        version = client.version()
+        healthy = True
+    except OllamaError as exc:
+        version = f"unavailable: {type(exc).__name__}"
+        healthy = False
+    try:
+        models = ModelProfiler(client).inventory()
+        model_count = len(models)
+        model_names = [item.name for item in models]
+    except OllamaError:
+        model_count = 0
+        model_names = []
+    try:
+        import sqlite3
+
+        with sqlite3.connect(repository.database) as db:
+            integrity = str(db.execute("PRAGMA integrity_check").fetchone()[0])
+    except Exception as exc:
+        integrity = f"error: {type(exc).__name__}"
+    payload = {
+        "version": __version__,
+        "ollama": {"base_url": settings.ollama_base_url, "healthy": healthy,
+                   "version": version, "model_count": model_count,
+                   "models": model_names},
+        "database": {"path": str(repository.database), "integrity": integrity,
+                     "profiles": len(repository.list_profiles()),
+                     "runs": len(repository.list_runs(500)),
+                     "workforce_runs": len(repository.list_workforce_runs(500))},
+        "checkpoint_key": {"path": str(repository.checkpoint_key_path),
+                            "present": repository.checkpoint_key_path.is_file()},
+        "logs": {
+            "path": str(AppPaths.default().logs_dir / "workstation.jsonl"),
+            "present": (AppPaths.default().logs_dir / "workstation.jsonl").is_file(),
+        },
+        "host": SystemTelemetry().snapshot(),
+    }
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+    return 0 if healthy and integrity == "ok" else 2
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -178,13 +406,52 @@ def build_parser() -> argparse.ArgumentParser:
     recover.add_argument("--discard", action="store_true",
                          help="Delete the selected checkpoint after review")
     recover.add_argument("--max-steps", type=int, default=12)
+    workforce = commands.add_parser(
+        "workforce", help="Plan, approve and execute a bounded multi-agent workflow"
+    )
+    workforce_commands = workforce.add_subparsers(dest="workforce_command", required=True)
+    workforce_run = workforce_commands.add_parser("run", help="Execute a validated workforce plan")
+    workforce_run.add_argument("task")
+    workforce_run.add_argument("workspace", type=Path)
+    workforce_run.add_argument("--mode", choices=["analysis", "delivery"], default="analysis")
+    workforce_run.add_argument("--model", help="Use one exact installed model for every task")
+    workforce_run.add_argument(
+        "--assign", action="append", default=[], metavar="ROLE=MODEL",
+        help="Assign a model to a role; repeat for complementary agents",
+    )
+    workforce_run.add_argument("--plan", type=Path, help="Validated workforce plan JSON")
+    workforce_run.add_argument("--yes", action="store_true",
+                               help="Pre-approve this plan and its marked tasks")
+    workforce_run.add_argument("--json", action="store_true", help="Print the full result JSON")
+    workforce_run.add_argument(
+        "--profile-probes", action="store_true",
+        help="Run empirical smoke probes when creating a missing profile",
+    )
+    workforce_status = workforce_commands.add_parser(
+        "status", help="List workforce runs or inspect one durable run"
+    )
+    workforce_status.add_argument("run_id", nargs="?")
+    route = commands.add_parser("route", help="Explain hardware-aware model routing")
+    route.add_argument("--capability", action="append", default=[],
+                       help="Required capability, e.g. tool_calling or vision")
+    route.add_argument("--context", type=int, default=0, help="Required context tokens")
+    route.add_argument("--require-verified", action="store_true",
+                       help="Require an observed capability score, not declared metadata")
+    commands.add_parser("doctor", help="Emit local diagnostics and database integrity status")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     paths, settings, client, repository = _services()
+    log_event("cli_command", "CLI command started.", command=args.command)
     try:
+        if args.command == "workforce":
+            return _workforce(args, settings, client, repository)
+        if args.command == "route":
+            return _route(args, settings, client, repository)
+        if args.command == "doctor":
+            return _doctor(settings, client, repository)
         if args.command == "models":
             print(json.dumps([{"name": x.name, "size_bytes": x.size_bytes,
                                "digest": x.digest, "details": x.details}
@@ -302,3 +569,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
     return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import html
 import json
+import uuid
 from collections.abc import Callable
 from pathlib import Path
 from threading import Event
@@ -11,6 +12,7 @@ from PySide6.QtCore import QThreadPool
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QComboBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -38,6 +40,12 @@ from ollama_workstation.agents.mcp_gateway import (
     MCPToolGateway,
 )
 from ollama_workstation.agents.memory import MemoryStore
+from ollama_workstation.agents.orchestration import (
+    AgentAssignment,
+    WorkforceOrchestrator,
+    WorkforcePlan,
+    WorkforcePlanner,
+)
 from ollama_workstation.agents.recovery import (
     RecoveryCandidate,
     RecoveryStatus,
@@ -48,6 +56,7 @@ from ollama_workstation.agents.tools import WorkspaceTools
 from ollama_workstation.benchmarking.runner import BenchmarkRunner
 from ollama_workstation.config import AppPaths, load_settings, save_settings
 from ollama_workstation.models.schemas import ModelProfile, ModelRef
+from ollama_workstation.observability import configure_logging, log_event
 from ollama_workstation.ollama.client import OllamaClient
 from ollama_workstation.profiling.profiler import ModelProfiler
 from ollama_workstation.profiling.research import HuggingFaceResearcher, attach_model_card_evidence
@@ -85,6 +94,7 @@ class MainWindow(QMainWindow):
         self.resize(1360, 860)
         self.paths = AppPaths.default()
         self.paths.ensure()
+        configure_logging(self.paths.logs_dir)
         self.settings = load_settings(self.paths.config_file)
         self.client = OllamaClient(self.settings.ollama_base_url, self.settings.request_timeout_seconds)
         self.profiler = ModelProfiler(self.client, self.settings.keep_alive)
@@ -93,6 +103,8 @@ class MainWindow(QMainWindow):
         self.pool = QThreadPool.globalInstance()
         self.agent_cancel_event: Event | None = None
         self.benchmark_cancel_event: Event | None = None
+        self.workforce_cancel_event: Event | None = None
+        self.workforce_runs: list[dict[str, object]] = []
         self.models: list[str] = []
         self.model_refs: dict[str, ModelRef] = {}
         self.selected_model = ""
@@ -102,6 +114,7 @@ class MainWindow(QMainWindow):
         self.refresh_models()
         self.refresh_runs()
         self.refresh_recovery()
+        self.refresh_workforce_runs()
 
     def _build(self) -> None:
         root_widget = QWidget()
@@ -120,7 +133,8 @@ class MainWindow(QMainWindow):
         side.addWidget(self.status)
         self.navigation = QListWidget()
         self.navigation.addItems([
-            "Command Center", "Model Intelligence", "Agent Workspace", "Run History", "Settings"
+            "Command Center", "Model Intelligence", "Agent Workspace", "Workforce",
+            "Run History", "Settings"
         ])
         self.navigation.setCurrentRow(0)
         side.addWidget(self.navigation, 1)
@@ -131,6 +145,7 @@ class MainWindow(QMainWindow):
         self.pages.addTab(self._overview(), "Overview")
         self.pages.addTab(self._models(), "Models")
         self.pages.addTab(self._agent(), "Agent")
+        self.pages.addTab(self._workforce(), "Workforce")
         self.pages.addTab(self._run_history(), "Run History")
         self.pages.addTab(self._settings(), "Settings")
         self.navigation.currentRowChanged.connect(self.pages.setCurrentIndex)
@@ -239,6 +254,292 @@ class MainWindow(QMainWindow):
         self.agent_progress.hide()
         layout.addWidget(self.agent_progress)
         return page
+
+    def _workforce(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        title = QLabel("Workforce")
+        title.setObjectName("Headline")
+        layout.addWidget(title)
+        layout.addWidget(QLabel(
+            "Delegate a bounded workflow to local models. The host validates the plan, "
+            "requires approval for consequential tasks, and independently checks every artifact."
+        ))
+        self.workforce_objective = QPlainTextEdit()
+        self.workforce_objective.setPlaceholderText(
+            "Describe the outcome, not just the first action. Example: analyse this repository "
+            "and document its public interfaces."
+        )
+        self.workforce_objective.setMaximumHeight(105)
+        layout.addWidget(self.workforce_objective)
+        workspace_row = QHBoxLayout()
+        choose = QPushButton("Choose workspace")
+        choose.clicked.connect(self.choose_workforce_workspace)
+        self.workforce_workspace = QLabel(str(self.paths.workspaces_dir))
+        workspace_row.addWidget(choose)
+        workspace_row.addWidget(self.workforce_workspace, 1)
+        layout.addLayout(workspace_row)
+        controls = QHBoxLayout()
+        self.workforce_model = QLineEdit()
+        self.workforce_model.setPlaceholderText("Exact installed model")
+        self.workforce_mode = QComboBox()
+        self.workforce_mode.addItem("Analysis (analyse + verify)", "analysis")
+        self.workforce_mode.addItem("Delivery (analyse + deliver + verify)", "delivery")
+        self.run_workforce_button = QPushButton("Review and run")
+        self.run_workforce_button.clicked.connect(self.run_workforce)
+        self.cancel_workforce_button = QPushButton("Stop workforce")
+        self.cancel_workforce_button.clicked.connect(self.cancel_workforce)
+        self.cancel_workforce_button.setEnabled(False)
+        refresh = QPushButton("Refresh runs")
+        refresh.clicked.connect(self.refresh_workforce_runs)
+        controls.addWidget(QLabel("Model"))
+        controls.addWidget(self.workforce_model, 2)
+        controls.addWidget(QLabel("Mode"))
+        controls.addWidget(self.workforce_mode, 1)
+        controls.addWidget(self.run_workforce_button)
+        controls.addWidget(self.cancel_workforce_button)
+        controls.addWidget(refresh)
+        layout.addLayout(controls)
+        split = QSplitter()
+        self.workforce_run_list = QListWidget()
+        self.workforce_run_list.currentRowChanged.connect(self.show_workforce_run)
+        split.addWidget(self.workforce_run_list)
+        self.workforce_detail = QTextBrowser()
+        self.workforce_detail.setHtml(
+            "<h2>No workforce runs yet</h2><p>Approved workflows and their durable "
+            "task journals will appear here.</p>"
+        )
+        split.addWidget(self.workforce_detail)
+        split.setStretchFactor(1, 3)
+        layout.addWidget(split, 1)
+        self.workforce_output = QTextBrowser()
+        self.workforce_output.setMaximumHeight(140)
+        self.workforce_output.setHtml(
+            "<h2>Execution trace</h2><p>Start a reviewed workforce to see host and child events.</p>"
+        )
+        layout.addWidget(self.workforce_output)
+        self.workforce_progress = QProgressBar()
+        self.workforce_progress.setRange(0, 0)
+        self.workforce_progress.hide()
+        layout.addWidget(self.workforce_progress)
+        return page
+
+    def choose_workforce_workspace(self) -> None:
+        selected = QFileDialog.getExistingDirectory(
+            self, "Choose workforce workspace", str(self.paths.workspaces_dir)
+        )
+        if selected:
+            self.workforce_workspace.setText(selected)
+
+    def run_workforce(self) -> None:
+        objective = self.workforce_objective.toPlainText().strip()
+        model = self.workforce_model.text().strip()
+        if not objective or not model:
+            QMessageBox.warning(
+                self, "Workforce input required",
+                "Enter an objective and the exact installed model name.",
+            )
+            return
+        try:
+            mode = str(self.workforce_mode.currentData() or "analysis")
+            plan = (
+                WorkforcePlanner.analysis_plan(objective)
+                if mode == "analysis" else WorkforcePlanner.delivery_plan(objective)
+            )
+        except ValueError as exc:
+            self.show_error(str(exc))
+            return
+        workspace = Path(self.workforce_workspace.text()).expanduser().resolve()
+        if not workspace.is_dir():
+            QMessageBox.warning(
+                self, "Workspace missing", f"Choose an existing workspace directory:\n{workspace}"
+            )
+            return
+        approved = QMessageBox.question(
+            self, "Approve workforce plan",
+            f"{plan.summary()}\n\n"
+            "The host will enforce the task graph, budgets, workspace boundaries and "
+            "artifact checks. Consequential task boundaries are approved by this action.\n\n"
+            f"Workspace: {workspace}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if approved != QMessageBox.StandardButton.Yes:
+            self.status.setText("Workforce plan rejected before execution.")
+            return
+        self.workforce_detail.setHtml(
+            f"<h2>{html.escape(mode.title())} plan</h2>"
+            f"<pre>{html.escape(plan.summary())}</pre>"
+            "<p>Waiting for the host-validated execution.</p>"
+        )
+        self.workforce_output.clear()
+        self.workforce_output.append("<b>Approved plan</b>")
+        self.workforce_output.append(html.escape(plan.summary()))
+        cancel_event = Event()
+        self.workforce_cancel_event = cancel_event
+        self.run_workforce_button.setEnabled(False)
+        self.cancel_workforce_button.setEnabled(True)
+        self.workforce_progress.show()
+        worker = FunctionWorker(
+            lambda: self._run_workforce_task(
+                plan, model, workspace, cancel_event,
+                lambda message: worker.signals.progress.emit(message),
+            )
+        )
+        worker.signals.progress.connect(
+            lambda message: self.workforce_output.append(html.escape(message))
+        )
+        worker.signals.result.connect(self.workforce_finished)
+        worker.signals.error.connect(self.workforce_failed)
+        worker.signals.finished.connect(lambda: (
+            self.workforce_progress.hide(),
+            self.run_workforce_button.setEnabled(True),
+            self.cancel_workforce_button.setEnabled(False),
+            setattr(self, "workforce_cancel_event", None),
+        ))
+        self.pool.start(worker)
+        self.status.setText("Workforce approved; executing bounded tasks.")
+
+    def _run_workforce_task(
+        self, plan: WorkforcePlan, model: str, workspace: Path,
+        cancel_event: Event, progress: Callable[[str], None],
+    ) -> object:
+        installed = next(
+            (item for item in ModelProfiler(self.client).inventory() if item.name == model),
+            None,
+        )
+        if installed is None:
+            raise ValueError(f"Model {model!r} is not installed in the configured Ollama instance.")
+        profile = self.repository.get_profile(model, installed.digest)
+        if profile is None:
+            raise ValueError(
+                f"No saved profile matches the installed digest for {model!r}. "
+                "Profile the model before delegating work."
+            )
+        assignments = {
+            task.task_id: AgentAssignment(
+                task.task_id, profile.model_name, profile, task.read_only
+            )
+            for task in plan.tasks
+        }
+        run_id = str(uuid.uuid4())
+        owner_id = f"desktop-workforce:{uuid.uuid4().hex}"
+        if not self.repository.acquire_run_lease(run_id, owner_id, ttl_seconds=900):
+            raise ValueError("Another local process already owns this workforce run lease.")
+        try:
+            return WorkforceOrchestrator(
+                self.client, self.repository, keep_alive=self.settings.keep_alive
+            ).run(
+                plan, workspace, assignments,
+                run_id=run_id, owner_id=owner_id,
+                cancel_event=cancel_event,
+                approval=lambda _message: True,
+                installed_models=[installed],
+                event=lambda item: progress(f"[{item.kind}] {item.message}"),
+            )
+        finally:
+            self.repository.release_run_lease(run_id, owner_id)
+
+    def cancel_workforce(self) -> None:
+        if self.workforce_cancel_event is None:
+            return
+        self.workforce_cancel_event.set()
+        self.cancel_workforce_button.setEnabled(False)
+        self.status.setText("Workforce stop requested; waiting for a safe boundary.")
+        self.workforce_output.append("Stop requested; waiting for a safe task boundary.")
+
+    def workforce_failed(self, message: str) -> None:
+        self.show_error(message)
+        self.refresh_workforce_runs()
+
+    def workforce_finished(self, result: object) -> None:
+        status = str(getattr(result, "status", "unknown"))
+        verification = getattr(result, "verification_passed", None)
+        tasks = getattr(result, "tasks", []) or []
+        rows = "".join(
+            f"<tr><td>{html.escape(str(getattr(task, 'task_id', '')))}</td>"
+            f"<td>{html.escape(str(getattr(task, 'status', '')))}</td>"
+            f"<td>{html.escape(str(getattr(task, 'model_name', '')))}</td>"
+            f"<td>{html.escape(str(getattr(task, 'verdict', '')) or '—')}</td>"
+            f"<td>{html.escape(str(getattr(task, 'error', '')) or '—')}</td></tr>"
+            for task in tasks
+        )
+        self.workforce_detail.setHtml(
+            f"<h2>Workforce {html.escape(status)}</h2>"
+            f"<p><b>Verification:</b> {html.escape(str(verification))}</p>"
+            "<table border='1' cellpadding='5'><tr><th>Task</th><th>Status</th>"
+            f"<th>Model</th><th>Verdict</th><th>Error</th></tr>{rows}</table>"
+        )
+        self.workforce_output.append(
+            f"<b>Finished with status {html.escape(status)}</b>"
+        )
+        self.status.setText(f"Workforce finished: {status}")
+        self.refresh_workforce_runs()
+
+    def refresh_workforce_runs(self) -> None:
+        if not hasattr(self, "workforce_run_list"):
+            return
+        try:
+            self.workforce_runs = self.repository.list_workforce_runs(100)
+            self.workforce_run_list.clear()
+            for run in self.workforce_runs:
+                objective = " ".join(str(run.get("objective") or "").split())
+                if len(objective) > 64:
+                    objective = objective[:61] + "..."
+                self.workforce_run_list.addItem(
+                    f"{str(run.get('status') or 'unknown').upper()} · "
+                    f"{str(run.get('created_at') or '')[:19]} · {objective}"
+                )
+            if not self.workforce_runs:
+                self.workforce_detail.setHtml(
+                    "<h2>No workforce runs yet</h2><p>Approved workflows and their durable "
+                    "task journals will appear here.</p>"
+                )
+        except Exception as exc:
+            self.workforce_detail.setHtml(
+                f"<h2>Unable to load workforce runs</h2><p>{html.escape(str(exc))}</p>"
+            )
+
+    def show_workforce_run(self, row: int) -> None:
+        if row < 0 or row >= len(self.workforce_runs):
+            return
+        run = self.workforce_runs[row]
+        run_id = str(run.get("run_id") or "")
+        try:
+            tasks = self.repository.list_workforce_tasks(run_id)
+            events = self.repository.list_workforce_events(run_id)
+            chain_ok = self.repository.verify_workforce_event_chain(run_id)
+        except Exception as exc:
+            self.workforce_detail.setHtml(
+                f"<h2>Unable to load journal</h2><p>{html.escape(str(exc))}</p>"
+            )
+            return
+        task_rows = "".join(
+            f"<tr><td>{html.escape(str(task.get('task_id') or ''))}</td>"
+            f"<td>{html.escape(str(task.get('status') or ''))}</td>"
+            f"<td>{html.escape(str(task.get('model_name') or ''))}</td>"
+            f"<td>{html.escape(str(task.get('attempts') or 0))}</td>"
+            f"<td>{html.escape(str(task.get('error') or ''))}</td></tr>"
+            for task in tasks
+        )
+        event_rows = "".join(
+            f"<li><b>#{int(event.get('sequence', 0)):03d} "
+            f"{html.escape(str(event.get('kind') or 'event'))}</b> "
+            f"{html.escape(str(event.get('message') or ''))}</li>"
+            for event in events[-80:]
+        )
+        result = run.get("result") if isinstance(run.get("result"), dict) else {}
+        final = str(result.get("final_message") or "")
+        self.workforce_detail.setHtml(
+            f"<h2>{html.escape(str(run.get('objective') or 'Workforce run'))}</h2>"
+            f"<p><b>Status:</b> {html.escape(str(run.get('status') or 'unknown'))} "
+            f"· <b>Journal chain:</b> {'valid' if chain_ok else 'INVALID'}</p>"
+            f"<p><b>Run ID:</b> {html.escape(run_id)}</p>"
+            f"<h3>Tasks</h3><table border='1' cellpadding='5'><tr><th>Task</th>"
+            f"<th>Status</th><th>Model</th><th>Attempts</th><th>Error</th></tr>{task_rows}</table>"
+            f"<h3>Final message</h3><pre>{html.escape(final[:4_000])}</pre>"
+            f"<h3>Event journal ({len(events)} events)</h3><ul>{event_rows}</ul>"
+        )
 
     def _run_history(self) -> QWidget:
         page = QWidget()
@@ -455,19 +756,32 @@ class MainWindow(QMainWindow):
         )
         if confirmed != QMessageBox.StandardButton.Yes:
             return
+        owner_id = f"desktop-recovery:{uuid.uuid4().hex}"
+        if not self.repository.acquire_run_lease(candidate.run_id, owner_id, ttl_seconds=900):
+            QMessageBox.warning(
+                self, "Run is leased",
+                "Another workstation process already owns this run's lease. "
+                "Refusing a concurrent resume.",
+            )
+            return
         cancel_event = Event()
         self.agent_cancel_event = cancel_event
         self.run_agent_button.setEnabled(False)
         self.cancel_agent_button.setEnabled(True)
         self.agent_progress.show()
         self.agent_output.clear()
-        worker = FunctionWorker(
-            lambda: self._run_agent_task(
-                model, profile, task, workspace, cancel_event,
-                lambda message: worker.signals.progress.emit(message),
-                resume_checkpoint=checkpoint,
-            )
-        )
+
+        def resume_with_lease() -> object:
+            try:
+                return self._run_agent_task(
+                    model, profile, task, workspace, cancel_event,
+                    lambda message: worker.signals.progress.emit(message),
+                    resume_checkpoint=checkpoint,
+                )
+            finally:
+                self.repository.release_run_lease(candidate.run_id, owner_id)
+
+        worker = FunctionWorker(resume_with_lease)
         worker.signals.progress.connect(
             lambda message: self.agent_output.append(html.escape(message))
         )
@@ -552,6 +866,8 @@ class MainWindow(QMainWindow):
         self.profile_button.setEnabled(bool(self.models))
         self.benchmark_button.setEnabled(bool(self.models))
         self.agent_model.setText(self.models[0] if self.models else "")
+        if not self.workforce_model.text():
+            self.workforce_model.setText(self.models[0] if self.models else "")
         self.status.setText(f"Ollama connected · {len(self.models)} installed models")
         self.overview.setHtml(f"<h2>Ollama connected</h2><p>{len(self.models)} local model(s) discovered.</p>")
 
@@ -974,6 +1290,7 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "Saved", "Settings saved. Refresh model inventory to reconnect.")
 
     def show_error(self, message: str) -> None:
+        log_event("desktop_error", message, level=40)
         self.status.setText(message[:180])
         QMessageBox.critical(self, "Operation failed", message)
 

@@ -16,3 +16,5 @@ build/
 .vscode/
 .DS_Store
 Thumbs.db
+.live-*/
+.test-logs/
