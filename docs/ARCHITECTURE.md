@@ -21,6 +21,8 @@ flowchart TB
   UI[PySide6 Desktop / CLI] --> APP[Application Services]
   APP --> REG[Model Registry]
   APP --> PROF[Model Intelligence & Profiler]
+  APP --> ROUTE[Model Router]
+  APP --> WF[Workforce Orchestrator]
   APP --> AGENT[Agent Runtime]
   REG --> OLLAMA[Ollama Provider Adapter]
   PROF --> OLLAMA
@@ -30,8 +32,10 @@ flowchart TB
   AGENT --> POLICY[Host Policy / Tool Registry]
   POLICY --> WS[Workspace Tools]
   POLICY --> EXEC[Approved Command Runner]
-  APP --> MATCH[Workforce Matcher]
+  APP --> MATCH[Workforce Matcher / Selector]
   APP --> STORE[(SQLite Repository)]
+  AGENT --> OBS[Structured Local Logs]
+  WF --> OBS
   PROF --> STORE
   AGENT --> STORE
 ```
@@ -64,6 +68,20 @@ Provider-specific response handling stays out of profile and agent logic. Stream
 
 `models/identity.py` derives a title and role from observed capability results. One-shot probes are low confidence. Unknown and unassessed dimensions remain explicit.
 
+`models/model_intelligence.py` turns Ollama metadata into an evidence-labelled record: architecture, family, parameter count, quantization, context, embedding/KV geometry, declared capabilities and inferred memory envelope. `models/routing.py` ranks installed artifacts by capability, context, memory, observed quality, speed and explicit fallback. A declared capability can make a route provisional; only observed capability satisfies a verified-only request. Memory estimates are inferred, never presented as measured.
+
+### Workforce orchestration
+
+`agents/orchestration.py` owns the host-validated plan/DAG, sequential child execution, budgets, cancellation, approval callbacks, artifact checks, verifier verdicts and durable workforce results. `agents/workforce.py` owns role matching and assignment selection. The orchestrator never trusts a model-generated plan: it validates task IDs, dependencies, cycles, step/time budgets and relative verification paths before executing anything. Each child uses the same workspace tool policy as a single agent; a read-only task receives a registry without write or command tools. Children receive prior results only as explicitly marked untrusted context.
+
+A task is successful only if the child runtime returns `completed` and host artifact checks pass. A verifier task is independent and must return `VERDICT: PASS`; `FAIL`, missing artifacts, step-limit termination or blocked dependencies fail the workflow. The host can persist a verifier's final verdict as the audit artifact when the model omits the requested file, but never overwrites an existing artifact.
+
+Workforce runs, task states, child events and results persist in SQLite. Events form a SHA-256 chain over sequence, kind, message, canonical data, time and previous hash. `WorkforceOrchestrator` records child progress and does not store raw unredacted event data; the CLI/desktop use the same service.
+
+### Observability
+
+`observability.py` writes rotating JSON Lines under the application data directory. CLI commands and desktop errors emit structured events with bounded, redacted metadata. `11vated doctor` reports provider health, model inventory, SQLite integrity, checkpoint-key presence, log presence and host telemetry. Logs are local-only; they are not uploaded.
+
 ### Agent runtime
 
 `agents/runtime.py` owns the bounded control loop. It supports native tool calls and structured-action fallbacks. The model never directly calls Python functions: the host parses, validates tool names and arguments, applies policy and invokes registered tools. The runtime writes durable checkpoints at model-request and tool-batch boundaries; eligibility and binding verification are centralized in `agents/recovery.py` so the desktop, CLI and runtime enforce one recovery contract.
@@ -78,7 +96,7 @@ Provider-specific response handling stays out of profile and agent logic. Stream
 
 ### Persistence
 
-`storage/repository.py` stores model profiles, agent runs, ordered run events, scoped memory and durable run checkpoints in SQLite. Profiles are keyed by exact model name and Ollama digest. Checkpoints carry an envelope SHA-256 over the binding columns, counters, timestamps and bounded payload; a failed integrity check raises instead of returning partial state.
+`storage/repository.py` stores model profiles, agent runs, ordered run events, scoped memory, durable run checkpoints, workforce runs/tasks/events and execution leases in SQLite. Profiles are keyed by exact model name and Ollama digest. Checkpoints carry an envelope SHA-256 over the binding columns, counters, timestamps and bounded payload; a failed integrity check raises instead of returning partial state. Checkpoint payloads are encrypted at rest with AES-256-GCM using a separate 32-byte key file (legacy plaintext remains readable). Run leases are atomic SQLite claims with expiry; a live foreign lease is never stolen. The database itself and non-checkpoint journals are not whole-database encrypted.
 
 ## Agent execution sequence
 
@@ -136,6 +154,14 @@ A checkpoint may only be restored when protocol, integrity, binding, run status 
 
 An MCP call that times out, crashes or loses its transport has an unknown side-effect outcome. The gateway marks that session failed and never resends the call. A later call may create a fresh SDK session; before exposing it, the host re-discovers tools and refuses the reconnect if the approved-tool manifest, schemas or descriptions changed. This keeps transport recovery from silently changing the policy surface.
 
+### ADR-007: Workforce plans are untrusted host contracts
+
+The host validates plans before creating a child. Model assignments, dependency edges, budgets, approval boundaries and verification targets are host-enforced data. A child is not a security boundary and never inherits permissions implicitly. Completion requires host artifact checks plus an independent verdict where configured.
+
+### ADR-008: Recovery confidentiality and concurrency are separate controls
+
+Checkpoint payload encryption protects conversation state at rest, while an integrity envelope binds recovery identity. A lease protects the right to resume/execute a run across processes. Neither substitutes for an OS sandbox or whole-database encryption; each is independently testable and fails closed.
+
 ## Deferred architecture
 
-Streaming event bus, full ACP adapters, an MCP server, browser and computer-use environments, sandboxed execution, project memory retrieval, dynamic multi-agent orchestration and hardware-aware model scheduling are explicitly later phases. They must use the same provider, policy, trace and evidence contracts.
+Streaming event bus, full ACP adapters, an MCP server, browser and computer-use environments, OS sandboxed execution, project memory retrieval, parallel/distributed workforce scheduling and whole-database encryption remain later phases. They must use the same provider, policy, trace and evidence contracts.

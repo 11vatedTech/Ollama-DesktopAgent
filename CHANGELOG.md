@@ -20,8 +20,17 @@ Development increment on the 0.1.0 foundation. This is a pre-release engineering
 - Credential-like values are redacted from workspace/search/command output, persisted run objectives and event payloads, and final CLI/desktop responses. This is heuristic filtering, not complete DLP.
 - Model-card research callbacks are bound to the initiating model, avoiding cross-model result races.
 
+### Model intelligence, routing and orchestration
+- Added `/api/show` model-intelligence metadata: family, architecture, parameter count, quantization, context, embedding/KV geometry, declared capabilities, inferred memory envelope and evidence levels.
+- Added hardware/capability/context-aware model routing with observed-vs-declared distinction, explicit eligibility reasons, preferred-model ordering, fallback chain and inferred memory constraints.
+- Added a host-validated workforce orchestrator: JSON plans, DAG validation, unique IDs, cycle rejection, task decomposition, sequential delegation, shared workspace, per-task step/time budgets, cancellation, retry-safe failure handling, approval boundaries, dependency context, independent verifier verdicts, host artifact checks and durable hash-chained task/child events.
+- Added `WorkforceSelector` and CLI `workforce run/status`, `route` and `doctor` commands; added a desktop Workforce page with reviewed execution, run history and task/event inspection.
+- Live Ollama evidence: a three-agent delivery run completed with a real model, root artifact, delivery report and independent `VERDICT: PASS`; step-limit and verifier failures are explicitly rejected.
+
 ### Durable execution recovery
 - Checkpoints are now written by normal execution at three safe boundaries: before each provider request, before a tool batch and after a completed tool batch. Previously the persistence helper existed but was never invoked.
+- Checkpoint payloads are encrypted at rest with AES-256-GCM and a separate 32-byte local key. Legacy plaintext rows remain readable for migration.
+- Added atomic per-run leases for CLI/desktop resume and workforce execution. Live foreign leases are not stolen; expired leases are reclaimable.
 - The checkpoint envelope SHA-256 binds the model digest, workspace, task, harness mode, tool-manifest hash, state, counters, creation/update timestamps and bounded payload, so altering a binding column fails closed.
 - Recovery uses a dedicated protocol version, a 72-hour freshness window, run-status checks and exact task/harness/tool-manifest verification on every resume.
 - An interrupted tool batch is durably marked `needs_review` and cannot be resumed or replayed automatically. Completed runs discard checkpoints; cancelled and failed runs retain them for review.
@@ -47,7 +56,9 @@ Development increment on the 0.1.0 foundation. This is a pre-release engineering
 ### Research and quality
 - Added dated primary-source research and benchmark-validity register.
 - Documented explicit release gates, competitor constraints, reproducibility manifest and measured autonomy metric.
-- CI has passed compile, Ruff, tests and Windows desktop import across Windows and Ubuntu with Python 3.11 and 3.12 at validated checkpoints. See PR checks for exact latest results.
+- Local Windows Python 3.11 and 3.12 runs pass compile, Ruff and pytest, including the real MCP transport suite. Opt-in live Ollama tests pass with `OLLAMA_LIVE=1`. Hosted CI results are reported separately after push; Linux coverage is not inferred from local runs.
+- Added structured JSONL logging with rotation and redaction, plus a `doctor` diagnostic snapshot. Added measured startup, inventory, routing, tool, checkpoint, recovery, concurrency and desktop-construction timings in Operations documentation.
+- Added real MCP stdio and Streamable HTTP transport certification tests; mocks remain supplemental.
 
 ### Not yet production-certified
-OS-enforced sandboxing, multi-process resume leases, full specialist evaluation adapters, role/agent qualification, delegated multi-agent scheduling, full MCP server/ACP support, browser/computer-use adapters, production telemetry/observability, SBOM and signed distribution remain open release gates.
+OS-enforced sandboxing, per-child workspace/resource isolation, parallel/distributed scheduling, full specialist evaluation adapters, role/agent qualification, full MCP server/ACP support, browser/computer-use adapters, whole-database encryption, vector memory retrieval, SBOM and signed distribution remain open release gates. The implemented workforce and routing paths are locally verified, not production-certified.

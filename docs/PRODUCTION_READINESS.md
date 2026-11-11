@@ -3,7 +3,7 @@
 **Product:** 11vated Intelligence — Ollama Agent Workstation  
 **Release baseline:** 0.2.0.dev0 (pre-release increment on the 0.1.0 foundation)  
 **Development increment:** Model Intelligence Engine v0.2  
-**Status:** Active engineering branch; not production-certified.
+**Status:** Active engineering branch; locally verified, not production-certified.
 
 ## Product north star
 
@@ -80,6 +80,12 @@ Examples include Repository Cartographer, Precision Implementation Engineer, Nat
 
 The title is a proposed operational identity, not a claim about sentience, personality or intrinsic expertise. One-shot profiles remain provisional. Titles must include a rationale and visible limitations.
 
+### Model routing
+
+`models/model_intelligence.py` parses Ollama `/api/show` metadata: family/architecture, parameter count, quantization, context length, embedding width, attention/KV geometry, declared capabilities and inferred memory envelopes. `models/routing.py` ranks installed artifacts by required capability, context, estimated memory, observed quality, speed preference, exclusions and explicit fallback chain.
+
+A route distinguishes observed capability from declared-only metadata. Declared metadata may support a provisional route, but a request with `require_verified=True` rejects it; the decision reason and `details["declared_only"]` make the distinction visible. Hardware estimates are inferred, not measured. A route is not an execution guarantee until the selected model digest is bound and the child run succeeds.
+
 ### Agent Identity Package
 
 The current schema-1.0 exporter emits:
@@ -126,9 +132,13 @@ Required runtime properties:
 
 ### Workforce composition
 
-The current WorkforceMatcher ranks saved model profiles for a requested canonical identity role using observed capability scores, sample confidence and evidence coverage. It returns a provisional score and missing capability list. It does not currently consider tool grants, context-window fit, latency, memory budgets, hardware constraints or historical reliability, and it does not yet provide a full selection/rejection explanation. Those are planned workforce-scheduler inputs.
+The current `WorkforceMatcher` ranks saved model profiles for a requested canonical identity role using observed capability scores, sample confidence and evidence coverage, and returns a provisional score and missing capability list. `WorkforceSelector` adds explicit rejection reasons, preferred-model hints and distinct-model preference when selecting assignments. Routing separately considers declared model metadata, context and estimated memory; that provisional metadata never becomes empirical evidence.
 
-Delegation is not a security boundary. Each child agent must receive only its explicitly granted tools and workspace scope. The orchestrator must not be able to elevate a child agent's privileges.
+The host-owned `WorkforceOrchestrator` now validates a JSON plan/DAG, checks unique IDs, dependencies and cycles, clamps task and wall-clock budgets, binds installed model digests when available, and executes children sequentially in a shared controlled workspace. Each child receives a tool registry derived from the task's read-only flag and the workspace policy. Tasks marked `requires_approval` and the plan itself need explicit approval. Step-limit termination, missing artifacts and verifier `FAIL` are failures, and transient retry is limited to tasks marked retry-safe. See [Workforce orchestration](WORKFORCE.md).
+
+Delegation is not a security boundary. Each child receives only its tool registry and workspace scope; the orchestrator cannot grant a child a tool that the host policy denies. Children currently share one workspace, so a write-capable child can modify files visible to siblings. The read-only wrapper is a tool-policy boundary, not an OS sandbox.
+
+The workforce event journal is append-only at the application layer and hash-chained across sequence, kind, message, canonical JSON data, timestamp and preceding hash. A separate verifier task must return a verdict; artifact checks are host-evaluated. The journal is tamper-evident, not tamper-proof against an attacker who can rewrite both storage and code.
 
 ## Benchmark architecture
 
@@ -209,10 +219,21 @@ These are research references, not approved runtime dependencies. For every prop
 | G2 — Empirical profiling | Repeated tests, host/GPU telemetry, expanded task suites, repeatability, confidence and resource metrics | Partial; repeated smoke probes and a six-case deterministic 11vated-core runner with host-side scoring, per-trial evidence and a hashed manifest are implemented. Specialist/held-out suites and role thresholds remain open |
 | G3 — Agentification | Protocol adapters, strict host-side tool argument validation, bounded recovery and digest binding | Partial; native/structured/guided paths and workspace tool schema validation implemented |
 | G4 — Safe execution | OS sandbox, permission broker, cancellation, audit and cleanup | Partial; active streamed Ollama requests are cancellable, commands use bounded pipe capture and best-effort process cleanup, tool budgets and secret filtering are host-enforced. OS sandbox, Windows Job Objects/AppContainer, CPU/RAM/process quotas and tamper-resistant audit remain open |
-| G5 — Durable agents | Checkpointing, resumable runs, scoped memory retrieval and event store | Implemented for single-process local runs: integrity-hashed safe-boundary checkpoints bind model digest, workspace, task, harness and tool manifest; desktop and CLI recovery require explicit confirmation; interrupted tool batches become `needs_review` and are never replayed; corrupt, stale, superseded or mismatched checkpoints fail closed. Scoped SQLite memory, ordered journaling and Run History are implemented. Multi-process resume leases, vector retrieval and automatic memory consolidation remain open |
-| G6 — Multi-agent workforce | Delegation, shared state, scheduling, budgets and least privilege | Not complete |
+| G5 — Durable agents | Checkpointing, resumable runs, scoped memory retrieval and event store | Implemented for local runs: integrity-hashed safe-boundary checkpoints bind model digest, workspace, task, harness and tool manifest; checkpoint payloads are AES-256-GCM encrypted with a separate 32-byte local key; desktop and CLI recovery require explicit confirmation; interrupted tool batches become `needs_review` and are never replayed; corrupt, stale, superseded or mismatched checkpoints fail closed. Atomic leases block concurrent CLI/desktop resume and workforce execution for the same run ID; expired leases are reclaimable. Scoped SQLite memory, ordered journaling, Run History and hash-chained workforce events are implemented. Vector retrieval, automatic memory consolidation and encrypted whole-database storage remain open |
+| G6 — Multi-agent workforce | Delegation, shared state, scheduling, budgets and least privilege | Implemented and locally verified, not production-certified: validated DAG plans, sequential delegation, shared workspace policy, per-task step/time budgets, cancellation, retry-safe failure handling, plan/task approval, independent verifier artifact plus verdict checks, and durable hash-chained task/child events. Parallel/distributed scheduling, resource quotas, per-child workspace isolation and an OS sandbox remain open |
 | G7 — Interoperability | MCP client/server, ACP and browser/computer adapters | Partial; optional SDK v2 MCP tool client supports stdio and Streamable HTTP with exact tool grants, host JSON Schema validation, bounded/cancellable calls, output redaction, fail-closed reconnect and versioned transport diagnostics. Real SDK integration tests cover discovery, invocation, timeout, cancellation, crash, reconnection, schema drift, concurrent sessions and process/session cleanup locally on Windows. The Linux half of the CI matrix is configured but has not yet run on this branch. OAuth/authorization, protected remote servers, resources/prompts, MCP server, ACP and browser/computer-use adapters remain open |
 | G8 — Certification | Version-pinned benchmark adapters, audited tasks, controlled comparisons and regression gates | Partial foundation; the six-case local core runner is versioned and independently scored. External benchmark adapters, audited specialist task banks, controlled multi-harness comparisons, role/agent certification and release regression thresholds remain incomplete |
 | G9 — Distribution | Signed installer, SBOM, dependency audit, upgrade/uninstall and recovery | Partial |
+
+## Local verification evidence
+
+On the Windows development host (Python 3.12.13 and 3.11.15, Ollama 0.40.15, 15 installed models):
+
+- Ruff and `compileall` pass.
+- The full pytest suite passes on both Python versions; opt-in live Ollama tests are skipped in the ordinary run and pass when `OLLAMA_LIVE=1`.
+- Live provider checks cover real version/inventory, `/api/show` metadata, non-empty chat completion and 768-dimensional embeddings.
+- A three-agent live delivery workflow with `qwen2.5-coder:7b` completed in 17 seconds (run `cb917844-fcc4-4080-b7bd-eee6082aa523`): analysis artifact, root `greeting.txt`, delivery report, independent verifier `PASS`, host artifact checks, CLI exit 0.
+- The desktop Workforce page was constructed and navigated in an offscreen Qt run; an actual interactive user workflow was not certified.
+- Real MCP stdio and Streamable HTTP integration tests pass locally on Windows. Hosted CI and Linux coverage have not yet run for this branch.
 
 A release may not be called production-certified until all applicable gates pass on the supported Windows hardware/software matrix. Feature presence alone is not proof of production readiness.

@@ -4,7 +4,7 @@
 
 A local-first, Windows-first desktop agent workstation from 11vatedTech. Its defining subsystem is the **Universal Agentification Engine**: inventory a model, research its origin, test its real capabilities, assign an evidence-backed professional identity, then equip it with a bounded execution harness.
 
-> **Release status: v0.2 development increment on the 0.1.0 foundation — not production-certified.** The branch adds a structured publisher dossier, repeatable local profiling, hardware/inference telemetry, model-digest enforcement, scoped project memory, expanded identity/workforce roles, host-side tool-schema validation and a desktop/CLI workflow. The broader production gates are tracked in [Production Readiness](docs/PRODUCTION_READINESS.md).
+> **Release status: v0.2 development increment on the 0.1.0 foundation — locally verified, not production-certified.** The branch adds a structured publisher dossier, repeatable local profiling, hardware/inference telemetry, model-digest enforcement, scoped project memory, expanded identity/workforce roles, host-side tool-schema validation, an encrypted durable recovery boundary, a host-controlled multi-agent workforce, hardware-aware model routing and a desktop/CLI workflow. The broader production gates are tracked in [Production Readiness](docs/PRODUCTION_READINESS.md).
 
 ## Product thesis
 
@@ -31,6 +31,7 @@ The core is provider/harness/UI separated. The desktop shell does not duplicate 
 | Ollama health, model inventory, model metadata and loaded-model inspection | Implemented |
 | Local model smoke probes | Implemented; not a full benchmark suite |
 | Evidence-backed professional title and expanded role taxonomy | Implemented; provisional pending role qualification |
+| Model intelligence metadata and evidence-aware routing | Implemented; declared-only routing is marked provisional and unverified |
 | Opt-in Hugging Face model-card research | Implemented in CLI and desktop; explicit repository selection required; lexical match is only a hint |
 | Structured publisher dossier | Implemented for model description, intended use, limitations, training/evaluation disclosures, datasets, base model, languages, license and provenance hash |
 | Repeatable smoke profiling | Implemented with 1–5 trials, pass-rate aggregation and confidence tracking; not a full benchmark suite |
@@ -45,11 +46,11 @@ The core is provider/harness/UI separated. The desktop shell does not duplicate 
 | Workspace-scoped file tools | Implemented with containment, size limits, host schemas, credential-path denial and heuristic secret-value redaction before model context |
 | Optional allow-listed command tool | Implemented but disabled by default; configured executable resolution and human approval required; not a sandbox |
 | SQLite profile, conversation, run, checkpoint and scoped-memory persistence | Implemented; explicit scoped notes, lexical recall/archive, per-event durable run journal and Run History UI. Embeddings remain open |
-| Durable run recovery | Implemented for single-process local runs: integrity-hashed safe-boundary checkpoints, exact model-digest/workspace/harness/tool-manifest binding, desktop and CLI recovery, fail-closed review for interrupted tools. Multi-process leases remain open |
-| PySide6 desktop shell and headless CLI | Implemented with Model Intelligence, Agent Workspace, Run History and Settings pages; Windows desktop import passes in CI; full interactive QA on supported hardware remains |
-| Evidence-based workforce ranking primitive | Implemented for software, repository, workflow, research, visual, quantitative, data, creative, multilingual and planning roles; qualification is explicit |
+| Durable run recovery | Implemented: integrity-hashed safe-boundary checkpoints, exact model-digest/workspace/harness/tool-manifest binding, AES-256-GCM checkpoint payloads with a separate local key, desktop and CLI recovery, fail-closed review for interrupted tools, and atomic multi-process resume/workforce leases |
+| PySide6 desktop shell and headless CLI | Implemented with Model Intelligence, Agent Workspace, Workforce, Run History and Settings pages; Windows desktop import passes in CI; full interactive QA on supported hardware remains |
+| Workforce orchestration | Implemented: evidence-backed role selection, validated DAG plans, sequential delegation, shared workspace, budgets, timeouts/cancellation, retry-safe failure handling, approvals, independent verdict/artifact checks, durable hash-chained events and desktop/CLI controls. Qualification remains explicit |
 | MCP client transport certification | Implemented for the official SDK v2 over stdio and Streamable HTTP: real subprocess/uvicorn integration tests cover discovery, invocation, timeout, cancellation, crash detection, reconnection, schema-drift refusal, process/session cleanup and concurrent clients |
-| Full MCP server, ACP, browser/computer-use adapters, delegated multi-agent scheduling, specialist benchmark adapters and role/agent certification | Roadmap |
+| Full MCP server, ACP, browser/computer-use adapters, parallel/distributed scheduling, specialist benchmark adapters, OS sandbox and role/agent certification | Roadmap |
 
 ## Requirements
 
@@ -90,6 +91,10 @@ python -m ollama_workstation
 11vated profile qwen2.5-coder:7b --repeats 3
 11vated benchmark qwen2.5-coder:7b --suite core --repeats 3
 11vated run qwen2.5-coder:7b .\agent-workspace "Inspect this project and summarize its architecture"
+11vated workforce run "Inspect this project and document its architecture" .\agent-workspace --mode analysis --model qwen2.5-coder:7b --yes
+11vated workforce status
+11vated route --capability tool_calling --context 16384
+11vated doctor
 11vated research qwen2.5-coder:7b
 11vated attach-model-card qwen2.5-coder:7b Qwen/Qwen2.5-Coder-7B-Instruct
 11vated export-agent qwen2.5-coder:7b
@@ -116,7 +121,19 @@ CLI:
 11vated recover RUN_ID --discard
 ```
 
-The desktop **Run History** page lists the same candidates, explains why each is or is not resumable, requires confirmation before resuming and verifies the live model digest again. Resume reuses the original run ID, appends a `resumed` event to the durable journal and continues within the original step budget rather than granting a fresh one.
+The desktop **Run History** page lists the same candidates, explains why each is or is not resumable, requires confirmation before resuming and verifies the live model digest again. Resume reuses the original run ID, appends a `resumed` event to the durable journal and continues within the original step budget rather than granting a fresh one. CLI resume and desktop resume acquire an atomic run lease, so a second workstation process cannot resume the same checkpoint concurrently; an expired lease is reclaimable.
+
+Checkpoint payloads are encrypted at rest with AES-256-GCM using a 32-byte key stored separately from SQLite (`.checkpoint.key` by default, or the path in `OLLAMA_WORKSTATION_CHECKPOINT_KEY_FILE`). The legacy plaintext format remains readable for migration. The checkpoint envelope hash still binds digest, workspace, harness, tool manifest, counters and timestamps.
+
+## Model intelligence, routing and workforce
+
+`ModelProfiler` feeds a structured model-intelligence record parsed from Ollama `/api/show`: family/architecture, parameter count, quantization, context capacity, declared tools/vision/embedding capabilities, KV/memory estimates and evidence levels. Estimates are marked inferred, not measured.
+
+`ModelRouter` ranks installed artifacts by required capability, context, memory envelope, observed quality, speed preference and explicit fallback chain. Observed capability scores take precedence; declared-only metadata is permitted only for provisional routing and is labelled `unverified`.
+
+The **Workforce** page and `11vated workforce` command execute a host-validated DAG. Children run sequentially against the assigned workspace with tool policy and step/time budgets. Plans and consequential task boundaries require approval. A task completes only when the child runtime reports `completed` and host artifact checks pass; a separate verifier must return `VERDICT: PASS`. Step-limit termination, missing artifacts and verifier `FAIL` cannot be presented as success. Every task and child event is stored in a SHA-256 hash-chained workforce journal. See [Workforce orchestration](docs/WORKFORCE.md).
+
+`11vated doctor` and the rotating JSONL log under the application data directory provide structured operational evidence without uploading telemetry. See [Operations and performance](docs/OPERATIONS.md).
 
 ## Privacy and security
 
@@ -127,9 +144,9 @@ The desktop **Run History** page lists the same candidates, explains why each is
 - File tools are workspace scoped and size limited.
 - Overwrites require approval.
 - Shell execution is disabled by default; when enabled it is allow-listed, approval-gated, uses no `shell=True`, and is time limited.
-- Credential-like values are heuristically redacted from workspace file/search output, command output, explicit memory, persisted task descriptions, event payloads and final agent responses. This is not a substitute for an OS secret broker or a complete secret scanner. No unrestricted browser, desktop-control, network or arbitrary Python-evaluation tool is exposed in this development increment. Command execution stays disabled in the desktop agent.
+- Credential-like values are heuristically redacted from workspace file/search output, command output, explicit memory, persisted run/workforce task descriptions, event payloads, structured logs and final agent responses. This is not a substitute for an OS secret broker or a complete secret scanner. No unrestricted browser, desktop-control, network or arbitrary Python-evaluation tool is exposed in this development increment. Command execution stays disabled in the desktop agent.
 
-Read [SECURITY.md](SECURITY.md) before enabling command execution or using sensitive workspaces. The desktop stop button closes the active streamed Ollama request and is checked between tool operations. Command termination is best-effort; this does not replace OS-level run isolation.
+Read [SECURITY.md](SECURITY.md) before enabling command execution or using sensitive workspaces. The desktop stop button closes the active streamed Ollama request and is checked between tool operations. Command termination is best-effort; this does not replace OS-level run isolation. Workforce children share their assigned workspace, so the host's read-only tool wrapper is a policy boundary, not an OS sandbox.
 
 ## Optional MCP tool servers
 
@@ -188,7 +205,7 @@ ruff check .
 python -m compileall -q src
 ```
 
-CI is configured for Python 3.11/3.12 on Windows and Ubuntu and installs the `mcp` extra so the real transport suite runs in every matrix leg. On this branch, Windows Python 3.11 and 3.12 pass compile, Ruff and `pytest` with **128 passed, 1 skipped**; the skip is a platform-conditional test, not a waived failure. The GitHub Actions matrix is the authoritative cross-platform result; do not infer Linux coverage until the pushed matrix completes. The Windows packaging workflow builds a PyInstaller distribution; installer signing and release certification remain open gates.
+CI is configured for Python 3.11/3.12 on Windows and Ubuntu and installs the `mcp` extra so the real transport suite runs in every matrix leg. Local Windows Python 3.11 and 3.12 runs pass compile, Ruff and the full pytest suite; the opt-in live Ollama tests are skipped unless `OLLAMA_LIVE=1`, and one platform-conditional test is skipped. The GitHub Actions matrix is the authoritative cross-platform result; do not infer Linux coverage until the pushed matrix completes. The Windows packaging workflow builds a PyInstaller distribution; installer signing and release certification remain open gates.
 
 ## Research sources
 

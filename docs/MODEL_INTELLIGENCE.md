@@ -33,6 +33,12 @@ Initial v0.1 screen:
 
 A single passed smoke test proves only that a model passed that one item once. It is not a broad ability guarantee. The v0.2 profiler supports 1–5 repeated trials per smoke dimension and stores method, attempts, pass count, confidence, duration, numeric/timing metrics, evidence and limitations. Failed trials count as zero in aggregate scores; raw model messages and tool arguments are not stored in the metric record. Full evaluation requires task samples, repeated trials, held-out tasks, adversarial cases and independent scoring.
 
+### Model intelligence and routing
+
+`models/model_intelligence.py` inspects native Ollama `/api/show` metadata and records family, architecture, parameter count, quantization, context length, embedding width, attention/KV geometry, declared tools/vision/embedding capabilities and an inferred memory envelope. Declared metadata and inferred estimates are kept separate from observed capability evidence; missing geometry remains unknown rather than zero.
+
+`models/routing.py` ranks installed artifacts against a request's required capabilities, context, memory ceiling, observed quality, speed preference, exclusions and preferred models. Eligible routes form an explicit fallback chain. Declared-only capability can support a provisional route, but `require_verified=True` excludes it and the decision reports why. Routing does not guarantee execution: the selected installed digest is still checked before an agent starts.
+
 ### Reproducible local benchmark runner
 
 The CLI exposes a versioned `11vated-core@1.0.0` suite through `11vated benchmark MODEL --suite core --repeats 3`. Its six synthetic deterministic items cover exact instruction compliance, arithmetic, code-trace reasoning, JSON extraction, code comprehension and planning-order constraints. Host-side evaluators independently score exact strings, numeric answers, JSON shape/value and ordered terms; the model is never asked to grade itself.
@@ -59,7 +65,9 @@ The current schema-1.0 export includes schema/package metadata, timestamp, ident
 
 The v0.2 memory service is local SQLite with explicit user-authored writes, scoped user/project/agent records, six note categories, tags, confidence, timestamps, access counts and archive/forget semantics. Project memory can be added and archived from the desktop. Agent runs retrieve project-path notes, user-default notes and exact-model-digest notes. Retrieval filters by terms in SQLite before deterministic token/tag-overlap ranking and currently caps the candidate set at 500 matching records per recall. There is no embedding/vector search, automatic conversation-to-memory write, consolidation or contradiction resolution. Run checkpointing is a runtime concern: it snapshots the execution contract, not memory. Retrieved text is treated as untrusted context, not system authority.
 
-The workforce matcher derives role requirements from the same canonical role taxonomy used by identity assignment. It currently ranks profiles by capability score, sample confidence and requirement coverage, and reports missing dimensions. Results remain provisional until an explicit role-qualification process exists. Hardware/resource constraints, tool grants, historical reliability and automated multi-agent scheduling are not yet part of selection.
+The workforce matcher derives role requirements from the same canonical role taxonomy used by identity assignment. It ranks profiles by capability score, sample confidence and requirement coverage, reports missing dimensions and keeps results provisional until an explicit role-qualification process exists. `WorkforceSelector` exposes selection/rejection reasons and prefers distinct models when possible.
+
+The host-owned orchestrator executes validated plans with sequential children, exact installed-digest binding, per-task step/time budgets, cancellation, approval boundaries, artifact checks and independent verifier verdicts. It records task and child events in a hash-chained durable journal. This is not an OS sandbox: children share the assigned workspace, the read-only registry is a tool policy, and parallel/distributed scheduling, per-child resource quotas, latency history and hardware admission control remain open.
 
 ## Research provenance
 
@@ -74,4 +82,4 @@ Public model-card discovery is opt-in. Hugging Face search results are candidate
 5. **Agent-qualified** — exact model + harness + toolset completes repeated end-to-end tasks.
 6. **Production-certified** — security, resource, reliability and regression gates pass on a declared hardware/software matrix.
 
-The 0.1.0 baseline established discovery and agent-runtime foundations. The v0.2 development increment adds structured publisher research, repeated smoke profiling, local telemetry, scoped memory and fail-closed model-digest binding. It still does not claim role qualification, agent qualification or production certification.
+The 0.1.0 baseline established discovery and agent-runtime foundations. The v0.2 development increment adds structured publisher research, repeated smoke profiling, local telemetry, scoped memory, fail-closed model-digest binding, model-intelligence routing, encrypted checkpoint recovery, atomic run leases and host-controlled workforce orchestration. It still does not claim role qualification, agent qualification or production certification.
