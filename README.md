@@ -4,7 +4,7 @@
 
 A local-first, Windows-first desktop agent workstation from 11vatedTech. Its defining subsystem is the **Universal Agentification Engine**: inventory a model, research its origin, test its real capabilities, assign an evidence-backed professional identity, then equip it with a bounded execution harness.
 
-> **Release status: v0.2 development increment on the 0.1.0 foundation — locally verified, not production-certified.** The branch adds a structured publisher dossier, repeatable local profiling, hardware/inference telemetry, model-digest enforcement, scoped project memory, expanded identity/workforce roles, host-side tool-schema validation, an encrypted durable recovery boundary, a host-controlled multi-agent workforce, hardware-aware model routing and a desktop/CLI workflow. The broader production gates are tracked in [Production Readiness](docs/PRODUCTION_READINESS.md).
+> **Release status: v0.2 development increment on the 0.1.0 foundation — locally verified, not production-certified.** The branch adds a structured publisher dossier, repeatable local profiling, hardware/inference telemetry, model-digest enforcement, scoped project memory, expanded identity/workforce roles, host-side tool-schema validation, an encrypted durable recovery boundary, a host-controlled multi-agent workforce, hardware-aware model routing and a redesigned nine-workspace desktop/CLI workflow. The broader production gates are tracked in [Production Readiness](docs/PRODUCTION_READINESS.md).
 
 ## Product thesis
 
@@ -22,7 +22,15 @@ Ollama supplies local inference. This workstation provides the operational syste
 
 `Desktop / CLI → Application services → Ollama provider + Model Intelligence Engine → Universal Agentification Engine → Agent runtime → Policy-enforced tools → Verification and evidence → SQLite`
 
-The core is provider/harness/UI separated. The desktop shell does not duplicate inference or tool policy. Read [Architecture](docs/ARCHITECTURE.md), [Model Intelligence](docs/MODEL_INTELLIGENCE.md), [Production Readiness](docs/PRODUCTION_READINESS.md), the dated [Research Register](docs/RESEARCH_REGISTER.md) and the [Changelog](CHANGELOG.md).
+The core is provider/harness/UI separated. The desktop shell does not duplicate inference or tool policy. Read [Architecture](docs/ARCHITECTURE.md), [Model Intelligence](docs/MODEL_INTELLIGENCE.md), [Desktop Intelligence Interface](docs/UI_INTERFACE.md), [Production Readiness](docs/PRODUCTION_READINESS.md), the dated [Research Register](docs/RESEARCH_REGISTER.md) and the [Changelog](CHANGELOG.md).
+
+## Desktop intelligence interface
+
+The PySide6 shell is organized as nine workspaces: **Command Center**, **Advanced Chat**, **Model Intelligence**, **Workforce Studio**, **Agent Operations**, **Integration Hub**, **System Laboratory**, **Run History & Recovery** and **Settings**. It uses shared design tokens and components, a custom `QPainter` intelligence core, real inventory/profile/telemetry data, streamed chat with cooperative stop, local conversation persistence, workforce approvals and the existing durable recovery controls. Reduced-motion mode and compact layouts are available from the same shell.
+
+![Command Center](tests/screenshots/windows-command.png)
+
+The interface is documented with its validation matrix, screenshot gallery and known limitations in [Desktop Intelligence Interface](docs/UI_INTERFACE.md). It is a local engineering surface, not a production-certified UI: full accessibility, intermediate viewport and clean-VM validation remain open.
 
 ## Implemented in the current development branch (pre-release v0.2)
 
@@ -47,7 +55,7 @@ The core is provider/harness/UI separated. The desktop shell does not duplicate 
 | Optional allow-listed command tool | Implemented but disabled by default; configured executable resolution and human approval required; not a sandbox |
 | SQLite profile, conversation, run, checkpoint and scoped-memory persistence | Implemented; explicit scoped notes, lexical recall/archive, per-event durable run journal and Run History UI. Embeddings remain open |
 | Durable run recovery | Implemented: integrity-hashed safe-boundary checkpoints, exact model-digest/workspace/harness/tool-manifest binding, AES-256-GCM checkpoint payloads with a separate local key, desktop and CLI recovery, fail-closed review for interrupted tools, and atomic multi-process resume/workforce leases |
-| PySide6 desktop shell and headless CLI | Implemented with Model Intelligence, Agent Workspace, Workforce, Run History and Settings pages; Windows desktop import passes in CI; full interactive QA on supported hardware remains |
+| PySide6 desktop shell and headless CLI | Implemented with the nine-workspace intelligence interface, shared design system, live inventory/profile/telemetry, streamed chat and stop, local conversations, workforce approvals, diagnostics, history/recovery and settings; Windows UI tests and import are configured in CI; full interactive QA on supported hardware remains |
 | Workforce orchestration | Implemented: evidence-backed role selection, validated DAG plans, sequential delegation, shared workspace, budgets, timeouts/cancellation, retry-safe failure handling, approvals, independent verdict/artifact checks, durable hash-chained events and desktop/CLI controls. Qualification remains explicit |
 | MCP client transport certification | Implemented for the official SDK v2 over stdio and Streamable HTTP: real subprocess/uvicorn integration tests cover discovery, invocation, timeout, cancellation, crash detection, reconnection, schema-drift refusal, process/session cleanup and concurrent clients |
 | Full MCP server, ACP, browser/computer-use adapters, parallel/distributed scheduling, specialist benchmark adapters, OS sandbox and role/agent certification | Roadmap |

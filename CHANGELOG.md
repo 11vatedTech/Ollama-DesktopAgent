@@ -4,6 +4,15 @@
 
 Development increment on the 0.1.0 foundation. This is a pre-release engineering branch and is not production-certified.
 
+### Desktop intelligence interface
+- Rebuilt the PySide6 desktop shell as the nine-workspace 11vatedTech Intelligence Interface: Command Center, Advanced Chat, Model Intelligence, Workforce Studio, Agent Operations, Integration Hub, System Laboratory, Run History & Recovery, and Settings.
+- Added shared design tokens, cards, gauges, pills, headers, list delegates and a custom `QPainter` intelligence core. Motion targets a 16 ms cadence, with a 750 ms reduced-motion mode and responsive page transitions.
+- Wired the interface to real local state: live Ollama inventory and version, saved profiles, host telemetry, durable runs, recovery candidates, MCP configuration and workforce task events. No reasoning progress, task success or host activity is fabricated.
+- Added streamed model chat, cooperative stop/cancel, persisted SQLite conversations, model/agent/routed/workforce modes, context and attachment inspection, model filters and comparison controls.
+- Added responsive Command, Chat and Workforce layouts, two-line selected list rows, effective numeric Settings fields and independent Workforce column scrolling.
+- Added seven focused headless UI tests plus a reproducible native Windows screenshot gallery covering all nine workspaces and three compact views.
+- Live Windows checks: a real `qwen2.5-coder:7b` chat returned `STREAM_OK`; an active streamed response was stopped and surfaced as `Generation stopped`; a bounded three-task workforce delivery ran and correctly failed closed at `verification_failed` when the verifier returned `VERDICT: FAIL`. The UI paint-only sample averaged 5.77 ms per 410 × 410 core frame (p95 8.01 ms); end-to-end FPS is not claimed.
+
 ### Model intelligence
 - Structured Hugging Face publisher dossier with explicit upstream repository confirmation, publisher training/evaluation disclosures, declared metadata, structured model-index metrics and SHA-256 provenance.
 - Evidence-based expanded professional identity taxonomy and canonical role mapping.
@@ -56,7 +65,7 @@ Development increment on the 0.1.0 foundation. This is a pre-release engineering
 ### Research and quality
 - Added dated primary-source research and benchmark-validity register.
 - Documented explicit release gates, competitor constraints, reproducibility manifest and measured autonomy metric.
-- Local Windows Python 3.11 and 3.12 runs pass compile, Ruff and pytest, including the real MCP transport suite. Opt-in live Ollama tests pass with `OLLAMA_LIVE=1`. Hosted CI results are reported separately after push; Linux coverage is not inferred from local runs.
+- Local Windows Python 3.12.13 passed 164 tests with 4 skipped; Python 3.11.15 passed 157 with 5 skipped. Ruff and `compileall` pass, including the real MCP transport suite. The seven focused desktop UI tests pass offscreen. Opt-in live Ollama tests pass with `OLLAMA_LIVE=1`. Hosted CI results are reported separately after push; Linux coverage is not inferred from local runs.
 - Added structured JSONL logging with rotation and redaction, plus a `doctor` diagnostic snapshot. Added measured startup, inventory, routing, tool, checkpoint, recovery, concurrency and desktop-construction timings in Operations documentation.
 - Added real MCP stdio and Streamable HTTP transport certification tests; mocks remain supplemental.
 

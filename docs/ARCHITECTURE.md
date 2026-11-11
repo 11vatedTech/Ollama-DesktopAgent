@@ -44,7 +44,7 @@ flowchart TB
 
 ### Desktop and application layer
 
-`ui/` owns Qt presentation. It calls application services and must not contain capability heuristics or permission policy. Network and generation calls run in `QThreadPool` workers.
+`ui/` owns Qt presentation. It calls application services and must not contain capability heuristics or permission policy. Network and generation calls run in `QThreadPool` workers. `ui/state.py` carries the shared context, event bus and active-operation registry; `ui/telemetry.py` publishes host readings; `ui/intelligence_core.py` renders event-driven visual state; and `ui/pages/` contains the nine workspaces. The interface never invents activity or success: page state is updated only at provider, tool, recovery or workforce event boundaries. See [Desktop Intelligence Interface](UI_INTERFACE.md).
 
 `cli.py` is a headless operational interface over the same client, profiler, repository and runtime services.
 
@@ -144,7 +144,7 @@ Native tool calls are validated by the host. The shell tool is opt-in, allow-lis
 
 ### ADR-004: Desktop and CLI share the same services
 
-The GUI and CLI are clients of the same service layer. No model-specific logic or security policy is implemented in UI code.
+The GUI and CLI are clients of the same service layer. No model-specific logic or security policy is implemented in UI code. The desktop shell adds presentation state, worker orchestration and local view persistence, but it consumes the same profile, run, recovery and workforce services as the CLI.
 
 ### ADR-005: Recovery is a fail-closed boundary, not replay
 

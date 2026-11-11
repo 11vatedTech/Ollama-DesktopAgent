@@ -44,6 +44,12 @@ The differentiator is not merely local chat, MCP support or a model list. Goose 
 
 The UI must remain a client of application services. Provider-specific payloads, role scoring and permission enforcement do not belong in widgets.
 
+### Desktop intelligence interface
+
+The current PySide6 shell is a nine-workspace client of the same application services used by the CLI. Shared tokens and components provide a coherent surface; the intelligence core, chat states, workforce graph and telemetry are driven by real local events. Responsive layouts collapse Chat context and reflow Command/Workforce, and reduced motion is available. See [Desktop Intelligence Interface](UI_INTERFACE.md) for the design contract, screenshot gallery and validation matrix.
+
+This is implemented and locally tested, not a production-certified client. Full screen-reader/high-contrast audit, intermediate viewport coverage, clean-VM visual QA, screenshot regression testing and end-to-end frame pacing remain open.
+
 ## Model Intelligence & Identity Engine
 
 ### Origin dossier
@@ -230,10 +236,12 @@ These are research references, not approved runtime dependencies. For every prop
 On the Windows development host (Python 3.12.13 and 3.11.15, Ollama 0.40.15, 15 installed models):
 
 - Ruff and `compileall` pass.
-- The full pytest suite passes on both Python versions; opt-in live Ollama tests are skipped in the ordinary run and pass when `OLLAMA_LIVE=1`.
-- Live provider checks cover real version/inventory, `/api/show` metadata, non-empty chat completion and 768-dimensional embeddings.
+- The full pytest suite passes on both Python versions: Python 3.12.13 reports 164 passed / 4 skipped and Python 3.11.15 reports 157 passed / 5 skipped. Opt-in live Ollama tests are skipped in the ordinary run and pass when `OLLAMA_LIVE=1`.
+- Seven focused desktop UI tests pass under offscreen Qt: all nine workspace constructors, responsive Command/Chat behavior, intelligence-core states and reduced-motion timing, Markdown escaping, conversation persistence and Settings values.
+- Twelve native Windows gallery captures were inspected at 1480 × 940 and 1120 × 720 logical windows: nine desktop workspaces and compact Command, Chat and Workforce. The measured 410 × 410 core paint sample averaged 5.77 ms per frame (p95 8.01 ms); no end-to-end FPS claim is made.
+- Live provider checks cover real version/inventory, `/api/show` metadata, non-empty chat completion and 768-dimensional embeddings. A real `qwen2.5-coder:7b` desktop chat returned `STREAM_OK`; an active stream was stopped and surfaced as `Generation stopped`.
 - A three-agent live delivery workflow with `qwen2.5-coder:7b` completed in 17 seconds (run `cb917844-fcc4-4080-b7bd-eee6082aa523`): analysis artifact, root `greeting.txt`, delivery report, independent verifier `PASS`, host artifact checks, CLI exit 0.
-- The desktop Workforce page was constructed and navigated in an offscreen Qt run; an actual interactive user workflow was not certified.
+- A later desktop-driven, three-task delivery run through Workforce Studio exercised the failure path: the verifier wrote `VERDICT: FAIL` and claimed its own verification file was missing, and the host correctly reported `verification_failed` rather than success. The desktop run path is now interactively exercised; a successful desktop-driven workforce run remains to be demonstrated.
 - Real MCP stdio and Streamable HTTP integration tests pass locally on Windows. Hosted CI and Linux coverage have not yet run for this branch.
 
 A release may not be called production-certified until all applicable gates pass on the supported Windows hardware/software matrix. Feature presence alone is not proof of production readiness.

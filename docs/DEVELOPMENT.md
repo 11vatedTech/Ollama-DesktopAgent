@@ -46,6 +46,26 @@ pytest tests/test_run_recovery.py -q
 
 Recovery tests cover safe-boundary writes, resume without tool replay, interrupted-tool review, binding and tamper rejection, staleness, budget exhaustion, cancelled-run resumption and CLI list/resume/discard.
 
+## Desktop UI verification
+
+The focused Qt checks run without a display server:
+
+```powershell
+$env:QT_QPA_PLATFORM="offscreen"
+python -m pytest tests/test_ui_workstation.py -q
+Remove-Item Env:QT_QPA_PLATFORM
+```
+
+They cover all nine workspace constructors, Command and Chat responsive layout, every intelligence-core state and reduced-motion timer, Markdown escaping, conversation repository persistence, and effective Settings values. The Windows CI job installs the desktop extra and runs the same file after its import check.
+
+Regenerate the native Windows gallery with Ollama running and at least one model installed:
+
+```powershell
+python scripts/capture_ui_gallery.py --output tests/screenshots
+```
+
+Use the native Windows Qt platform for gallery captures. The `offscreen` platform reports no font families on the current host. The script captures nine desktop pages, then resizes to the compact window and captures Command, Chat and Workforce. Review [Desktop Intelligence Interface](UI_INTERFACE.md) for the evidence matrix and known gaps.
+
 ## Manual Windows integration test
 
 1. Install Ollama and pull a chat model.
@@ -62,6 +82,8 @@ Recovery tests cover safe-boundary writes, resume without tool replay, interrupt
 12. Inspect SQLite profile, run, event and checkpoint records.
 13. Repeat with a model that does not emit native tool calls to test fallback behavior.
 14. Enable a trusted local MCP stdio server first; verify only approved tools appear, a timeout reports unknown outcome, and Run History/agent execution does not replay the call. Repeat with a loopback Streamable HTTP server.
+15. Navigate all nine workspaces at desktop and compact widths; verify Chat hides context below its breakpoint, Workforce columns scroll independently, and selected two-line rows remain readable.
+16. Send a real local chat request, stop an active stream, and reopen the saved conversation from the session list.
 
 ## Desktop packaging
 

@@ -63,7 +63,7 @@ controlled benchmark.
 | Recovery candidate scan | 3.22 ms | 20 samples; 2.90–4.26 ms |
 | Workforce plan validation/build | 0.03 ms | 50 samples; 0.03–0.15 ms |
 | 64 concurrent checkpoint writes, 8 threads | 500.31 ms total | max worker 498.89 ms |
-| Desktop window construction, offscreen | 49.34 ms | UI construction only; excludes model inventory network work and user interaction |
+| Intelligence core paint, 410 × 410 offscreen | 5.43 ms median | 240 frames; mean 5.77 ms, p95 8.01 ms, max 9.84 ms; paint-only, not end-to-end FPS |
 
 The live three-agent delivery workflow took 17 seconds end-to-end in the same
 environment, including model inference, artifact writes and verification. See
@@ -76,14 +76,21 @@ environment, including model inference, artifact writes and verification. See
 - SQLite checkpoint encryption adds measurable work but remains well below the
   cost of a model call; concurrent writes serialize on SQLite and should not be
   treated as a high-throughput database benchmark.
-- The desktop figure is not a cold application launch measurement because the
-  Python process and Qt imports were already loaded.
+- The intelligence core paint figure is a warm, offscreen `QPainter` sample at
+  410 × 410. It covers only that widget's paint work and should not be read as a
+  full-window frame rate, application startup time or GPU compositor result.
 
 ## Reliability checks
 
-- Full local test suite: Python 3.12 and 3.11.
+- Full local test suite: Python 3.12.13 (164 passed, 4 skipped) and 3.11.15
+  (157 passed, 5 skipped).
+- Seven focused desktop UI tests pass offscreen; 12 native Windows captures were
+  visually inspected for the desktop and compact workspaces.
 - Static checks: Ruff and `compileall`.
 - Live provider tests: opt-in with `OLLAMA_LIVE=1`; metadata, chat and embeddings.
+- Live desktop checks: `qwen2.5-coder:7b` returned `STREAM_OK`, an active stream
+  stopped cleanly, and a three-task workforce run correctly failed closed when
+  its verifier returned `VERDICT: FAIL`.
 - Real MCP stdio and Streamable HTTP integration tests remain part of the suite
   when the `mcp` extra is installed.
 - Hosted CI results are reported separately after the branch is pushed; local
