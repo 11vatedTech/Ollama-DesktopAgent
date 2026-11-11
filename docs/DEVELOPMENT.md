@@ -23,7 +23,7 @@ Python 3.12 is recommended on Windows 11.
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-python -m pip install -e ".[desktop,dev]"
+python -m pip install -e ".[desktop,dev,mcp]"
 ```
 
 ## Validation
@@ -32,9 +32,10 @@ python -m pip install -e ".[desktop,dev]"
 python -m compileall -q src
 ruff check .
 pytest --cov=ollama_workstation --cov-report=term-missing
+pytest tests/test_mcp_integration.py -q
 ```
 
-Core tests do not require Ollama or a GPU. Live integration tests should be opt-in and record endpoint version, model digest, hardware and task configuration.
+Core tests do not require Ollama or a GPU. The MCP transport suite launches the real SDK server over stdio and Streamable HTTP; it requires the `mcp` extra and is skipped without it. Live Ollama integration tests should be opt-in and record endpoint version, model digest, hardware and task configuration.
 
 Checkpoint recovery is covered by deterministic tests that simulate process death with `SystemExit`; no Ollama server is required:
 
@@ -59,7 +60,8 @@ Recovery tests cover safe-boundary writes, resume without tool replay, interrupt
 10. Interrupt a run before the next provider request; verify Run History offers an integrity-checked resume and that the original run ID and budget are reused.
 11. Interrupt a run during a tool operation; verify it shows REVIEW REQUIRED and cannot be resumed automatically.
 12. Inspect SQLite profile, run, event and checkpoint records.
-12. Repeat with a model that does not emit native tool calls to test fallback behavior.
+13. Repeat with a model that does not emit native tool calls to test fallback behavior.
+14. Enable a trusted local MCP stdio server first; verify only approved tools appear, a timeout reports unknown outcome, and Run History/agent execution does not replay the call. Repeat with a loopback Streamable HTTP server.
 
 ## Desktop packaging
 

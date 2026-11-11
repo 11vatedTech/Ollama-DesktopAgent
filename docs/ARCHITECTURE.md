@@ -70,6 +70,12 @@ Provider-specific response handling stays out of profile and agent logic. Stream
 
 `agents/tools.py` exposes workspace-scoped list/read/write/search tools and an optional allow-listed command tool. Shell execution is disabled by default and requires host approval.
 
+### MCP gateway
+
+`agents/mcp_gateway.py` is a deny-by-default client adapter over the official MCP Python SDK v2. It owns configuration validation, exact per-server tool grants, host JSON-Schema validation, bounded/redacted results, lifecycle diagnostics and reconnect policy. The SDK owns JSON-RPC and the real transports: stdio subprocesses and Streamable HTTP sessions. Each connection runs on a dedicated event-loop thread; closing the gateway cancels the session and delegates process-tree cleanup to the SDK (Windows Job Objects, POSIX process groups). In ordinary Windows Python runs, a transparent supervisor process (`agents/mcp_stdio_wrapper.py`) owns a second kill-on-close Job Object around the real server, covering an SDK shutdown race observed under load. Frozen PyInstaller builds cannot start that module and use the SDK Job Object until a dedicated supervisor executable is bundled.
+
+`agents/mcp_contract.py` version-stamps the transport contract. A transport failure or timeout is an unknown-outcome error and is never replayed. Replacing a session is allowed only for future calls; it re-discovers the tool list and refuses to expose changed schemas or descriptions. Real SDK server/reconnect/cancellation/cleanup evidence lives in `tests/test_mcp_integration.py`; mocked policy tests remain in `tests/test_mcp_gateway.py`.
+
 ### Persistence
 
 `storage/repository.py` stores model profiles, agent runs, ordered run events, scoped memory and durable run checkpoints in SQLite. Profiles are keyed by exact model name and Ollama digest. Checkpoints carry an envelope SHA-256 over the binding columns, counters, timestamps and bounded payload; a failed integrity check raises instead of returning partial state.
@@ -126,6 +132,10 @@ The GUI and CLI are clients of the same service layer. No model-specific logic o
 
 A checkpoint may only be restored when protocol, integrity, binding, run status and freshness all verify. Tool side effects are not idempotent, so an interrupted tool batch is never replayed; it enters human review. Recovery reuses the original run ID and step budget and appends to the same event journal.
 
+### ADR-006: MCP transport recovery is not tool replay
+
+An MCP call that times out, crashes or loses its transport has an unknown side-effect outcome. The gateway marks that session failed and never resends the call. A later call may create a fresh SDK session; before exposing it, the host re-discovers tools and refuses the reconnect if the approved-tool manifest, schemas or descriptions changed. This keeps transport recovery from silently changing the policy surface.
+
 ## Deferred architecture
 
-Streaming event bus, MCP/ACP adapters, browser and computer-use environments, sandboxed execution, project memory retrieval, dynamic multi-agent orchestration and hardware-aware model scheduling are explicitly later phases. They must use the same provider, policy, trace and evidence contracts.
+Streaming event bus, full ACP adapters, an MCP server, browser and computer-use environments, sandboxed execution, project memory retrieval, dynamic multi-agent orchestration and hardware-aware model scheduling are explicitly later phases. They must use the same provider, policy, trace and evidence contracts.

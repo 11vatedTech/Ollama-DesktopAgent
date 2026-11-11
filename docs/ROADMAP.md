@@ -60,7 +60,7 @@ Acceptance: teams outperform single-agent and static-routing baselines after acc
 
 ## Phase 5 — Workstation environments
 
-- MCP client/server with capability grants.
+- MCP server, ACP and advanced MCP capability grants; stdio/Streamable HTTP client transports are implemented.
 - ACP interoperability.
 - Browser and Windows desktop adapters behind a permission broker.
 - Git worktrees/checkpoints and diff review.

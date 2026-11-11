@@ -48,12 +48,14 @@ The core is provider/harness/UI separated. The desktop shell does not duplicate 
 | Durable run recovery | Implemented for single-process local runs: integrity-hashed safe-boundary checkpoints, exact model-digest/workspace/harness/tool-manifest binding, desktop and CLI recovery, fail-closed review for interrupted tools. Multi-process leases remain open |
 | PySide6 desktop shell and headless CLI | Implemented with Model Intelligence, Agent Workspace, Run History and Settings pages; Windows desktop import passes in CI; full interactive QA on supported hardware remains |
 | Evidence-based workforce ranking primitive | Implemented for software, repository, workflow, research, visual, quantitative, data, creative, multilingual and planning roles; qualification is explicit |
-| Full MCP client/server ecosystem, browser/computer-use adapters, delegated multi-agent scheduling, specialist benchmark adapters and role/agent certification | Roadmap |
+| MCP client transport certification | Implemented for the official SDK v2 over stdio and Streamable HTTP: real subprocess/uvicorn integration tests cover discovery, invocation, timeout, cancellation, crash detection, reconnection, schema-drift refusal, process/session cleanup and concurrent clients |
+| Full MCP server, ACP, browser/computer-use adapters, delegated multi-agent scheduling, specialist benchmark adapters and role/agent certification | Roadmap |
 
 ## Requirements
 
 - Python 3.11+ (3.12 recommended)
 - Ollama installed and running
+- Optional: the official MCP Python SDK v2 via the `mcp` extra
 - One or more models pulled with Ollama
 - Windows 11 is the primary desktop target; core services are cross-platform
 
@@ -166,20 +168,27 @@ Every server is disabled by default. Set `enabled` only after reviewing the exac
 
 For stdio servers, `env_refs` maps a child-process environment name to a variable already present in the workstation process, for example `{"SERVICE_TOKEN":"11VATED_MCP_SERVICE_TOKEN"}`. Only the variable names are written to settings; never paste a secret value into the JSON editor. The SDK uses a restricted child-process environment and configured references are passed explicitly.
 
-For Streamable HTTP, use HTTPS for remote servers. Plain HTTP is accepted only for loopback/private IP endpoints. **OAuth, custom authorization headers, protected-resource discovery, MCP resources/prompts subscriptions, and an MCP server implementation are not part of this increment.** Do not configure a protected remote endpoint or treat TLS alone as authorization. A stdio MCP server is a local child process: this integration does not sandbox that process. Use only trusted servers and keep high-risk tools disabled.
+For Streamable HTTP, use HTTPS for remote servers. Plain HTTP is accepted only for loopback/private IP endpoints. The versioned transport contract is in `agents/mcp_contract.py`; lifecycle diagnostics are available from `MCPToolGateway.diagnostics()`. A transport failure or timeout is an **unknown-outcome** error and is never retried automatically. Reconnection creates a new SDK session only for subsequent calls and refuses to expose a changed approved-tool manifest. The real transport certification suite runs with the MCP extra:
+
+```powershell
+python -m pip install -e ".[desktop,dev,mcp]"
+pytest tests/test_mcp_integration.py -q
+```
+
+**OAuth, custom authorization headers, protected-resource discovery, MCP resources/prompts subscriptions, and an MCP server implementation are not part of this increment.** Do not configure a protected remote endpoint or treat TLS alone as authorization. A stdio MCP server is a local child process: this integration delegates process-tree cleanup to the SDK (Windows Job Objects / POSIX process groups), with a transparent Windows supervisor owning a second kill-on-close Job Object in ordinary Python runs. A frozen PyInstaller build cannot launch that module and falls back to the SDK Job Object; bundling a dedicated supervisor executable remains a packaging task. This does not sandbox the server process. Use only trusted servers and keep high-risk tools disabled.
 
 The CLI uses the same saved `mcp_servers` configuration as the desktop. With all entries disabled or an empty list, ordinary local-agent execution does not require the MCP extra.
 
 ## Development
 
 ```powershell
-python -m pip install -e ".[desktop,dev]"
+python -m pip install -e ".[desktop,dev,mcp]"
 pytest
 ruff check .
 python -m compileall -q src
 ```
 
-CI is configured for Python 3.11/3.12 on Windows and Ubuntu. On this branch, Windows Python 3.12 passes compile, Ruff and `pytest` with **112 passed, 1 skipped**; the skip is a platform-conditional test, not a waived failure. The GitHub Actions matrix is the authoritative cross-platform result; do not infer Linux or Python 3.11 coverage from a single local run. The Windows packaging workflow builds a PyInstaller distribution; installer signing and release certification remain open gates.
+CI is configured for Python 3.11/3.12 on Windows and Ubuntu and installs the `mcp` extra so the real transport suite runs in every matrix leg. On this branch, Windows Python 3.11 and 3.12 pass compile, Ruff and `pytest` with **128 passed, 1 skipped**; the skip is a platform-conditional test, not a waived failure. The GitHub Actions matrix is the authoritative cross-platform result; do not infer Linux coverage until the pushed matrix completes. The Windows packaging workflow builds a PyInstaller distribution; installer signing and release certification remain open gates.
 
 ## Research sources
 

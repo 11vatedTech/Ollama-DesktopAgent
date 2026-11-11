@@ -28,6 +28,13 @@ Development increment on the 0.1.0 foundation. This is a pre-release engineering
 - Added `11vated recover --list`, `11vated recover RUN_ID` and `11vated recover RUN_ID --discard`, plus a desktop Run History recovery panel with explicit confirmation.
 - Resume reuses the original run identifier and step budget, appends a `resumed` journal event and never grants a fresh budget.
 
+### MCP transport certification
+- Added a versioned transport contract (`agents/mcp_contract.py`) and real SDK v2 certification tests using a launched stdio server and a uvicorn-hosted Streamable HTTP server. No fake MCP client is used for transport evidence.
+- Covered initialization, discovery, invocation, per-call timeouts, cooperative cancellation, abrupt process death, transport interruption, reconnection, concurrent clients, duplicate requests, partial tool failure, large-result bounding, credential redaction, schema-drift refusal, repeated lifecycle and process/session cleanup.
+- Reconnection now replaces only the transport session for future calls and refuses changed approved-tool manifests. Timed-out, cancelled or crashed calls are reported as unknown outcome and are never automatically replayed.
+- Added bounded lifecycle diagnostics with transport contract metadata, connection state, exposed/approved counts, reconnect count and retained redacted failure type/message.
+- Hardened shutdown: failed initialization closes its connection, concurrent reconnects are serialized, and a transparent Windows stdio supervisor owns a second kill-on-close Job Object so an SDK shutdown race cannot orphan grandchildren. Process-tree cleanup is verified against real stdio children/grandchildren. CI now installs the `mcp` extra so the suite runs on the full matrix. Frozen PyInstaller builds fall back to the SDK Job Object until a supervisor executable is bundled.
+
 ### Benchmarking
 - Added the versioned six-case 11vated-core local benchmark runner with independent host-side exact, numeric, JSON-schema and ordered-term scoring, repeated trials, Wilson confidence intervals, latency/throughput metrics and model/manifest digest binding.
 - Added CLI benchmark reports with redacted output previews; this is a local diagnostic suite, not external benchmark certification.
@@ -43,4 +50,4 @@ Development increment on the 0.1.0 foundation. This is a pre-release engineering
 - CI has passed compile, Ruff, tests and Windows desktop import across Windows and Ubuntu with Python 3.11 and 3.12 at validated checkpoints. See PR checks for exact latest results.
 
 ### Not yet production-certified
-OS-enforced sandboxing, multi-process resume leases, full specialist evaluation adapters, role/agent qualification, delegated multi-agent scheduling, MCP/ACP, browser/computer-use adapters, production telemetry/observability, SBOM and signed distribution remain open release gates.
+OS-enforced sandboxing, multi-process resume leases, full specialist evaluation adapters, role/agent qualification, delegated multi-agent scheduling, full MCP server/ACP support, browser/computer-use adapters, production telemetry/observability, SBOM and signed distribution remain open release gates.
