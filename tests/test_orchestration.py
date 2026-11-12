@@ -58,12 +58,14 @@ def verdict(
     *,
     outcome: str = "PASS",
     summary: str = "The cited artifacts satisfy the acceptance criteria.",
+    failure_reasons: list[dict[str, str]] | None = None,
 ) -> str:
     return json.dumps({
-        "schema_version": 1,
+        "schema_version": 2,
         "verdict": outcome,
         "summary": summary,
         "evidence": evidence,
+        "failure_reasons": failure_reasons or [],
         "confidence": 0.8,
     })
 
@@ -295,7 +297,13 @@ def test_factually_contradicted_verifier_fail_cannot_override_host_acceptance(
         assistant("Analysis written."),
         assistant(verdict([
             {"artifact": "workforce/analysis.md", "observation": "The file is empty."},
-        ], outcome="FAIL", summary="The artifact is empty.")),
+        ], outcome="FAIL", summary="The artifact is empty.", failure_reasons=[
+            {
+                "kind": "artifact_empty",
+                "description": "The analysis artifact is empty.",
+                "artifact": "workforce/analysis.md",
+            },
+        ])),
     ])
     result = WorkforceOrchestrator(client, None).run(
         WorkforcePlanner.analysis_plan("Document the workspace."),
@@ -319,13 +327,63 @@ def test_factually_contradicted_verifier_fail_cannot_override_host_acceptance(
     assert audit["host_override"] is True
 
 
+def test_mixed_substantive_failure_is_not_overridden_by_empty_artifact_claim(
+    tmp_path: Path,
+) -> None:
+    client = ScriptedClient([
+        assistant(calls=[write_call("workforce/analysis.md", "Observed files.")]),
+        assistant("Analysis written."),
+        assistant(verdict([
+            {"artifact": "workforce/analysis.md", "observation": "The artifact is non-empty."},
+        ], outcome="FAIL", summary=(
+            "The artifact is empty and the analysis does not cover the objective."
+        ), failure_reasons=[
+            {
+                "kind": "artifact_empty",
+                "description": "The analysis artifact is empty.",
+                "artifact": "workforce/analysis.md",
+            },
+            {
+                "kind": "substantive",
+                "description": "The analysis does not cover the objective.",
+                "artifact": "workforce/analysis.md",
+            },
+        ])),
+    ])
+    workspace = tmp_path / "workspace"
+    result = WorkforceOrchestrator(client, None).run(
+        WorkforcePlanner.analysis_plan("Document the workspace."),
+        workspace,
+        {"analyse": assignment("analyse"), "verify": assignment("verify")},
+    )
+
+    assert result.status == "verification_failed"
+    assert result.verification_passed is False
+    check = result.tasks[1].verification[0]
+    assert check["verdict"] == "FAIL"
+    assert check["host_override"] is False
+    assert check["contradictions"]
+    audit = json.loads(
+        (workspace / "workforce" / "verification.json").read_text(encoding="utf-8")
+    )
+    assert audit["verdict"]["verdict"] == "FAIL"
+    assert audit["host_decision"] == "FAIL"
+    assert audit["host_override"] is False
+
+
 def test_verifier_fail_is_fail_closed_even_with_valid_evidence(tmp_path: Path) -> None:
     client = ScriptedClient([
         assistant(calls=[write_call("workforce/analysis.md", "Observed files.")]),
         assistant("Analysis written."),
         assistant(verdict([
             {"artifact": "workforce/analysis.md", "observation": "content is insufficient"},
-        ], outcome="FAIL", summary="The analysis does not cover the objective.")),
+        ], outcome="FAIL", summary="The analysis does not cover the objective.", failure_reasons=[
+            {
+                "kind": "substantive",
+                "description": "The analysis does not cover the objective.",
+                "artifact": "workforce/analysis.md",
+            },
+        ])),
     ])
     result = WorkforceOrchestrator(client, None).run(
         WorkforcePlanner.analysis_plan("Document the workspace."),
