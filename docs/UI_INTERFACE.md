@@ -1,9 +1,10 @@
 # 11vatedTech Intelligence Interface
 
-**Status:** Implemented, locally verified on Windows and hosted-CI verified. Run
-[43056402479](https://github.com/11vatedTech/Ollama-DesktopAgent/actions/runs/43056402479)
-passed all four Python 3.11/3.12 Windows/Ubuntu jobs. The interface is a
-PySide6/Qt client of the existing local application services. It is not
+**Status:** Implemented and locally verified on Windows. The verifier-hardening
+head passed hosted run
+[43056402479](https://github.com/11vatedTech/Ollama-DesktopAgent/actions/runs/43056402479);
+the execution-integrity branch needs a fresh matrix after push. The interface is
+a PySide6/Qt client of the existing local application services. It is not
 production-certified; the limits of the current evidence are listed below.
 
 The desktop shell presents the workstation as nine coordinated workspaces. It
@@ -77,9 +78,9 @@ scrollable dossier so no horizontal clipping is introduced.
 | Layer | Evidence | Result |
 |---|---|---|
 | Focused UI tests | `QT_QPA_PLATFORM=offscreen pytest tests/test_ui_workstation.py -q` | 10 passed |
-| Full suite, Python 3.12.13 | `pytest -q` | 185 passed, 4 skipped |
+| Full suite, Python 3.12.13 | `pytest -q` | 191 passed, 4 skipped |
 | Static checks | Ruff and `compileall` over `src`, `tests` and the gallery script | passed |
-| Hosted CI | GitHub Actions run [43056402479](https://github.com/11vatedTech/Ollama-DesktopAgent/actions/runs/43056402479) | all four jobs passed; Ubuntu 3.11/3.12: 176 passed, 4 skipped; Windows 3.11/3.12: 175 passed, 5 skipped; Windows desktop import and 10 UI tests passed |
+| Hosted CI | GitHub Actions run [43056402479](https://github.com/11vatedTech/Ollama-DesktopAgent/actions/runs/43056402479) | prior verifier-hardening head: all four jobs passed; Ubuntu 3.11/3.12: 176 passed, 4 skipped; Windows 3.11/3.12: 175 passed, 5 skipped; Windows desktop import and 10 UI tests passed |
 | Live local profile | `qwen2.5-coder:7b`, Ollama 0.40.16, two repeats per probe | 16 probe calls; 44.22 tok/s mean; reasoning/structured output/actions passed; vision and tool calling unsupported; code generation failed; long-context and other dimensions unassessed |
 | Live local benchmark | `qwen2.5-coder:7b`, `11vated-core@1.0.0`, two repeats | 8/12 passed, score 66.67, manifest `9e68732a…f79`; full profile now carries this benchmark summary |
 | Bounded workforce (CLI) | Analysis plan, `qwen2.5-coder:7b`, run `23dc040f-1aa3-40d1-882a-b3a2c7f6b6e0` | completed with `verification_passed=true`; prose verifier was schema-normalized; host audit recorded |

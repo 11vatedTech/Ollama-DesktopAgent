@@ -172,6 +172,7 @@ class HistoryPage(QWidget):
         self.recovery_list.clear()
         labels = {
             RecoveryStatus.RESUMABLE: "RESUMABLE",
+            RecoveryStatus.LEASED: "LEASED / ACTIVE",
             RecoveryStatus.NEEDS_REVIEW: "REVIEW REQUIRED",
             RecoveryStatus.STALE: "STALE",
             RecoveryStatus.CORRUPT: "CORRUPT",
@@ -372,6 +373,7 @@ class HistoryPage(QWidget):
                 return runtime.run(
                     profile.model_name, profile, task, registry,
                     cancel_event=cancel, resume_checkpoint=checkpoint,
+                    lease_owner=owner,
                 )
         finally:
             self.context.repository.release_run_lease(run_id, owner)

@@ -4,7 +4,7 @@
 
 A local-first, Windows-first desktop agent workstation from 11vatedTech. Its defining subsystem is the **Universal Agentification Engine**: inventory a model, research its origin, test its real capabilities, assign an evidence-backed professional identity, then equip it with a bounded execution harness.
 
-> **Release status: v0.2 development increment on the 0.1.0 foundation — locally verified, not production-certified.** The branch adds a structured publisher dossier, persistent metadata profiles for every installed artifact, repeatable local profiling, a provider-enforced independent verifier contract, a versioned benchmark suite that feeds profiles and routing, hardware/inference telemetry, model-digest enforcement, scoped project memory, expanded identity/workforce roles, host-side tool-schema validation, an encrypted durable recovery boundary, a host-controlled multi-agent workforce, hardware-aware model routing and a redesigned nine-workspace desktop/CLI workflow. The broader production gates are tracked in [Production Readiness](docs/PRODUCTION_READINESS.md).
+> **Release status: v0.2 development increment on the 0.1.0 foundation — locally verified, not production-certified.** The branch adds a structured publisher dossier, persistent metadata profiles for every installed artifact, repeatable local profiling, a provider-enforced independent verifier contract, runtime-owned execution leases with heartbeat and lease-loss fail-closed behavior, a versioned benchmark suite that feeds profiles and routing, hardware/inference telemetry, model-digest enforcement, scoped project memory, expanded identity/workforce roles, host-side tool-schema validation, an encrypted durable recovery boundary, a host-controlled multi-agent workforce, hardware-aware model routing and a redesigned nine-workspace desktop/CLI workflow. The broader production gates are tracked in [Production Readiness](docs/PRODUCTION_READINESS.md).
 
 ## Product thesis
 
@@ -30,7 +30,7 @@ The PySide6 shell is organized as nine workspaces: **Command Center**, **Advance
 
 ![Command Center](tests/screenshots/windows-command.png)
 
-The interface is documented with its validation matrix, screenshot gallery and known limitations in [Desktop Intelligence Interface](docs/UI_INTERFACE.md). It is a locally and hosted-CI-verified engineering surface, not a production-certified UI: screen-reader/high-contrast validation, clean-VM validation and exhaustive intermediate scaling remain open.
+The interface is documented with its validation matrix, screenshot gallery and known limitations in [Desktop Intelligence Interface](docs/UI_INTERFACE.md). It is a locally verified engineering surface whose verifier-hardening head had a green hosted matrix; the execution-integrity branch needs a fresh run. It is not a production-certified UI: screen-reader/high-contrast validation, clean-VM validation and exhaustive intermediate scaling remain open.
 
 ## Implemented in the current development branch (pre-release v0.2)
 
@@ -54,7 +54,7 @@ The interface is documented with its validation matrix, screenshot gallery and k
 | Workspace-scoped file tools | Implemented with containment, size limits, host schemas, credential-path denial and heuristic secret-value redaction before model context |
 | Optional allow-listed command tool | Implemented but disabled by default; configured executable resolution and human approval required; not a sandbox |
 | SQLite profile, conversation, run, checkpoint and scoped-memory persistence | Implemented; explicit scoped notes, lexical recall/archive, per-event durable run journal and Run History UI. Embeddings remain open |
-| Durable run recovery | Implemented: integrity-hashed safe-boundary checkpoints, exact model-digest/workspace/harness/tool-manifest binding, AES-256-GCM checkpoint payloads with a separate local key, desktop and CLI recovery, fail-closed review for interrupted tools, and atomic multi-process resume/workforce leases |
+| Durable run recovery | Implemented: integrity-hashed safe-boundary checkpoints, exact model-digest/workspace/harness/tool-manifest binding, AES-256-GCM checkpoint payloads with a separate local key, desktop and CLI recovery, fail-closed review for interrupted tools, and runtime-owned atomic execution leases with heartbeat, active-lease recovery blocking and lease-loss shutdown |
 | PySide6 desktop shell and headless CLI | Implemented with the nine-workspace intelligence interface, shared design system, live inventory/profile/telemetry, streamed chat and stop, local conversations, workforce approvals, diagnostics, history/recovery and settings; Windows UI tests and import are configured in CI; full interactive QA on supported hardware remains |
 | Workforce orchestration | Implemented: evidence-backed role selection, validated DAG plans, sequential delegation, shared workspace, budgets, timeouts/cancellation, retry-safe failure handling, approvals, independent verdict/artifact checks, durable hash-chained events and desktop/CLI controls. Qualification remains explicit |
 | MCP client transport certification | Implemented for the official SDK v2 over stdio and Streamable HTTP: real subprocess/uvicorn integration tests cover discovery, invocation, timeout, cancellation, crash detection, reconnection, schema-drift refusal, process/session cleanup and concurrent clients |
@@ -131,7 +131,7 @@ CLI:
 11vated recover RUN_ID --discard
 ```
 
-The desktop **Run History** page lists the same candidates, explains why each is or is not resumable, requires confirmation before resuming and verifies the live model digest again. Resume reuses the original run ID, appends a `resumed` event to the durable journal and continues within the original step budget rather than granting a fresh one. CLI resume and desktop resume acquire an atomic run lease, so a second workstation process cannot resume the same checkpoint concurrently; an expired lease is reclaimable.
+The desktop **Run History** page lists the same candidates, explains why each is or is not resumable, requires confirmation before resuming and verifies the live model digest again. Resume reuses the original run ID, appends a `resumed` event to the durable journal and continues within the original step budget rather than granting a fresh one. Every repository-backed agent run now owns an atomic execution lease from the runtime, with a background heartbeat. A live lease marks the checkpoint `LEASED / ACTIVE` and blocks CLI or desktop resume; an expired lease is reclaimable. If ownership is lost during execution, the runtime stops before the next provider request, checkpoint or tool operation rather than risking concurrent workspace writes.
 
 Checkpoint payloads are encrypted at rest with AES-256-GCM using a 32-byte key stored separately from SQLite (`.checkpoint.key` by default, or the path in `OLLAMA_WORKSTATION_CHECKPOINT_KEY_FILE`). The legacy plaintext format remains readable for migration. The checkpoint envelope hash still binds digest, workspace, harness, tool manifest, counters and timestamps.
 
@@ -217,7 +217,7 @@ ruff check .
 python -m compileall -q src
 ```
 
-CI is configured for Python 3.11/3.12 on Windows and Ubuntu and installs the `mcp` extra so the real transport suite runs in every matrix leg. The latest local Windows Python 3.12.13 run reports **185 passed, 4 skipped**, with Ruff and `compileall` clean. Hosted run [43056402479](https://github.com/11vatedTech/Ollama-DesktopAgent/actions/runs/43056402479) passed all four jobs: Ubuntu 3.11/3.12 reported 176 passed/4 skipped and Windows 3.11/3.12 reported 175 passed/5 skipped, with Windows desktop import and 10 UI tests. The opt-in live Ollama tests remain skipped unless `OLLAMA_LIVE=1`. The Windows packaging workflow builds a PyInstaller distribution; installer signing and release certification remain open gates.
+CI is configured for Python 3.11/3.12 on Windows and Ubuntu and installs the `mcp` extra so the real transport suite runs in every matrix leg. The latest local Windows Python 3.12.13 run reports **191 passed, 4 skipped**, with Ruff and `compileall` clean. The earlier hosted run [43056402479](https://github.com/11vatedTech/Ollama-DesktopAgent/actions/runs/43056402479) passed all four jobs at the verifier-hardening head: Ubuntu 3.11/3.12 reported 176 passed/4 skipped and Windows 3.11/3.12 reported 175 passed/5 skipped, with Windows desktop import and 10 UI tests. The execution-integrity branch needs its own matrix result after push. The opt-in live Ollama tests remain skipped unless `OLLAMA_LIVE=1`. The Windows packaging workflow builds a PyInstaller distribution; installer signing and release certification remain open gates.
 
 ## Research sources
 

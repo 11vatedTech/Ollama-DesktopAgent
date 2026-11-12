@@ -471,13 +471,17 @@ class CommandCenterPage(QWidget):
             if item.status in {
                 RecoveryStatus.NEEDS_REVIEW, RecoveryStatus.CORRUPT,
                 RecoveryStatus.EXHAUSTED, RecoveryStatus.RESUMABLE,
+                RecoveryStatus.LEASED,
             }
         ]
         self.attention_list.clear()
         self._set_hero_stat(self.stat_attention, str(len(self._attention)),
                             "items requiring review" if self._attention else "nothing pending")
         for item in self._attention[:5]:
-            marker = "REVIEW" if item.status is not RecoveryStatus.RESUMABLE else "RESUMABLE"
+            marker = (
+                "LEASED" if item.status is RecoveryStatus.LEASED else
+                "REVIEW" if item.status is not RecoveryStatus.RESUMABLE else "RESUMABLE"
+            )
             row = two_line_item(
                 f"{marker}  ·  {item.agent_title or 'Agent'}\n"
                 f"step {item.step}/{item.step_budget or '?'}  ·  {self._summary(item.task, 38)}"

@@ -64,6 +64,7 @@ class CheckpointExhausted(CheckpointNotResumable):
 
 class RecoveryStatus(StrEnum):
     RESUMABLE = "resumable"
+    LEASED = "leased"
     NEEDS_REVIEW = "needs_review"
     STALE = "stale"
     CORRUPT = "corrupt"
@@ -87,6 +88,8 @@ class RecoveryCandidate:
     tool_calls: int
     updated_at: str
     pending_operations: tuple[str, ...] = ()
+    lease_active: bool = False
+    lease_expires_at: str = ""
 
     @property
     def resumable(self) -> bool:
@@ -108,6 +111,8 @@ class RecoveryCandidate:
             "tool_calls": self.tool_calls,
             "updated_at": self.updated_at,
             "pending_operations": list(self.pending_operations),
+            "lease_active": self.lease_active,
+            "lease_expires_at": self.lease_expires_at,
         }
 
 
@@ -380,9 +385,30 @@ def load_recovery_candidates(
                 checkpoint = {**checkpoint, "state": "needs_review"}
             except (OSError, ValueError):
                 checkpoint = {**checkpoint, "state": "needs_review"}
-        candidates.append(
-            classify_checkpoint(checkpoint, now=now, max_age_seconds=max_age_seconds)
+        candidate = classify_checkpoint(
+            checkpoint, now=now, max_age_seconds=max_age_seconds
         )
+        try:
+            lease = repository.get_run_lease(run_id)
+        except (AttributeError, OSError, ValueError):
+            lease = None
+        if lease:
+            lease_active = bool(lease.get("active"))
+            candidate = replace(
+                candidate,
+                lease_active=lease_active,
+                lease_expires_at=str(lease.get("expires_at") or ""),
+            )
+            if lease_active and candidate.resumable:
+                candidate = replace(
+                    candidate,
+                    status=RecoveryStatus.LEASED,
+                    reason=(
+                        "Another workstation process holds a live execution lease; "
+                        "resume is blocked until it is released or expires."
+                    ),
+                )
+        candidates.append(candidate)
     return candidates
 
 

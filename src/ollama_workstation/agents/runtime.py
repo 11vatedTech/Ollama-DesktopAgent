@@ -12,6 +12,7 @@ from pathlib import Path
 from threading import Event
 from typing import Any, Protocol
 
+from ollama_workstation.agents.execution_lease import ExecutionLease, LeaseLost
 from ollama_workstation.agents.memory import MemoryRecord, MemoryStore
 from ollama_workstation.agents.recovery import (
     CHECKPOINT_PROTOCOL,
@@ -87,21 +88,62 @@ class AgentRuntime:
     def __init__(self, client: OllamaClient, *, max_steps: int = 12,
                  keep_alive: str = "5m", repository: Any | None = None,
                  memory_store: MemoryStore | None = None,
-                 checkpoint_max_age_seconds: int = DEFAULT_MAX_CHECKPOINT_AGE_SECONDS) -> None:
+                 checkpoint_max_age_seconds: int = DEFAULT_MAX_CHECKPOINT_AGE_SECONDS,
+                 lease_ttl_seconds: int = 300) -> None:
         self.client = client
         self.max_steps = max(1, min(max_steps, 40))
         self.keep_alive = keep_alive
         self.repository = repository
         self.memory_store = memory_store
         self.checkpoint_max_age_seconds = max(0, int(checkpoint_max_age_seconds))
+        self.lease_ttl_seconds = max(5, min(int(lease_ttl_seconds), 3_600))
 
     def run(self, model: str, profile: ModelProfile, task: str, tools: AgentToolRegistry,
             *, event: Callable[[AgentEvent], None] | None = None,
             cancel_event: Event | None = None,
-            resume_checkpoint: dict[str, Any] | None = None) -> AgentResult:
-        """Execute or safely resume a bounded agent loop at a verified checkpoint."""
-        emit = event or (lambda _item: None)
+            resume_checkpoint: dict[str, Any] | None = None,
+            lease_owner: str | None = None) -> AgentResult:
+        """Execute or safely resume a bounded agent loop under a host lease.
+
+        The runtime owns the lease for every repository-backed run, including
+        new runs, chat/agent runs and checkpoints resumed by a caller. Callers
+        may supply ``lease_owner`` when they already hold the lease (for
+        example the CLI recovery path); ordinary callers let the runtime create
+        a process-scoped owner. The lease is released by the context manager on
+        normal completion as well as on an exception or cancellation.
+        """
         run_id = str(resume_checkpoint["run_id"]) if resume_checkpoint else str(uuid.uuid4())
+        if self.repository is None:
+            return self._run_locked(
+                model, profile, task, tools, run_id=run_id, lease=None,
+                event=event, cancel_event=cancel_event,
+                resume_checkpoint=resume_checkpoint,
+            )
+        with ExecutionLease(
+            self.repository, run_id, lease_owner,
+            ttl_seconds=self.lease_ttl_seconds,
+        ) as lease:
+            return self._run_locked(
+                model, profile, task, tools, run_id=run_id, lease=lease,
+                event=event, cancel_event=cancel_event,
+                resume_checkpoint=resume_checkpoint,
+            )
+
+    def _run_locked(
+        self,
+        model: str,
+        profile: ModelProfile,
+        task: str,
+        tools: AgentToolRegistry,
+        *,
+        run_id: str,
+        lease: ExecutionLease | None,
+        event: Callable[[AgentEvent], None] | None,
+        cancel_event: Event | None,
+        resume_checkpoint: dict[str, Any] | None,
+    ) -> AgentResult:
+        """Run the agent loop while the caller holds the durable run lease."""
+        emit = event or (lambda _item: None)
         created_at = str(resume_checkpoint.get("created_at") or utc_now()) if resume_checkpoint else utc_now()
         start_step = 1
         trace: list[AgentEvent] = []
@@ -138,6 +180,12 @@ class AgentRuntime:
             emit(item)
 
         def finish(status: str, final_message: str, steps: int) -> AgentResult:
+            if lease is not None and status != "lease_lost":
+                try:
+                    lease.check()
+                except LeaseLost:
+                    status = "lease_lost"
+                    final_message = "Execution stopped because its host lease was lost."
             safe_task = str(_sanitize_event_value(task))
             safe_final_message = str(_sanitize_event_value(final_message))
             safe_trace = [
@@ -163,6 +211,17 @@ class AgentRuntime:
                 except Exception as exc:
                     record("persistence_error", f"Execution finished but trace persistence failed: {exc}")
             return result
+
+        def ensure_lease() -> bool:
+            """Stop before the next observable mutation if ownership was lost."""
+            if lease is None:
+                return True
+            try:
+                lease.check()
+            except LeaseLost as exc:
+                record("lease_lost", str(exc))
+                return False
+            return True
 
         # Tool definitions are ordered by name so the manifest binding is stable
         # across processes and across MCP route ordering.
@@ -308,6 +367,12 @@ class AgentRuntime:
             if cancel_event is not None and cancel_event.is_set():
                 record("cancelled", "Agent cancellation acknowledged before the next provider request.")
                 return finish("cancelled", "Execution was cancelled by the user.", step - 1)
+            if not ensure_lease():
+                return finish(
+                    "lease_lost",
+                    "Execution stopped because its host lease was lost.",
+                    step - 1,
+                )
             current_size = len(json.dumps(messages, ensure_ascii=False, default=str))
             if current_size > self.MAX_CONVERSATION_CHARS:
                 recent_messages = messages[2:][-8:]
@@ -345,6 +410,12 @@ class AgentRuntime:
             if cancel_event is not None and cancel_event.is_set():
                 record("cancelled", "Agent cancellation acknowledged after the provider response.")
                 return finish("cancelled", "Execution was cancelled by the user.", step)
+            if not ensure_lease():
+                return finish(
+                    "lease_lost",
+                    "Execution stopped because its host lease was lost.",
+                    step,
+                )
             raw_assistant = response.get("message")
             assistant = raw_assistant if isinstance(raw_assistant, dict) else {}
             messages.append({"role": "assistant", **assistant})
@@ -399,6 +470,12 @@ class AgentRuntime:
             # The whole batch is one human-review boundary: if the process dies
             # during any call, the checkpoint remains tool_in_progress and is
             # never replayed automatically.
+            if calls and not ensure_lease():
+                return finish(
+                    "lease_lost",
+                    "Execution stopped because its host lease was lost before tools.",
+                    step,
+                )
             if calls and not persist_checkpoint(
                 "tool_in_progress",
                 step - 1,
@@ -415,6 +492,12 @@ class AgentRuntime:
                 if cancel_event is not None and cancel_event.is_set():
                     record("cancelled", "Agent cancellation acknowledged before the next tool operation.")
                     return finish("cancelled", "Execution was cancelled by the user.", step)
+                if not ensure_lease():
+                    return finish(
+                        "lease_lost",
+                        "Execution stopped because its host lease was lost before a tool.",
+                        step,
+                    )
                 function = call.get("function") if isinstance(call, dict) else {}
                 function = function if isinstance(function, dict) else {}
                 name = str(function.get("name") or "")
@@ -474,6 +557,12 @@ class AgentRuntime:
                     }),
                 })
 
+            if calls and not ensure_lease():
+                return finish(
+                    "lease_lost",
+                    "Execution stopped because its host lease was lost after tools.",
+                    step,
+                )
             if calls and not persist_checkpoint("ready", step - 1):
                 return finish(
                     "failed",

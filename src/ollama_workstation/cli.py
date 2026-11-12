@@ -14,6 +14,7 @@ from typing import Any
 
 from ollama_workstation import __version__
 from ollama_workstation.agents.binding import validate_installed_model_binding
+from ollama_workstation.agents.execution_lease import LeaseError
 from ollama_workstation.agents.identity_package import export_identity_package
 from ollama_workstation.agents.mcp_gateway import CompositeToolRegistry, MCPToolGateway
 from ollama_workstation.agents.memory import MemoryStore
@@ -59,6 +60,7 @@ def _execute_agent(
     max_steps: int,
     resume_checkpoint: dict[str, Any] | None,
     event: Callable[[AgentEvent], None],
+    lease_owner: str | None = None,
 ) -> AgentResult:
     """Run or resume one bounded agent with the same host-tool policy."""
     def approve(description: str) -> bool:
@@ -82,6 +84,7 @@ def _execute_agent(
             model, profile, task, tools,
             event=event,
             resume_checkpoint=resume_checkpoint,
+            lease_owner=lease_owner,
         )
 
 
@@ -149,7 +152,11 @@ def _recover(args: argparse.Namespace, settings: Any, client: Any,
             model=model, profile=profile, task=task, workspace=workspace,
             max_steps=args.max_steps, resume_checkpoint=checkpoint,
             event=lambda item: print(f"[{item.kind}] {item.message}", file=sys.stderr),
+            lease_owner=owner_id,
         )
+    except LeaseError as exc:
+        print(f"Cannot resume run {run_id}: {exc}", file=sys.stderr)
+        return 2
     finally:
         repository.release_run_lease(run_id, owner_id)
     safe_message, redacted_count = WorkspaceTools.redact_sensitive_text(result.final_message)

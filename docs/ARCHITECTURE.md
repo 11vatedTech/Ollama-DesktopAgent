@@ -96,7 +96,7 @@ Workforce runs, task states, child events and results persist in SQLite. Events 
 
 ### Persistence
 
-`storage/repository.py` stores model profiles, agent runs, ordered run events, scoped memory, durable run checkpoints, workforce runs/tasks/events and execution leases in SQLite. Profiles are keyed by exact model name and Ollama digest. Checkpoints carry an envelope SHA-256 over the binding columns, counters, timestamps and bounded payload; a failed integrity check raises instead of returning partial state. Checkpoint payloads are encrypted at rest with AES-256-GCM using a separate 32-byte key file (legacy plaintext remains readable). Run leases are atomic SQLite claims with expiry; a live foreign lease is never stolen. The database itself and non-checkpoint journals are not whole-database encrypted.
+`storage/repository.py` stores model profiles, agent runs, ordered run events, scoped memory, durable run checkpoints, workforce runs/tasks/events and execution leases in SQLite. Profiles are keyed by exact model name and Ollama digest. Checkpoints carry an envelope SHA-256 over the binding columns, counters, timestamps and bounded payload; a failed integrity check raises instead of returning partial state. Checkpoint payloads are encrypted at rest with AES-256-GCM using a separate 32-byte key file (legacy plaintext remains readable). Run leases are atomic SQLite claims with expiry; a live foreign lease is never stolen. `agents/execution_lease.py` makes the runtime itself acquire and heartbeat every repository-backed run, release on normal or exceptional exit, and abort at the next safe boundary when ownership is lost. Recovery reports a live lease as `LEASED` and refuses resume. The database itself and non-checkpoint journals are not whole-database encrypted.
 
 ## Agent execution sequence
 
@@ -160,7 +160,7 @@ The host validates plans before creating a child. Model assignments, dependency 
 
 ### ADR-008: Recovery confidentiality and concurrency are separate controls
 
-Checkpoint payload encryption protects conversation state at rest, while an integrity envelope binds recovery identity. A lease protects the right to resume/execute a run across processes. Neither substitutes for an OS sandbox or whole-database encryption; each is independently testable and fails closed.
+Checkpoint payload encryption protects conversation state at rest, while an integrity envelope binds recovery identity. A runtime-owned lease with a heartbeat protects the right to resume or execute a run across processes; recovery surfaces active ownership as `LEASED` and lease loss stops execution before the next provider request, checkpoint or tool call. Neither control substitutes for an OS sandbox or whole-database encryption; each is independently testable and fails closed.
 
 ## Deferred architecture
 

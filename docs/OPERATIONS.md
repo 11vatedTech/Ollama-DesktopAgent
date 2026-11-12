@@ -85,9 +85,13 @@ recorded in [Workforce orchestration](WORKFORCE.md).
 
 ## Reliability checks
 
-- Full local test suite on Python 3.12.13: **185 passed, 4 skipped**. Hosted
-  run 43056402479 reports 176 passed/4 skipped on Ubuntu 3.11 and 3.12, and
-  175 passed/5 skipped on Windows 3.11 and 3.12.
+- Full local test suite on Python 3.12.13: **191 passed, 4 skipped**. The new
+  runtime-owned lease tests cover acquisition/release, heartbeat renewal,
+  duplicate-owner refusal, active-lease recovery blocking and lease-loss
+  shutdown before tools. The
+  previous hosted run 43056402479 reports 176 passed/4 skipped on Ubuntu 3.11
+  and 3.12, and 175 passed/5 skipped on Windows 3.11 and 3.12; this branch needs
+  its own matrix result.
 - Ten focused desktop UI tests pass offscreen; 24 native Windows captures were
   visually inspected across desktop, compact, 1280 × 800, 1024 × 768 and
   900 × 700.
@@ -100,6 +104,7 @@ recorded in [Workforce orchestration](WORKFORCE.md).
   `fb65bbb1-064e-4be6-9937-a40c2d3acd30` correctly blocked a claimed write.
 - Real MCP stdio and Streamable HTTP integration tests remain part of the suite
   when the `mcp` extra is installed.
-- Hosted CI run 43056402479 passed all four matrix jobs for this increment,
-  including the Windows desktop import and UI tests. Hosted results remain
+- Hosted CI run 43056402479 passed all four matrix jobs for the prior
+  verifier-hardening head, including Windows desktop import and UI tests. This
+  execution-integrity branch needs its own matrix result. Hosted results remain
   distinct from production certification.
