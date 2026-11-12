@@ -25,6 +25,7 @@ from ollama_workstation.agents.tools import ToolError, WorkspaceTools
 from ollama_workstation.agents.verification import (
     DEFAULT_VERDICT_PATH,
     VERIFIER_PROTOCOL,
+    VERIFIER_SCHEMA_VERSION,
     ArtifactManifest,
     StructuredVerdict,
     VerificationProtocolError,
@@ -892,9 +893,20 @@ class WorkforceOrchestrator:
         host_checks_passed = bool(host_acceptance) and all(
             item.get("passed") for item in host_acceptance
         )
+        cited_paths = {
+            artifact.path
+            for item in parsed.evidence
+            if (artifact := manifest.record_for(item.artifact)) is not None
+        }
+        complete_evidence_coverage = set(manifest.paths).issubset(cited_paths)
+        exclusively_contradicted_factual_failures = bool(parsed.failure_reasons) and all(
+            item.kind in {"artifact_missing", "artifact_empty"}
+            for item in parsed.failure_reasons
+        ) and len(contradictions) == len(parsed.failure_reasons)
         host_override = bool(
             parsed.verdict == "FAIL"
-            and contradictions
+            and exclusively_contradicted_factual_failures
+            and complete_evidence_coverage
             and host_checks_passed
             and not tamper
             and not evidence_errors
@@ -944,33 +956,30 @@ class WorkforceOrchestrator:
     def _contradicted_claims(
         verdict: StructuredVerdict, manifest: ArtifactManifest
     ) -> list[str]:
-        """Find factual claims that the immutable host snapshot disproves.
+        """Disprove only explicitly typed factual failures using host evidence.
 
-        This deliberately does not overturn subjective quality disagreements.
-        It only catches claims such as "missing" or "empty" for a file whose
-        manifest record has a nonzero size and unchanged digest.
+        Free-form summaries and observations never authorize an override.
+        Every failure reason must be typed, point to a manifest artifact and be
+        contradicted independently before the host can consider a PASS.
         """
         contradictions: list[str] = []
-        for item in verdict.evidence:
-            record = manifest.record_for(item.artifact)
+        for failure in verdict.failure_reasons:
+            if failure.kind not in {"artifact_missing", "artifact_empty"}:
+                continue
+            record = manifest.record_for(failure.artifact)
             if record is None:
                 continue
-            claim = f"{item.observation} {verdict.summary}".casefold()
-            missing = any(
-                phrase in claim
-                for phrase in ("missing", "does not exist", "not found", "no file")
-            )
-            empty = any(phrase in claim for phrase in ("empty", "0 bytes", "zero bytes"))
-            if missing:
+            if failure.kind == "artifact_missing":
                 contradictions.append(
-                    f"{record.path}: model claimed missing, but the manifest records a file"
+                    f"{record.path}: model claimed missing, but the manifest records "
+                    f"a {record.size_bytes}-byte artifact"
                 )
-            elif empty and record.size_bytes > 0:
+            elif failure.kind == "artifact_empty" and record.size_bytes > 0:
                 contradictions.append(
                     f"{record.path}: model claimed empty, but the manifest records "
                     f"{record.size_bytes} bytes"
                 )
-        return list(dict.fromkeys(contradictions))
+        return contradictions
 
     def _host_acceptance(
         self, acceptance: list[dict[str, Any]], workspace: Path
@@ -1015,9 +1024,13 @@ class WorkforceOrchestrator:
             "host_artifacts": artifacts,
             "model_verifier_response": redact_text(model_text)[:6000],
             "rules": [
-                "The host owns the artifact manifest; do not claim a listed artifact is missing.",
+                "The host owns the artifact manifest; do not claim a listed artifact is missing or empty when its host size proves otherwise.",
                 "Cite every host artifact by its exact path in evidence.",
-                "A PASS requires evidence for every host artifact.",
+                "A PASS requires evidence for every host artifact and an empty failure_reasons array.",
+                "A FAIL must enumerate every blocking reason in failure_reasons.",
+                "Use artifact_missing or artifact_empty only for a specific factual artifact claim and identify its exact manifest path.",
+                "Use substantive for every quality, completeness, policy, security or other non-factual blocker.",
+                "Never omit or downgrade a substantive failure to obtain a PASS.",
                 "Return only one JSON object matching the schema.",
             ],
         }
@@ -1218,9 +1231,9 @@ class WorkforceOrchestrator:
         if manifest is not None:
             contract = {
                 "protocol": VERIFIER_PROTOCOL,
-                "schema_version": 1,
+                "schema_version": VERIFIER_SCHEMA_VERSION,
                 "required_output": {
-                    "schema_version": 1,
+                    "schema_version": VERIFIER_SCHEMA_VERSION,
                     "verdict": "PASS or FAIL",
                     "summary": "concise evidence-based explanation",
                     "confidence": "optional number from 0 to 1",
@@ -1229,13 +1242,21 @@ class WorkforceOrchestrator:
                         "observation": "what was observed in the artifact",
                         "sha256": "optional manifest digest",
                     }],
+                    "failure_reasons": [{
+                        "kind": "artifact_missing, artifact_empty or substantive",
+                        "description": "specific blocking reason",
+                        "artifact": "exact manifest path; required for artifact_missing and artifact_empty",
+                    }],
                 },
                 "acceptance_criteria": acceptance,
                 "artifact_manifest": manifest.to_dict(),
                 "rules": [
                     "This task is read-only: do not write or modify any workspace file.",
                     "Inspect every artifact in artifact_manifest.files.",
-                    "A PASS must cite every manifest artifact at least once.",
+                    "A PASS must cite every manifest artifact at least once and failure_reasons must be empty.",
+                    "A FAIL must enumerate every blocking reason; do not omit substantive concerns.",
+                    "Only use artifact_missing or artifact_empty for factual claims tied to an exact manifest path.",
+                    "Use substantive for quality, completeness, policy, security and other non-factual failures.",
                     "Cite the exact manifest path; do not invent a path.",
                     "Return only one JSON object matching required_output; no prose outside it.",
                 ],
