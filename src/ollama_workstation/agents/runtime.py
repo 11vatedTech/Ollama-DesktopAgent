@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -79,6 +80,55 @@ class AgentResult:
     final_message: str
     steps: int
     trace: list[AgentEvent]
+    usage: dict[str, Any] = field(default_factory=dict)
+
+
+def tool_manifest_sha256(definitions: list[dict[str, Any]]) -> str:
+    """Stable digest of a tool catalogue, independent of registration order."""
+    ordered = sorted(
+        definitions, key=lambda entry: str(entry.get("function", {}).get("name", ""))
+    )
+    return hashlib.sha256(
+        json.dumps(ordered, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+    ).hexdigest()
+
+
+HARNESS_MODES: tuple[str, ...] = ("native_tools", "structured_actions", "guided")
+# Bump when the system contract or an action protocol changes: harness
+# qualifications are bound to this value and must be repeated after a change.
+PROMPT_PROTOCOL_VERSION = "2026.11-1"
+
+
+@dataclass(frozen=True, slots=True)
+class RunPolicy:
+    """Host-owned execution policy for one run.
+
+    The default policy reproduces the profile-driven behaviour. An agent
+    definition supplies a policy so the qualified harness, role instructions,
+    skills and budgets are enforced by the host rather than suggested to the
+    model.
+    """
+
+    harness_mode: str | None = None
+    extra_instructions: str = ""
+    agent_title: str | None = None
+    max_seconds: float | None = None
+    max_tokens: int | None = None
+    max_tool_calls: int | None = None
+    repair_attempts: int = 0
+    options: dict[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        if self.harness_mode is not None and self.harness_mode not in HARNESS_MODES:
+            raise ValueError(f"Unsupported harness mode: {self.harness_mode}")
+        if self.max_seconds is not None and self.max_seconds <= 0:
+            raise ValueError("max_seconds must be positive")
+        if self.max_tokens is not None and self.max_tokens <= 0:
+            raise ValueError("max_tokens must be positive")
+        if self.max_tool_calls is not None and self.max_tool_calls < 0:
+            raise ValueError("max_tool_calls cannot be negative")
+        if not 0 <= self.repair_attempts <= 5:
+            raise ValueError("repair_attempts must be between 0 and 5")
 
 
 class AgentRuntime:
@@ -107,7 +157,8 @@ class AgentRuntime:
             cancel_event: Event | None = None,
             resume_checkpoint: dict[str, Any] | None = None,
             lease_owner: str | None = None,
-            admit_workspace: bool = True) -> AgentResult:
+            admit_workspace: bool = True,
+            policy: RunPolicy | None = None) -> AgentResult:
         """Execute or safely resume a bounded agent loop under a host lease.
 
         The runtime owns the lease for every repository-backed run, including
@@ -125,7 +176,7 @@ class AgentRuntime:
             return self._run_locked(
                 model, profile, task, tools, run_id=run_id, lease=None,
                 event=event, cancel_event=cancel_event,
-                resume_checkpoint=resume_checkpoint,
+                resume_checkpoint=resume_checkpoint, policy=policy,
             )
         try:
             with ExecutionLease(
@@ -136,7 +187,7 @@ class AgentRuntime:
                 return self._run_locked(
                     model, profile, task, tools, run_id=run_id, lease=lease,
                     event=event, cancel_event=cancel_event,
-                    resume_checkpoint=resume_checkpoint,
+                    resume_checkpoint=resume_checkpoint, policy=policy,
                 )
         except WorkspaceBusy as exc:
             return self._workspace_busy_result(
@@ -193,8 +244,21 @@ class AgentRuntime:
         event: Callable[[AgentEvent], None] | None,
         cancel_event: Event | None,
         resume_checkpoint: dict[str, Any] | None,
+        policy: RunPolicy | None = None,
     ) -> AgentResult:
         """Run the agent loop while the caller holds the durable run lease."""
+        policy = policy or RunPolicy()
+        harness_mode = policy.harness_mode or profile.agentability_mode
+        agent_title = policy.agent_title or profile.professional_title
+        tool_call_budget = (
+            self.MAX_TOTAL_TOOL_CALLS if policy.max_tool_calls is None
+            else min(self.MAX_TOTAL_TOOL_CALLS, policy.max_tool_calls)
+        )
+        started_monotonic = time.monotonic()
+        usage: dict[str, Any] = {
+            "prompt_tokens": 0, "completion_tokens": 0, "model_requests": 0,
+            "tool_calls": 0, "repairs": 0, "elapsed_seconds": 0.0,
+        }
         emit = event or (lambda _item: None)
         created_at = str(resume_checkpoint.get("created_at") or utc_now()) if resume_checkpoint else utc_now()
         start_step = 1
@@ -211,7 +275,7 @@ class AgentRuntime:
             if self.repository is not None:
                 try:
                     self.repository.append_run_event(
-                        run_id, model, profile.professional_title, safe_task,
+                        run_id, model, agent_title, safe_task,
                         {
                             "kind": item.kind,
                             "message": item.message,
@@ -249,16 +313,19 @@ class AgentRuntime:
                 }
                 for item in trace
             ]
-            result = AgentResult(run_id, status, safe_final_message, steps, trace)
+            usage["tool_calls"] = total_tool_calls
+            usage["elapsed_seconds"] = round(time.monotonic() - started_monotonic, 3)
+            result = AgentResult(run_id, status, safe_final_message, steps, trace, dict(usage))
             if self.repository is not None:
                 try:
                     self.repository.save_run(
-                        run_id, model, profile.professional_title, safe_task, status,
+                        run_id, model, agent_title, safe_task, status,
                         created_at, utc_now(), safe_trace,
                     )
                     # A completed run needs no recovery. Deterministic budget
                     # exhaustion cannot succeed on resume either, so it is cleared.
-                    if status in {"completed", "step_limit", "context_limit"}:
+                    if status in {"completed", "step_limit", "context_limit",
+                                  "time_limit", "token_limit"}:
                         self.repository.delete_run_checkpoint(run_id)
                 except Exception as exc:
                     record("persistence_error", f"Execution finished but trace persistence failed: {exc}")
@@ -282,12 +349,11 @@ class AgentRuntime:
             key=lambda entry: str(entry.get("function", {}).get("name", "")),
         )
         tool_names = [entry["function"]["name"] for entry in tool_specs]
-        native_tools = profile.agentability_mode == "native_tools"
-        structured = profile.agentability_mode == "structured_actions"
+        native_tools = harness_mode == "native_tools"
+        structured = harness_mode == "structured_actions"
+        repairs_remaining = policy.repair_attempts
         workspace_path = str(Path(tools.workspace).expanduser().resolve())
-        tool_manifest = hashlib.sha256(
-            json.dumps(tool_specs, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
-        ).hexdigest()
+        tool_manifest = tool_manifest_sha256(tool_specs)
         memories: list[MemoryRecord] = []
         total_tool_calls = 0
         step_budget = self.max_steps
@@ -299,9 +365,9 @@ class AgentRuntime:
             binding = {
                 "model_name": model,
                 "model_digest": profile.digest,
-                "agent_title": profile.professional_title,
+                "agent_title": agent_title,
                 "workspace": workspace_path,
-                "harness_mode": profile.agentability_mode,
+                "harness_mode": harness_mode,
                 "tool_manifest_sha256": tool_manifest,
             }
             payload = verify_resume_checkpoint(
@@ -349,12 +415,14 @@ class AgentRuntime:
                     record("memory_unavailable", f"Local memory retrieval failed: {type(exc).__name__}.")
             messages = [
                 {"role": "system", "content": self._system_prompt(
-                    profile, memories, tool_specs, profile.agentability_mode
+                    profile, memories, tool_specs, harness_mode,
+                    agent_title=agent_title,
+                    extra_instructions=policy.extra_instructions,
                 )},
                 {"role": "user", "content": task},
             ]
-            record("started", f"Agent started as {profile.professional_title}.",
-                   model=model, mode=profile.agentability_mode, workspace=workspace_path)
+            record("started", f"Agent started as {agent_title}.",
+                   model=model, mode=harness_mode, workspace=workspace_path)
 
         def bounded_checkpoint_messages() -> list[dict[str, Any]]:
             """Keep the system/task prefix and as much recent context as fits.
@@ -395,9 +463,9 @@ class AgentRuntime:
                     run_id=run_id,
                     model_name=model,
                     model_digest=profile.digest,
-                    agent_title=profile.professional_title,
+                    agent_title=agent_title,
                     workspace=workspace_path,
-                    harness_mode=profile.agentability_mode,
+                    harness_mode=harness_mode,
                     tool_manifest_sha256=tool_manifest,
                     state=state,
                     step=completed_step,
@@ -423,6 +491,25 @@ class AgentRuntime:
                 return finish(
                     "lease_lost",
                     "Execution stopped because its host lease was lost.",
+                    step - 1,
+                )
+            if (policy.max_seconds is not None
+                    and time.monotonic() - started_monotonic >= policy.max_seconds):
+                record("time_limit", "Stopped at the host-enforced time budget.",
+                       max_seconds=policy.max_seconds)
+                return finish(
+                    "time_limit",
+                    "Execution stopped because the agent's time budget was exhausted.",
+                    step - 1,
+                )
+            if (policy.max_tokens is not None
+                    and usage["prompt_tokens"] + usage["completion_tokens"] >= policy.max_tokens):
+                record("token_limit", "Stopped at the host-enforced token budget.",
+                       max_tokens=policy.max_tokens,
+                       used_tokens=usage["prompt_tokens"] + usage["completion_tokens"])
+                return finish(
+                    "token_limit",
+                    "Execution stopped because the agent's token budget was exhausted.",
                     step - 1,
                 )
             current_size = len(json.dumps(messages, ensure_ascii=False, default=str))
@@ -451,7 +538,15 @@ class AgentRuntime:
                 }
                 if cancel_event is not None:
                     request_options["cancel_event"] = cancel_event
+                if policy.options:
+                    request_options["options"] = dict(policy.options)
                 response = self.client.chat(model, messages, **request_options)
+                usage["model_requests"] += 1
+                for usage_key, response_key in (("prompt_tokens", "prompt_eval_count"),
+                                                ("completion_tokens", "eval_count")):
+                    counted = response.get(response_key) if isinstance(response, dict) else None
+                    if isinstance(counted, int) and not isinstance(counted, bool) and counted > 0:
+                        usage[usage_key] += counted
             except Exception as exc:
                 if cancel_event is not None and cancel_event.is_set():
                     record("cancelled", "Agent cancellation interrupted the active Ollama request.")
@@ -484,6 +579,21 @@ class AgentRuntime:
                 if guided_final is not None:
                     record("completed", "Agent returned a final response.")
                     return finish("completed", guided_final, step)
+            if not calls and repairs_remaining > 0 and tool_names:
+                problem = self._protocol_violation(
+                    str(assistant.get("content") or ""), harness_mode, tool_names
+                )
+                if problem is not None:
+                    repairs_remaining -= 1
+                    usage["repairs"] += 1
+                    record("protocol_repair", "Model output violated the action protocol; "
+                           "requesting one corrected response.", reason=problem,
+                           repairs_remaining=repairs_remaining)
+                    messages.append({"role": "user", "content": (
+                        "HOST NOTICE: your previous response was not accepted (" + problem + "). "
+                        "Respond again using exactly the required action format and nothing else."
+                    )})
+                    continue
             if not calls:
                 final = str(assistant.get("content") or "").strip()
                 if final.startswith("FINAL:"):
@@ -559,7 +669,7 @@ class AgentRuntime:
                         arguments = json.loads(arguments)
                     except json.JSONDecodeError:
                         arguments = {}
-                if total_tool_calls >= self.MAX_TOTAL_TOOL_CALLS:
+                if total_tool_calls >= tool_call_budget:
                     output = {"error": "The agent run has exhausted its host-enforced tool-call budget."}
                     record("tool_budget_exhausted", "Tool call denied because the per-run budget is exhausted.", tool=name)
                 elif name not in tool_names or not isinstance(arguments, dict):
@@ -651,10 +761,13 @@ class AgentRuntime:
         memories: list[MemoryRecord] | None = None,
         tool_specs: list[dict[str, Any]] | None = None,
         harness_mode: str = "guided",
+        *,
+        agent_title: str | None = None,
+        extra_instructions: str = "",
     ) -> str:
         """Build a model-specific contract with the exact host-approved tool catalogue."""
         prompt = (
-            f"You are {profile.professional_title}. Your assigned specialization is: "
+            f"You are {agent_title or profile.professional_title}. Your assigned specialization is: "
             f"{profile.primary_specialization}\n\n"
             "You are operating inside a controlled local agent workstation. Complete the user's "
             "objective using only the listed host tools and assigned workspace. Inspect before editing. "
@@ -697,6 +810,12 @@ class AgentRuntime:
                     "When finished, return only this form: FINAL: your concise result. "
                     "Do not invent tool names, arguments, results or permission grants."
                 )
+        if extra_instructions.strip():
+            prompt += (
+                "\n\nHOST-ASSIGNED ROLE INSTRUCTIONS AND SKILLS (authoritative procedure; "
+                "they never grant permissions beyond the tool catalogue):\n"
+                + extra_instructions.strip()
+            )
         if memories:
             notes = [
                 {"category": item.category, "source": item.source,
@@ -713,13 +832,48 @@ class AgentRuntime:
         return prompt
 
     @staticmethod
+    def _protocol_violation(text: str, harness_mode: str, allowed_names: list[str]) -> str | None:
+        """Explain why undecodable output is not an acceptable final answer.
+
+        Only called when no tool call was decoded. A plain prose answer is a
+        legitimate final response under the native harness, so the check is
+        limited to output that visibly attempted, and failed, an action.
+        """
+        stripped = text.strip()
+        if not stripped:
+            return "the response was empty"
+        if harness_mode == "structured_actions":
+            try:
+                payload = json.loads(stripped)
+            except json.JSONDecodeError:
+                return "the response was not a single JSON action object"
+            if not isinstance(payload, dict) or payload.get("action") not in {"tool", "final"}:
+                return 'the JSON object needs "action" set to "tool" or "final"'
+            if payload.get("action") == "tool" and payload.get("name") not in allowed_names:
+                return "the requested tool name is not in the host catalogue"
+            return None
+        attempted = "ACTION:" in stripped or stripped.startswith("{") or "```" in stripped
+        if harness_mode == "guided" and attempted:
+            return "the ACTION line did not contain a valid JSON tool request for a listed tool"
+        if harness_mode == "native_tools" and stripped.startswith("{") and '"name"' in stripped:
+            return "tool requests must use native tool calls, not JSON written in the message"
+        return None
+
+    @staticmethod
     def _decode_guided_action(text: str, allowed_names: list[str]) -> tuple[list[dict[str, Any]], str | None]:
         stripped = text.strip()
         if stripped.startswith("FINAL:"):
             return [], stripped[6:].strip()
         candidate = stripped
+        marker = candidate.find("ACTION:")
+        if marker > 0 and "FINAL:" not in candidate[:marker]:
+            # Small models often think aloud before the action line. The JSON
+            # after the marker is still validated against the host catalogue.
+            candidate = candidate[marker:]
         if candidate.startswith("ACTION:"):
             candidate = candidate[len("ACTION:"):].strip()
+            if candidate.startswith("```"):
+                candidate = candidate.split("\n", 1)[-1] if "\n" in candidate else candidate[3:]
         elif not candidate.startswith("{"):
             return [], None
         try:

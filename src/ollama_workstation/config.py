@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -63,7 +64,10 @@ class AppPaths:
 
     @classmethod
     def default(cls) -> AppPaths:
-        root = Path(user_data_dir("11vated-Ollama-Workstation", "11vatedTech"))
+        # OLLAMA_WORKSTATION_HOME relocates all state (portable installs, isolated tests).
+        override = os.environ.get("OLLAMA_WORKSTATION_HOME", "").strip()
+        root = (Path(override).expanduser() if override
+                else Path(user_data_dir("11vated-Ollama-Workstation", "11vatedTech")))
         return cls(root, root / "settings.json", root / "workstation.sqlite3",
                    root / "workspaces", root / "profiles", root / "logs")
 

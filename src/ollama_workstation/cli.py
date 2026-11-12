@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from ollama_workstation import __version__
+from ollama_workstation.agentification import commands as agentification_commands
 from ollama_workstation.agents.binding import validate_installed_model_binding
 from ollama_workstation.agents.execution_lease import LeaseError
 from ollama_workstation.agents.identity_package import export_identity_package
@@ -45,6 +46,9 @@ def _services() -> tuple[Any, Any, Any, Any]:
     paths.ensure()
     configure_logging(paths.logs_dir)
     settings = load_settings(paths.config_file)
+    base_url = os.environ.get("OLLAMA_WORKSTATION_OLLAMA_URL", "").strip()
+    if base_url:
+        settings.ollama_base_url = base_url
     client = OllamaClient(settings.ollama_base_url, settings.request_timeout_seconds)
     return paths, settings, client, Repository(paths.database_file)
 
@@ -467,6 +471,7 @@ def build_parser() -> argparse.ArgumentParser:
     route.add_argument("--require-verified", action="store_true",
                        help="Require an observed capability score, not declared metadata")
     commands.add_parser("doctor", help="Emit local diagnostics and database integrity status")
+    agentification_commands.register(commands)
     return parser
 
 
@@ -475,6 +480,8 @@ def main(argv: list[str] | None = None) -> int:
     paths, settings, client, repository = _services()
     log_event("cli_command", "CLI command started.", command=args.command)
     try:
+        if args.command in agentification_commands.COMMANDS:
+            return agentification_commands.dispatch(args, paths, settings, client, repository)
         if args.command == "workforce":
             return _workforce(args, settings, client, repository)
         if args.command == "route":
