@@ -185,8 +185,10 @@ The desktop has a **Workforce** page with objective, workspace, exact model,
 analysis/delivery mode, review-and-run, stop, durable run list, task table and
 event journal. The model must already have a saved profile whose digest
 matches the installed model. The page acquires a durable run lease before
-execution and releases it afterward. It uses the same `WorkforceOrchestrator`
-service as the CLI; no scheduling or policy logic lives in the widget.
+execution and releases it afterward. `WorkforceOrchestrator` takes the
+workspace admission for the parent run; children share that admission and do
+not acquire a second workspace claim. It uses the same service as the CLI; no
+scheduling or policy logic lives in the widget.
 
 ## Live local evidence
 

@@ -85,14 +85,16 @@ recorded in [Workforce orchestration](WORKFORCE.md).
 
 ## Reliability checks
 
-- Full local test suite on Python 3.12.13: **191 passed, 4 skipped**. The new
-  runtime-owned lease tests cover acquisition/release, heartbeat renewal,
-  duplicate-owner refusal, active-lease recovery blocking and lease-loss
-  shutdown before tools. The
-  Hosted run 43136801011 reports 182 passed/4 skipped on Ubuntu 3.11 and 3.12,
-  and 181 passed/5 skipped on Windows 3.11 and 3.12.
-- Ten focused desktop UI tests pass offscreen; 24 native Windows captures were
-  visually inspected across desktop, compact, 1280 × 800, 1024 × 768 and
+- Full local test suite on Python 3.12.13: **202 passed, 4 skipped**. The
+  execution-integrity tests cover acquisition/release, heartbeat renewal,
+  duplicate-owner refusal, active-lease recovery blocking, lease-loss
+  shutdown before tools, foreign-workspace refusal with zero mutation,
+  dead-owner reclamation before TTL, live-owner protection, concurrent
+  reclamation yielding exactly one owner, and CLI/desktop workspace-busy
+  recovery. Hosted run 43139186015 reports 192 passed/4 skipped on Ubuntu
+  3.11 and 3.12, and 191 passed/5 skipped on Windows 3.11 and 3.12.
+- Eleven focused desktop UI tests pass offscreen; 24 native Windows captures
+  were visually inspected across desktop, compact, 1280 × 800, 1024 × 768 and
   900 × 700.
 - Static checks: Ruff and `compileall` pass.
 - Live provider tests: opt-in with `OLLAMA_LIVE=1`; metadata, chat and embeddings.
@@ -103,6 +105,6 @@ recorded in [Workforce orchestration](WORKFORCE.md).
   `fb65bbb1-064e-4be6-9937-a40c2d3acd30` correctly blocked a claimed write.
 - Real MCP stdio and Streamable HTTP integration tests remain part of the suite
   when the `mcp` extra is installed.
-- Hosted CI run 43136801011 passed all four matrix jobs for this increment,
-  including Windows desktop import and UI tests. Hosted results remain distinct
-  from production certification.
+- Hosted CI run 43139186015 passed all four matrix jobs for this increment,
+  including both Windows desktop import and 11-test UI suites. Hosted results
+  remain distinct from production certification.
