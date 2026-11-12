@@ -17,22 +17,25 @@ from typing import Any, Literal
 
 from ollama_workstation.models.schemas import utc_now
 
-VERIFIER_PROTOCOL = "11vated-verifier/1"
-VERIFIER_SCHEMA_VERSION = 1
+VERIFIER_PROTOCOL = "11vated-verifier/2"
+VERIFIER_SCHEMA_VERSION = 2
 DEFAULT_VERDICT_PATH = "workforce/verification.json"
 Verdict = Literal["PASS", "FAIL"]
+FailureKind = Literal["artifact_missing", "artifact_empty", "substantive"]
 
 
 def verdict_output_schema() -> dict[str, Any]:
-    """Provider-enforced schema for a verifier verdict.
+    """Provider-enforced schema for an evidence-complete verifier verdict.
 
-    Prompt instructions alone are not a contract. Ollama receives this schema
-    through ``format`` for the final formatting pass, so malformed prose cannot
-    silently become the host's verification record.
+    Every FAIL must enumerate all failure reasons. The host may contradict only
+    explicitly typed missing/empty artifact claims that the immutable manifest
+    disproves; subjective or otherwise substantive findings remain fail-closed.
     """
     return {
         "type": "object",
-        "required": ["schema_version", "verdict", "summary", "evidence"],
+        "required": [
+            "schema_version", "verdict", "summary", "evidence", "failure_reasons",
+        ],
         "properties": {
             "schema_version": {"type": "integer", "enum": [VERIFIER_SCHEMA_VERSION]},
             "verdict": {"type": "string", "enum": ["PASS", "FAIL"]},
@@ -48,6 +51,21 @@ def verdict_output_schema() -> dict[str, Any]:
                         "artifact": {"type": "string"},
                         "observation": {"type": "string", "minLength": 1},
                         "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                    },
+                },
+            },
+            "failure_reasons": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["kind", "description", "artifact"],
+                    "properties": {
+                        "kind": {
+                            "type": "string",
+                            "enum": ["artifact_missing", "artifact_empty", "substantive"],
+                        },
+                        "description": {"type": "string", "minLength": 1},
+                        "artifact": {"type": "string"},
                     },
                 },
             },
@@ -189,10 +207,26 @@ class VerdictEvidence:
 
 
 @dataclass(frozen=True, slots=True)
+class VerdictFailure:
+    """One explicit reason that prevents a verifier from issuing PASS."""
+
+    kind: FailureKind
+    description: str
+    artifact: str = ""
+
+    def to_dict(self) -> dict[str, str]:
+        payload = {"kind": self.kind, "description": self.description}
+        if self.artifact:
+            payload["artifact"] = self.artifact
+        return payload
+
+
+@dataclass(frozen=True, slots=True)
 class StructuredVerdict:
     verdict: Verdict
     summary: str
     evidence: tuple[VerdictEvidence, ...]
+    failure_reasons: tuple[VerdictFailure, ...] = ()
     confidence: float | None = None
 
     @classmethod
@@ -236,12 +270,42 @@ class StructuredVerdict:
             raise VerificationProtocolError(
                 "A PASS verdict requires at least one artifact evidence item."
             )
+        raw_failures = payload.get("failure_reasons")
+        if not isinstance(raw_failures, list):
+            raise VerificationProtocolError("Verifier failure_reasons must be a JSON array.")
+        failures: list[VerdictFailure] = []
+        for index, item in enumerate(raw_failures):
+            if not isinstance(item, dict):
+                raise VerificationProtocolError(
+                    f"Verifier failure_reasons[{index}] must be an object."
+                )
+            kind = str(item.get("kind") or "").strip()
+            if kind not in {"artifact_missing", "artifact_empty", "substantive"}:
+                raise VerificationProtocolError(
+                    f"Verifier failure_reasons[{index}] has an unsupported kind."
+                )
+            description = str(item.get("description") or "").strip()
+            if not description:
+                raise VerificationProtocolError(
+                    f"Verifier failure_reasons[{index}] requires a description."
+                )
+            raw_artifact = str(item.get("artifact") or "").strip()
+            artifact = ""
+            if kind in {"artifact_missing", "artifact_empty"}:
+                artifact = canonical_artifact_path(raw_artifact)
+            elif raw_artifact:
+                artifact = canonical_artifact_path(raw_artifact)
+            failures.append(VerdictFailure(kind, description, artifact))  # type: ignore[arg-type]
+        if raw_verdict == "PASS" and failures:
+            raise VerificationProtocolError("A PASS verdict cannot include failure reasons.")
+        if raw_verdict == "FAIL" and not failures:
+            raise VerificationProtocolError("A FAIL verdict must enumerate its failure reasons.")
         confidence = payload.get("confidence")
         if confidence is not None:
             if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
                 raise VerificationProtocolError("Verifier confidence must be numeric.")
             confidence = max(0.0, min(1.0, float(confidence)))
-        return cls(raw_verdict, summary, tuple(evidence), confidence)  # type: ignore[arg-type]
+        return cls(raw_verdict, summary, tuple(evidence), tuple(failures), confidence)  # type: ignore[arg-type]
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -249,6 +313,7 @@ class StructuredVerdict:
             "verdict": self.verdict,
             "summary": self.summary,
             "evidence": [item.to_dict() for item in self.evidence],
+            "failure_reasons": [item.to_dict() for item in self.failure_reasons],
         }
         if self.confidence is not None:
             payload["confidence"] = self.confidence
