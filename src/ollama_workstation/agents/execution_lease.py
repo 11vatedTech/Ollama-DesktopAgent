@@ -112,10 +112,16 @@ class ExecutionLease:
                     **self.identity.as_lease_metadata(),
                 )
             except Exception:
-                self.repository.release_run_lease(self.run_id, self.owner_id)
+                try:
+                    self.repository.release_run_lease(self.run_id, self.owner_id)
+                except Exception:
+                    pass
                 raise
             if not held:
-                self.repository.release_run_lease(self.run_id, self.owner_id)
+                try:
+                    self.repository.release_run_lease(self.run_id, self.owner_id)
+                except Exception:
+                    pass
                 row = self.repository.get_workspace_lease(self.workspace) or {}
                 raise WorkspaceBusy(
                     self.workspace, self.run_id,

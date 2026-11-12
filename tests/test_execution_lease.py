@@ -264,6 +264,7 @@ def test_second_runtime_against_a_held_workspace_is_refused_without_mutation(
         assert second.steps == 0
         assert not (workspace / "must-not-exist.txt").exists()
         assert repository.get_run_lease(second.run_id) is None
+        assert repository.get_run_checkpoint(second.run_id) is None
         assert any(item.kind == "workspace_busy" for item in second.trace)
     finally:
         release.set()
