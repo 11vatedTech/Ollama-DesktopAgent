@@ -16,10 +16,11 @@ from ollama_workstation.agents.verification import (
 
 def _verdict(evidence: list[dict[str, str]], verdict: str = "PASS") -> str:
     return json.dumps({
-        "schema_version": 1,
+        "schema_version": 2,
         "verdict": verdict,
         "summary": "Observed evidence.",
         "evidence": evidence,
+        "failure_reasons": [],
     })
 
 
@@ -54,6 +55,24 @@ def test_structured_verdict_requires_schema_and_pass_evidence() -> None:
         StructuredVerdict.parse(_verdict([]))
     with pytest.raises(VerificationProtocolError, match="JSON"):
         StructuredVerdict.parse("VERDICT: PASS")
+    with pytest.raises(VerificationProtocolError, match="enumerate"):
+        StructuredVerdict.parse(_verdict([
+            {"artifact": "workforce/result.md", "observation": "Observed."},
+        ], verdict="FAIL"))
+    failure = {
+        "schema_version": 2,
+        "verdict": "FAIL",
+        "summary": "The artifact is empty.",
+        "evidence": [{"artifact": "workforce/result.md", "observation": "Empty."}],
+        "failure_reasons": [{
+            "kind": "artifact_empty",
+            "description": "The artifact is empty.",
+            "artifact": "workforce/result.md",
+        }],
+    }
+    parsed_failure = StructuredVerdict.parse(json.dumps(failure))
+    assert parsed_failure.failure_reasons[0].kind == "artifact_empty"
+    assert parsed_failure.to_dict()["failure_reasons"][0]["artifact"] == "workforce/result.md"
     parsed = StructuredVerdict.parse(
         "```json\n" + _verdict([
             {"artifact": "workforce/result.md", "observation": "non-empty"},
