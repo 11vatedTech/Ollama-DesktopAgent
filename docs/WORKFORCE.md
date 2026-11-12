@@ -30,12 +30,14 @@ aggregate verification -> completed | failed | verification_failed
 A child is only considered successful when its runtime returns `completed` and
 the host-owned checks pass. A valid artifact is necessary for the built-in
 templates, but is not sufficient by itself. A verifier's substantive `FAIL`
-fails the workflow. A narrow exception exists for factual contradictions: if
-the model says an immutable manifest artifact is missing or empty while the host
-manifest records a nonzero, unchanged file, and every deterministic acceptance
-check passes, the host records the model verdict and the contradiction, then
-makes its own PASS decision. Subjective quality disagreements are never
-overridden.
+fails the workflow. A host override is permitted only when the typed
+`failure_reasons` list is complete, every listed reason is an
+`artifact_missing` or `artifact_empty` claim tied to an exact manifest path,
+the host manifest independently disproves every such claim, the verifier cites
+every manifest artifact, the manifest remains unchanged and every deterministic
+acceptance check passes. Any substantive reason, unknown reason, missing
+evidence or integrity error keeps the result fail-closed. Free-form summary
+text alone can never authorize an override.
 
 ## Plans
 
@@ -119,20 +121,23 @@ The verifier is a separate read-only task over the same workspace. Before it
 starts, the host snapshots every acceptance target into an immutable
 `ArtifactManifest` (path, size, SHA-256). The verifier receives the original
 acceptance criteria and manifest, and may use only list/read/search tools. It
-must return the typed `11vated-verifier/1` JSON contract: `schema_version`,
-`verdict`, non-empty `summary`, and `evidence` with artifact path, observation
-and optional digest. A PASS must cite every manifest artifact.
+must return the typed `11vated-verifier/2` JSON contract with
+`schema_version: 2`, a verdict, non-empty summary, artifact evidence and a
+`failure_reasons` array. PASS requires an empty failure-reasons array and
+evidence for every manifest artifact. FAIL must enumerate every blocking reason
+as `artifact_missing`, `artifact_empty` or `substantive`; factual reason
+types require an exact manifest path.
 
 If the verifier returns prose instead of the contract, the host performs one
 provider-enforced JSON-schema formatting call over the same immutable manifest.
 The model cannot write the audit file. The host validates paths and digests,
 rechecks that the artifacts did not change, and writes
 `workforce/verification.json` with `recorded_by: host`, the model verdict,
-manifest, host checks, errors and tamper check. A failed host check, changed
-artifact, missing evidence, malformed normalized JSON or substantive model FAIL
-fails closed. A model FAIL that claims a nonempty manifest artifact is empty or
-missing is recorded as a contradiction and cannot override passed deterministic
-acceptance checks.
+typed failure reasons, manifest, host checks, errors and tamper check. A host
+override requires complete evidence coverage and independent contradiction of
+every typed factual failure reason. Any substantive or uncontradicted reason,
+failed host check, changed artifact, missing evidence or malformed normalized
+JSON fails closed. Summary prose cannot authorize an override.
 
 The aggregate verification result contains every check with its task ID, all
 verdicts, host overrides and a fail-closed status.
