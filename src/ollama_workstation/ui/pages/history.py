@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 
 from ollama_workstation.agents.binding import validate_installed_model_binding
 from ollama_workstation.agents.mcp_gateway import CompositeToolRegistry, MCPToolGateway
+from ollama_workstation.agents.process_identity import current_process_identity
 from ollama_workstation.agents.recovery import (
     RecoveryCandidate,
     RecoveryStatus,
@@ -173,6 +174,7 @@ class HistoryPage(QWidget):
         labels = {
             RecoveryStatus.RESUMABLE: "RESUMABLE",
             RecoveryStatus.LEASED: "LEASED / ACTIVE",
+            RecoveryStatus.WORKSPACE_BUSY: "WORKSPACE BUSY",
             RecoveryStatus.NEEDS_REVIEW: "REVIEW REQUIRED",
             RecoveryStatus.STALE: "STALE",
             RecoveryStatus.CORRUPT: "CORRUPT",
@@ -263,9 +265,13 @@ class HistoryPage(QWidget):
         if row < 0 or row >= len(self._candidates):
             return
         candidate = self._candidates[row]
-        self.recovery_note.setText(
-            f"{candidate.status.value.upper()} · {candidate.reason}"
-        )
+        detail = f"{candidate.status.value.upper()} · {candidate.reason}"
+        if candidate.workspace_active:
+            detail += (
+                f" Workspace holder run: {candidate.workspace_run_id or 'unknown'}; "
+                f"expires {candidate.workspace_expires_at or 'unknown'}."
+            )
+        self.recovery_note.setText(detail)
         self.resume_button.setEnabled(bool(candidate.resumable))
         self.discard_button.setEnabled(True)
 
@@ -320,7 +326,10 @@ class HistoryPage(QWidget):
         if confirmed != QMessageBox.StandardButton.Yes:
             return
         owner = f"desktop-recovery:{uuid.uuid4().hex}"
-        if not self.context.repository.acquire_run_lease(candidate.run_id, owner, ttl_seconds=900):
+        if not self.context.repository.acquire_run_lease(
+            candidate.run_id, owner, ttl_seconds=900,
+            **current_process_identity().as_lease_metadata(),
+        ):
             QMessageBox.warning(self, "Run is leased", "Another process owns this run lease.")
             return
         cancel = Event()
@@ -379,13 +388,17 @@ class HistoryPage(QWidget):
             self.context.repository.release_run_lease(run_id, owner)
 
     def _resume_ready(self, result: Any) -> None:
-        self.detail_title.setText("Recovery completed")
+        status = str(getattr(result, "status", "unknown"))
+        self.detail_title.setText("Recovery completed" if status == "completed" else "Recovery stopped")
         self.detail.setText(
             f"<div style='color:{COLORS['text_secondary']};font-size:12px;'>"
-            f"<p><b style='color:{COLORS['ice']};'>Status</b> {html.escape(str(getattr(result, 'status', 'unknown')))}</p>"
+            f"<p><b style='color:{COLORS['ice']};'>Status</b> {html.escape(status)}</p>"
             f"<p>{html.escape(str(getattr(result, 'final_message', '') or 'No final message.'))}</p></div>"
         )
-        self.context.set_state("complete", "Recovery completed")
+        self.context.set_state(
+            "complete" if status == "completed" else "warning",
+            f"Recovery finished: {status}",
+        )
         self.refresh()
 
     def _resume_failed(self, message: str) -> None:

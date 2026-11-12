@@ -35,6 +35,7 @@ from ollama_workstation.agents.orchestration import (
     WorkforcePlan,
     WorkforcePlanner,
 )
+from ollama_workstation.agents.process_identity import current_process_identity
 from ollama_workstation.agents.workforce import WorkforceMatcher
 from ollama_workstation.config import save_settings
 from ollama_workstation.models.identity import ROLE_DEFINITIONS
@@ -718,7 +719,10 @@ class WorkforcePage(QWidget):
         cancel: Event,
         progress: Any,
     ) -> Any:
-        if not self.context.repository.acquire_run_lease(run_id, owner, ttl_seconds=900):
+        if not self.context.repository.acquire_run_lease(
+            run_id, owner, ttl_seconds=900,
+            **current_process_identity().as_lease_metadata(),
+        ):
             raise ValueError("Another workstation process already owns this workforce lease.")
         try:
             return WorkforceOrchestrator(

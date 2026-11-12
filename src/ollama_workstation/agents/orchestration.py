@@ -19,6 +19,12 @@ from threading import Event, Thread
 from typing import Any, Literal
 
 from ollama_workstation.agents.binding import validate_installed_model_binding
+from ollama_workstation.agents.execution_lease import (
+    LeaseLost,
+    WorkspaceAdmission,
+    WorkspaceBusy,
+    new_owner_id,
+)
 from ollama_workstation.agents.memory import MemoryStore
 from ollama_workstation.agents.runtime import AgentEvent, AgentResult, AgentRuntime
 from ollama_workstation.agents.tools import ToolError, WorkspaceTools
@@ -452,6 +458,80 @@ class WorkforceOrchestrator:
         installed_models: list[ModelRef] | None = None,
         owner_id: str = "",
         event: Callable[[AgentEvent], None] | None = None,
+        admit_workspace: bool = True,
+    ) -> WorkforceResult:
+        """Run a workforce under workspace admission and bounded child agents."""
+        if self.repository is None or not admit_workspace:
+            return self._run_admitted(
+                plan, workspace, assignments, run_id=run_id,
+                cancel_event=cancel_event, approval=approval,
+                installed_models=installed_models, owner_id=owner_id,
+                event=event,
+            )
+        identifier = run_id or str(uuid.uuid4())
+        resolved_workspace = workspace.expanduser().resolve()
+        admission_owner = owner_id or new_owner_id("workforce")
+        try:
+            with WorkspaceAdmission(
+                self.repository, resolved_workspace, identifier, admission_owner,
+                ttl_seconds=900,
+            ) as admission:
+                return self._run_admitted(
+                    plan, resolved_workspace, assignments, run_id=identifier,
+                    cancel_event=cancel_event, approval=approval,
+                    installed_models=installed_models, owner_id=admission_owner,
+                    event=event, workspace_admission=admission,
+                )
+        except WorkspaceBusy as exc:
+            return self._workspace_busy_result(
+                identifier, plan, admission_owner, exc, event
+            )
+
+    def _workspace_busy_result(
+        self,
+        run_id: str,
+        plan: WorkforcePlan,
+        owner_id: str,
+        error: WorkspaceBusy,
+        event: Callable[[AgentEvent], None] | None,
+    ) -> WorkforceResult:
+        """Persist an explicit refusal without starting any task or child."""
+        started = utc_now()
+        result = WorkforceResult(
+            run_id, "workspace_busy", str(error), [], False,
+            started, utc_now(), plan, str(error),
+        )
+        if event is not None:
+            event(AgentEvent("workforce_workspace_busy", str(error), {
+                "workspace": error.workspace,
+                "expires_at": error.expires_at,
+            }))
+        if self.repository is not None:
+            try:
+                if self.repository.get_workforce_run(run_id) is None:
+                    self.repository.create_workforce_run(
+                        run_id, plan.objective, plan.to_dict(), owner_id=owner_id
+                    )
+                self.repository.save_workforce_result(
+                    run_id, "workspace_busy", result.to_dict()
+                )
+            except Exception:
+                pass
+        return result
+
+    def _run_admitted(
+        self,
+        plan: WorkforcePlan,
+        workspace: Path,
+        assignments: Mapping[str, AgentAssignment],
+        *,
+        run_id: str | None = None,
+        cancel_event: Event | None = None,
+        approval: Callable[[str], bool] | None = None,
+        installed_models: list[ModelRef] | None = None,
+        owner_id: str = "",
+        event: Callable[[AgentEvent], None] | None = None,
+        workspace_admission: WorkspaceAdmission | None = None,
     ) -> WorkforceResult:
         plan.validate()
         identifier = run_id or str(uuid.uuid4())
@@ -534,6 +614,15 @@ class WorkforceOrchestrator:
         for task_id in plan.topological_order():
             task = plan.task_map()[task_id]
             assignment = assignments[task_id]
+            if workspace_admission is not None:
+                try:
+                    workspace_admission.check()
+                except LeaseLost as exc:
+                    return self._finish(
+                        identifier, plan, executions, "failed",
+                        "Workforce stopped because workspace admission was lost.",
+                        started, False, str(exc), record,
+                    )
             if cancel_event is not None and cancel_event.is_set():
                 execution = self._blocked(task, "cancelled", "Workforce cancellation acknowledged.")
                 executions.append(execution)
@@ -745,6 +834,7 @@ class WorkforceOrchestrator:
                             manifest, acceptance,
                         ), tool_registry,
                         event=child_event, cancel_event=local_cancel,
+                        admit_workspace=False,
                     )
                 except BaseException as exc:  # child failure must not kill the supervisor
                     box["error"] = exc

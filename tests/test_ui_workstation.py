@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -22,7 +23,9 @@ from PySide6.QtWidgets import (  # noqa: E402
     QWidget,
 )
 
+from ollama_workstation.agents.execution_lease import WorkspaceAdmission  # noqa: E402
 from ollama_workstation.agents.memory import MemoryStore  # noqa: E402
+from ollama_workstation.agents.recovery import RecoveryStatus  # noqa: E402
 from ollama_workstation.config import AppPaths, Settings  # noqa: E402
 from ollama_workstation.ollama.client import OllamaClient  # noqa: E402
 from ollama_workstation.profiling.profiler import ModelProfiler  # noqa: E402
@@ -117,6 +120,50 @@ def _desktop_host(page: QWidget, app: QApplication) -> tuple[QMainWindow, QStack
     QTest.qWait(30)
     app.processEvents()
     return host, stack
+
+
+def test_history_disables_resume_for_a_foreign_workspace_admission(
+    qt_app: QApplication, context: AppContext
+) -> None:
+    workspace = context.paths.workspaces_dir / "held-workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    now = datetime.now(UTC).isoformat()
+    context.repository.save_run_checkpoint(
+        run_id="desktop-held-run",
+        model_name="desktop:latest",
+        model_digest="sha256:desktop",
+        agent_title="Repository Cartographer",
+        workspace=str(workspace.resolve()),
+        harness_mode="native_tools",
+        tool_manifest_sha256="manifest",
+        state="ready",
+        step=0,
+        tool_calls=0,
+        payload={
+            "protocol": 2,
+            "task": "Inspect the workspace",
+            "messages": [
+                {"role": "system", "content": "system"},
+                {"role": "user", "content": "user"},
+            ],
+            "pending_operations": [],
+            "step_budget": 12,
+            "resume_count": 0,
+        },
+        created_at=now,
+        updated_at=now,
+    )
+    page = HistoryPage(context)
+    try:
+        with WorkspaceAdmission(
+            context.repository, workspace, "holder-run", "holder-owner", ttl_seconds=60
+        ):
+            page.refresh()
+            assert page._candidates[0].status is RecoveryStatus.WORKSPACE_BUSY
+            assert page._candidates[0].workspace_run_id == "holder-run"
+            assert not page.resume_button.isEnabled()
+    finally:
+        _dispose(page, qt_app)
 
 
 def test_every_workspace_constructs_with_empty_local_state(qt_app: QApplication, context: AppContext) -> None:

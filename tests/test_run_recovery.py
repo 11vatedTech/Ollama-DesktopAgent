@@ -18,6 +18,7 @@ from threading import Event
 import pytest
 
 import ollama_workstation.cli as cli_module
+from ollama_workstation.agents.execution_lease import WorkspaceAdmission
 from ollama_workstation.agents.recovery import (
     CHECKPOINT_PROTOCOL,
     CheckpointIntegrityError,
@@ -549,3 +550,26 @@ def test_cli_resumes_verified_run_end_to_end(
     assert "CLI resume complete." in captured.out
     assert repository.list_runs()[0]["status"] == "completed"
     assert repository.get_run_checkpoint(run_id) is None
+
+
+def test_cli_recovery_refuses_a_workspace_held_by_another_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    repository = Repository(tmp_path / "cli-workspace.sqlite3")
+    save_checkpoint(
+        repository, workspace=workspace, manifest=tool_manifest(WorkspaceTools(workspace))
+    )
+    monkeypatch.setattr(
+        cli_module, "_services",
+        lambda: (None, Settings(), ScriptedClient([]), repository),
+    )
+    with WorkspaceAdmission(
+        repository, workspace, "holder-run", "holder-owner", ttl_seconds=60
+    ):
+        assert cli_module.main(["recover", "run-checkpoint"]) == 2
+        captured = capsys.readouterr()
+        assert "not resumable" in captured.err
+        assert "workspace" in captured.err.lower()
+    assert repository.get_workspace_lease(workspace) is None

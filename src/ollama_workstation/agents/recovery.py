@@ -65,6 +65,7 @@ class CheckpointExhausted(CheckpointNotResumable):
 class RecoveryStatus(StrEnum):
     RESUMABLE = "resumable"
     LEASED = "leased"
+    WORKSPACE_BUSY = "workspace_busy"
     NEEDS_REVIEW = "needs_review"
     STALE = "stale"
     CORRUPT = "corrupt"
@@ -90,6 +91,9 @@ class RecoveryCandidate:
     pending_operations: tuple[str, ...] = ()
     lease_active: bool = False
     lease_expires_at: str = ""
+    workspace_active: bool = False
+    workspace_expires_at: str = ""
+    workspace_run_id: str = ""
 
     @property
     def resumable(self) -> bool:
@@ -113,6 +117,9 @@ class RecoveryCandidate:
             "pending_operations": list(self.pending_operations),
             "lease_active": self.lease_active,
             "lease_expires_at": self.lease_expires_at,
+            "workspace_active": self.workspace_active,
+            "workspace_expires_at": self.workspace_expires_at,
+            "workspace_run_id": self.workspace_run_id,
         }
 
 
@@ -406,6 +413,33 @@ def load_recovery_candidates(
                     reason=(
                         "Another workstation process holds a live execution lease; "
                         "resume is blocked until it is released or expires."
+                    ),
+                )
+        workspace_lease = None
+        if candidate.workspace:
+            try:
+                workspace_lease = repository.get_workspace_lease(candidate.workspace)
+            except (AttributeError, OSError, ValueError):
+                workspace_lease = None
+        if workspace_lease:
+            workspace_active = bool(workspace_lease.get("active"))
+            candidate = replace(
+                candidate,
+                workspace_active=workspace_active,
+                workspace_expires_at=str(workspace_lease.get("expires_at") or ""),
+                workspace_run_id=str(workspace_lease.get("run_id") or ""),
+            )
+            if (
+                workspace_active
+                and candidate.status is RecoveryStatus.RESUMABLE
+                and candidate.workspace_run_id != candidate.run_id
+            ):
+                candidate = replace(
+                    candidate,
+                    status=RecoveryStatus.WORKSPACE_BUSY,
+                    reason=(
+                        "Another live run holds admission to this workspace; resume "
+                        "is blocked until the workspace holder finishes or expires."
                     ),
                 )
         candidates.append(candidate)

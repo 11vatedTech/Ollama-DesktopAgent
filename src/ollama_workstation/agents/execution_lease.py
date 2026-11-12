@@ -13,7 +13,10 @@ import os
 import socket
 import threading
 import uuid
+from pathlib import Path
 from typing import Any
+
+from ollama_workstation.agents.process_identity import current_process_identity
 
 
 class LeaseError(RuntimeError):
@@ -22,6 +25,23 @@ class LeaseError(RuntimeError):
 
 class LeaseUnavailable(LeaseError):
     """Another live owner holds the run lease."""
+
+
+class WorkspaceBusy(LeaseError):
+    """Another live run already owns admission to this workspace."""
+
+    def __init__(
+        self, workspace: str, run_id: str, *,
+        owner_id: str = "", expires_at: str = "",
+    ) -> None:
+        self.workspace = workspace
+        self.run_id = run_id
+        self.owner_id = owner_id
+        self.expires_at = expires_at
+        message = f"Workspace {workspace!r} already has a live execution admission."
+        if expires_at:
+            message += f" It expires at {expires_at}."
+        super().__init__(message)
 
 
 class LeaseLost(LeaseError):
@@ -51,12 +71,18 @@ class ExecutionLease:
         *,
         ttl_seconds: int = 300,
         heartbeat_seconds: float | None = None,
+        workspace: str | Path | None = None,
     ) -> None:
         if not run_id.strip():
             raise ValueError("run_id must be non-empty")
         self.repository = repository
         self.run_id = run_id
         self.owner_id = owner_id or new_owner_id()
+        self.workspace = (
+            str(Path(workspace).expanduser().resolve()) if workspace is not None else None
+        )
+        self.identity = current_process_identity()
+        self._workspace_held = False
         self.ttl_seconds = max(5, min(int(ttl_seconds), 3_600))
         self.heartbeat_seconds = max(
             1.0, float(heartbeat_seconds or self.ttl_seconds / 3)
@@ -72,11 +98,31 @@ class ExecutionLease:
 
     def __enter__(self) -> ExecutionLease:
         if not self.repository.acquire_run_lease(
-            self.run_id, self.owner_id, ttl_seconds=self.ttl_seconds
+            self.run_id, self.owner_id, ttl_seconds=self.ttl_seconds,
+            **self.identity.as_lease_metadata(),
         ):
             raise LeaseUnavailable(
                 f"Run {self.run_id} already has a live execution lease."
             )
+        if self.workspace is not None:
+            try:
+                held = self.repository.acquire_workspace_lease(
+                    self.workspace, self.run_id, self.owner_id,
+                    ttl_seconds=self.ttl_seconds,
+                    **self.identity.as_lease_metadata(),
+                )
+            except Exception:
+                self.repository.release_run_lease(self.run_id, self.owner_id)
+                raise
+            if not held:
+                self.repository.release_run_lease(self.run_id, self.owner_id)
+                row = self.repository.get_workspace_lease(self.workspace) or {}
+                raise WorkspaceBusy(
+                    self.workspace, self.run_id,
+                    owner_id=str(row.get("owner_id") or ""),
+                    expires_at=str(row.get("expires_at") or ""),
+                )
+            self._workspace_held = True
         self._thread = threading.Thread(
             target=self._heartbeat,
             name=f"lease-{self.run_id[:8]}",
@@ -89,12 +135,20 @@ class ExecutionLease:
         while not self._stop.wait(self.heartbeat_seconds):
             try:
                 renewed = self.repository.renew_run_lease(
-                    self.run_id, self.owner_id, ttl_seconds=self.ttl_seconds
+                    self.run_id, self.owner_id, ttl_seconds=self.ttl_seconds,
+                    **self.identity.as_lease_metadata(),
+                )
+                workspace_renewed = (
+                    self.workspace is None
+                    or self.repository.renew_workspace_lease(
+                        self.workspace, self.owner_id, ttl_seconds=self.ttl_seconds,
+                        **self.identity.as_lease_metadata(),
+                    )
                 )
             except Exception:
                 self._lost.set()
                 return
-            if not renewed:
+            if not renewed or not workspace_renewed:
                 self._lost.set()
                 return
 
@@ -104,7 +158,15 @@ class ExecutionLease:
             raise LeaseLost("Execution lease was lost before the next operation.")
         try:
             renewed = self.repository.renew_run_lease(
-                self.run_id, self.owner_id, ttl_seconds=self.ttl_seconds
+                self.run_id, self.owner_id, ttl_seconds=self.ttl_seconds,
+                **self.identity.as_lease_metadata(),
+            )
+            workspace_renewed = (
+                self.workspace is None
+                or self.repository.renew_workspace_lease(
+                    self.workspace, self.owner_id, ttl_seconds=self.ttl_seconds,
+                    **self.identity.as_lease_metadata(),
+                )
             )
         except Exception as exc:
             self._lost.set()
@@ -112,6 +174,119 @@ class ExecutionLease:
         if not renewed:
             self._lost.set()
             raise LeaseLost("Execution lease is no longer owned by this process.")
+        if not workspace_renewed:
+            self._lost.set()
+            raise LeaseLost("Workspace admission is no longer owned by this process.")
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        self._stop.set()
+        thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=max(1.0, self.heartbeat_seconds + 1.0))
+        with self._lock:
+            if self._workspace_held and self.workspace is not None:
+                try:
+                    self.repository.release_workspace_lease(
+                        self.workspace, self.owner_id
+                    )
+                except Exception:
+                    # The workspace row will expire; always attempt the run
+                    # release below rather than leaving both rows behind.
+                    pass
+            try:
+                self.repository.release_run_lease(self.run_id, self.owner_id)
+            except Exception:
+                # A failed release leaves an expiring row; recovery remains
+                # blocked until the TTL, which is safer than hiding failure.
+                pass
+
+
+class WorkspaceAdmission:
+    """Hold the workspace-level admission for a top-level orchestration run.
+
+    A workforce parent takes this admission and passes ``admit_workspace=False``
+    to child agent runtimes, so children share one admitted workspace instead of
+    competing with their parent. A standalone runtime uses an ``ExecutionLease``
+    with ``workspace=...`` and therefore takes both the run and workspace rows.
+    """
+
+    def __init__(
+        self,
+        repository: Any,
+        workspace: str | Path,
+        run_id: str,
+        owner_id: str | None = None,
+        *,
+        ttl_seconds: int = 900,
+        heartbeat_seconds: float | None = None,
+    ) -> None:
+        if not run_id.strip():
+            raise ValueError("run_id must be non-empty")
+        self.repository = repository
+        self.workspace = str(Path(workspace).expanduser().resolve())
+        self.run_id = run_id
+        self.owner_id = owner_id or new_owner_id("workspace")
+        self.identity = current_process_identity()
+        self.ttl_seconds = max(5, min(int(ttl_seconds), 3_600))
+        self.heartbeat_seconds = max(
+            1.0, float(heartbeat_seconds or self.ttl_seconds / 3)
+        )
+        self._lost = threading.Event()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    @property
+    def lost(self) -> bool:
+        return self._lost.is_set()
+
+    def __enter__(self) -> WorkspaceAdmission:
+        if not self.repository.acquire_workspace_lease(
+            self.workspace, self.run_id, self.owner_id,
+            ttl_seconds=self.ttl_seconds,
+            **self.identity.as_lease_metadata(),
+        ):
+            row = self.repository.get_workspace_lease(self.workspace) or {}
+            raise WorkspaceBusy(
+                self.workspace, self.run_id,
+                owner_id=str(row.get("owner_id") or ""),
+                expires_at=str(row.get("expires_at") or ""),
+            )
+        self._thread = threading.Thread(
+            target=self._heartbeat,
+            name=f"workspace-lease-{self.run_id[:8]}",
+            daemon=True,
+        )
+        self._thread.start()
+        return self
+
+    def _heartbeat(self) -> None:
+        while not self._stop.wait(self.heartbeat_seconds):
+            try:
+                renewed = self.repository.renew_workspace_lease(
+                    self.workspace, self.owner_id, ttl_seconds=self.ttl_seconds,
+                    **self.identity.as_lease_metadata(),
+                )
+            except Exception:
+                self._lost.set()
+                return
+            if not renewed:
+                self._lost.set()
+                return
+
+    def check(self) -> None:
+        if self._lost.is_set():
+            raise LeaseLost("Workspace admission was lost before the next operation.")
+        try:
+            renewed = self.repository.renew_workspace_lease(
+                self.workspace, self.owner_id, ttl_seconds=self.ttl_seconds,
+                **self.identity.as_lease_metadata(),
+            )
+        except Exception as exc:
+            self._lost.set()
+            raise LeaseLost("Workspace admission could not be renewed.") from exc
+        if not renewed:
+            self._lost.set()
+            raise LeaseLost("Workspace admission is no longer owned by this process.")
 
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
         self._stop.set()
@@ -119,9 +294,6 @@ class ExecutionLease:
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=max(1.0, self.heartbeat_seconds + 1.0))
         try:
-            with self._lock:
-                self.repository.release_run_lease(self.run_id, self.owner_id)
+            self.repository.release_workspace_lease(self.workspace, self.owner_id)
         except Exception:
-            # A failed release leaves an expiring row; recovery remains blocked
-            # until the TTL, which is safer than hiding the release failure.
             pass

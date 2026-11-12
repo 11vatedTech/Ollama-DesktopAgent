@@ -24,6 +24,7 @@ from ollama_workstation.agents.orchestration import (
     WorkforcePlan,
     WorkforcePlanner,
 )
+from ollama_workstation.agents.process_identity import current_process_identity
 from ollama_workstation.agents.recovery import load_recovery_candidates
 from ollama_workstation.agents.runtime import AgentEvent, AgentResult, AgentRuntime
 from ollama_workstation.agents.tools import WorkspaceTools
@@ -140,7 +141,10 @@ def _recover(args: argparse.Namespace, settings: Any, client: Any,
         print(f"Checkpoint workspace does not exist: {workspace}", file=sys.stderr)
         return 2
     owner_id = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex}"
-    if not repository.acquire_run_lease(run_id, owner_id, ttl_seconds=300):
+    if not repository.acquire_run_lease(
+        run_id, owner_id, ttl_seconds=300,
+        **current_process_identity().as_lease_metadata(),
+    ):
         print(
             f"Run {run_id} is leased by another workstation process; refusing concurrent resume.",
             file=sys.stderr,
@@ -166,6 +170,12 @@ def _recover(args: argparse.Namespace, settings: Any, client: Any,
             file=sys.stderr,
         )
     print(safe_message)
+    if result.status == "workspace_busy":
+        print(
+            "Run workspace is admitted to another live execution; no tool or provider call was made.",
+            file=sys.stderr,
+        )
+        return 2
     return 0 if result.status == "completed" else 1
 
 
@@ -274,7 +284,10 @@ def _workforce(args: argparse.Namespace, settings: Any, client: Any,
 
     owner_id = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex}"
     run_id = str(uuid.uuid4())
-    if not repository.acquire_run_lease(run_id, owner_id, ttl_seconds=900):
+    if not repository.acquire_run_lease(
+        run_id, owner_id, ttl_seconds=900,
+        **current_process_identity().as_lease_metadata(),
+    ):
         print("A workforce run with this identifier is already active.", file=sys.stderr)
         return 2
     try:

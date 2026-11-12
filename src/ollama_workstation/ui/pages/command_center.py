@@ -471,7 +471,7 @@ class CommandCenterPage(QWidget):
             if item.status in {
                 RecoveryStatus.NEEDS_REVIEW, RecoveryStatus.CORRUPT,
                 RecoveryStatus.EXHAUSTED, RecoveryStatus.RESUMABLE,
-                RecoveryStatus.LEASED,
+                RecoveryStatus.LEASED, RecoveryStatus.WORKSPACE_BUSY,
             }
         ]
         self.attention_list.clear()
@@ -480,6 +480,7 @@ class CommandCenterPage(QWidget):
         for item in self._attention[:5]:
             marker = (
                 "LEASED" if item.status is RecoveryStatus.LEASED else
+                "WORKSPACE BUSY" if item.status is RecoveryStatus.WORKSPACE_BUSY else
                 "REVIEW" if item.status is not RecoveryStatus.RESUMABLE else "RESUMABLE"
             )
             row = two_line_item(

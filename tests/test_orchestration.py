@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from ollama_workstation.agents.execution_lease import WorkspaceAdmission
 from ollama_workstation.agents.orchestration import (
     AgentAssignment,
     ReadOnlyWorkspaceTools,
@@ -96,6 +97,29 @@ def test_analysis_plan_executes_dependency_order_and_verifier_verdict(tmp_path: 
     assert stored["status"] == "completed"
     assert len(stored["tasks"]) == 2
     assert repository.verify_workforce_event_chain(result.run_id)
+
+
+def test_workforce_is_refused_when_another_run_holds_the_workspace(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    repository = Repository(tmp_path / "workforce-workspace.sqlite3")
+    client = ScriptedClient([])
+    plan = WorkforcePlanner.analysis_plan("Document the workspace.")
+    with WorkspaceAdmission(
+        repository, workspace, "holder-run", "holder-owner", ttl_seconds=60
+    ):
+        result = WorkforceOrchestrator(client, repository).run(
+            plan, workspace,
+            {"analyse": assignment("analyse"), "verify": assignment("verify")},
+            approval=lambda _message: True,
+        )
+    assert result.status == "workspace_busy"
+    assert client.calls == []
+    assert not (workspace / "workforce" / "analysis.md").exists()
+    stored = repository.get_workforce_run(result.run_id)
+    assert stored is not None
+    assert stored["status"] == "workspace_busy"
+    assert repository.get_workspace_lease(workspace) is None
 
 
 def test_delivery_plan_requires_plan_and_task_approval(tmp_path: Path) -> None:

@@ -16,6 +16,10 @@ from typing import Any
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from ollama_workstation.agents.process_identity import (
+    owner_process_alive,
+    parse_owner_id,
+)
 from ollama_workstation.models.schemas import ModelProfile
 
 
@@ -131,11 +135,28 @@ class Repository:
                     ON agent_memories(scope, scope_id, archived, updated_at DESC);
                 CREATE TABLE IF NOT EXISTS agent_run_leases (
                     run_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL,
+                    owner_host TEXT NOT NULL DEFAULT '',
+                    owner_pid INTEGER NOT NULL DEFAULT 0,
+                    owner_start TEXT NOT NULL DEFAULT '',
                     acquired_at TEXT NOT NULL, heartbeat_at TEXT NOT NULL,
                     expires_at TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_agent_run_leases_expiry
                     ON agent_run_leases(expires_at);
+                CREATE TABLE IF NOT EXISTS workspace_leases (
+                    workspace_key TEXT PRIMARY KEY,
+                    workspace_path TEXT NOT NULL,
+                    owner_id TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    owner_host TEXT NOT NULL DEFAULT '',
+                    owner_pid INTEGER NOT NULL DEFAULT 0,
+                    owner_start TEXT NOT NULL DEFAULT '',
+                    acquired_at TEXT NOT NULL,
+                    heartbeat_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_workspace_leases_expiry
+                    ON workspace_leases(expires_at);
                 CREATE TABLE IF NOT EXISTS workforce_runs (
                     run_id TEXT PRIMARY KEY, objective TEXT NOT NULL,
                     plan_json TEXT NOT NULL, status TEXT NOT NULL,
@@ -164,6 +185,19 @@ class Repository:
                     ON workforce_events(run_id, created_at);
             """)
             self._migrate_checkpoint_integrity(db)
+            self._migrate_lease_identity(db)
+
+    @staticmethod
+    def _migrate_lease_identity(db: sqlite3.Connection) -> None:
+        """Add owner-liveness metadata to databases created before it existed."""
+        columns = {row["name"] for row in db.execute("PRAGMA table_info(agent_run_leases)")}
+        for name, definition in (
+            ("owner_host", "TEXT NOT NULL DEFAULT ''"),
+            ("owner_pid", "INTEGER NOT NULL DEFAULT 0"),
+            ("owner_start", "TEXT NOT NULL DEFAULT ''"),
+        ):
+            if name not in columns:
+                db.execute(f"ALTER TABLE agent_run_leases ADD COLUMN {name} {definition}")
 
     @staticmethod
     def _migrate_checkpoint_integrity(db: sqlite3.Connection) -> None:
@@ -766,55 +800,118 @@ class Repository:
             return cursor.rowcount > 0
 
     # ------------------------------------------------------------------
-    # Multi-process run leases
+    # Multi-process run and workspace leases
     # ------------------------------------------------------------------
 
-    def acquire_run_lease(self, run_id: str, owner_id: str, ttl_seconds: int = 120) -> bool:
-        """Atomically acquire a resume/execution lease for one run.
+    @staticmethod
+    def workspace_lease_key(workspace: str | Path) -> str:
+        """Stable admission key for one canonical local workspace path."""
+        canonical = os.path.normcase(str(Path(workspace).expanduser().resolve()))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
-        An expired lease is reclaimable. A live lease owned by another process
-        is never stolen, which prevents two processes from resuming the same
-        checkpoint concurrently.
+    @staticmethod
+    def _canonical_workspace(workspace: str | Path) -> str:
+        return os.path.normcase(str(Path(workspace).expanduser().resolve()))
+
+    @staticmethod
+    def _owner_liveness(row: sqlite3.Row) -> bool | None:
+        host = str(row["owner_host"] or "").strip()
+        try:
+            pid = int(row["owner_pid"] or 0)
+        except (TypeError, ValueError):
+            pid = 0
+        start = str(row["owner_start"] or "").strip()
+        if not host or pid <= 0:
+            host, pid = parse_owner_id(str(row["owner_id"] or ""))
+            start = ""
+        if not host or pid <= 0:
+            return None
+        return owner_process_alive(host, pid, start)
+
+    @classmethod
+    def _lease_reclaimable(cls, row: sqlite3.Row, now: datetime) -> bool:
+        try:
+            if _parse_utc(str(row["expires_at"])) <= now:
+                return True
+        except ValueError:
+            return True
+        return cls._owner_liveness(row) is False
+
+    @classmethod
+    def _lease_active(cls, row: sqlite3.Row, now: datetime) -> bool:
+        try:
+            if _parse_utc(str(row["expires_at"])) <= now:
+                return False
+        except ValueError:
+            return False
+        return cls._owner_liveness(row) is not False
+
+    @staticmethod
+    def _owner_values(
+        owner_id: str, owner_host: str, owner_pid: int, owner_start: str,
+    ) -> tuple[str, int, str]:
+        host = str(owner_host or "").strip()
+        try:
+            pid = int(owner_pid or 0)
+        except (TypeError, ValueError):
+            pid = 0
+        if not host or pid <= 0:
+            parsed_host, parsed_pid = parse_owner_id(owner_id)
+            host = host or parsed_host
+            pid = pid or parsed_pid
+        return host, pid, str(owner_start or "").strip()
+
+    def acquire_run_lease(
+        self, run_id: str, owner_id: str, ttl_seconds: int = 120,
+        *, owner_host: str = "", owner_pid: int = 0, owner_start: str = "",
+    ) -> bool:
+        """Atomically claim one run, reclaiming a provably dead local owner.
+
+        A live lease owned by another process is never stolen. A lease whose
+        local owner process is provably dead (or whose PID now belongs to a
+        different process) is reclaimable immediately; remote or ambiguous
+        owners remain protected until expiry.
         """
         if not run_id.strip() or not owner_id.strip():
             raise ValueError("Lease run_id and owner_id must be non-empty")
         ttl = max(5, min(int(ttl_seconds), 3_600))
         now = _utc_now()
         expires = now + timedelta(seconds=ttl)
-        stamp = now.isoformat()
-        expires_stamp = expires.isoformat()
+        host, pid, start = self._owner_values(owner_id, owner_host, owner_pid, owner_start)
         with self._connection() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
-                "SELECT owner_id,expires_at FROM agent_run_leases WHERE run_id=?",
-                (run_id,),
+                "SELECT * FROM agent_run_leases WHERE run_id=?", (run_id,)
             ).fetchone()
             if row is not None and str(row["owner_id"]) != owner_id:
-                try:
-                    held_until = _parse_utc(str(row["expires_at"]))
-                except ValueError:
-                    held_until = now
-                if held_until > now:
+                if not self._lease_reclaimable(row, now):
                     return False
             db.execute(
                 """INSERT INTO agent_run_leases(
-                    run_id,owner_id,acquired_at,heartbeat_at,expires_at
-                ) VALUES(?,?,?,?,?)
+                    run_id,owner_id,owner_host,owner_pid,owner_start,
+                    acquired_at,heartbeat_at,expires_at
+                ) VALUES(?,?,?,?,?,?,?,?)
                 ON CONFLICT(run_id) DO UPDATE SET
-                    owner_id=excluded.owner_id, acquired_at=excluded.acquired_at,
+                    owner_id=excluded.owner_id, owner_host=excluded.owner_host,
+                    owner_pid=excluded.owner_pid, owner_start=excluded.owner_start,
+                    acquired_at=excluded.acquired_at,
                     heartbeat_at=excluded.heartbeat_at, expires_at=excluded.expires_at""",
-                (run_id, owner_id, stamp, stamp, expires_stamp),
+                (run_id, owner_id, host, pid, start,
+                 now.isoformat(), now.isoformat(), expires.isoformat()),
             )
         return True
 
-    def renew_run_lease(self, run_id: str, owner_id: str, ttl_seconds: int = 120) -> bool:
+    def renew_run_lease(
+        self, run_id: str, owner_id: str, ttl_seconds: int = 120,
+        *, owner_host: str = "", owner_pid: int = 0, owner_start: str = "",
+    ) -> bool:
         """Renew a held lease without allowing an expired or foreign owner to renew."""
         ttl = max(5, min(int(ttl_seconds), 3_600))
         now = _utc_now()
+        host, pid, start = self._owner_values(owner_id, owner_host, owner_pid, owner_start)
         with self._connection() as db:
             row = db.execute(
-                "SELECT owner_id,expires_at FROM agent_run_leases WHERE run_id=?",
-                (run_id,),
+                "SELECT * FROM agent_run_leases WHERE run_id=?", (run_id,)
             ).fetchone()
             if row is None or str(row["owner_id"]) != owner_id:
                 return False
@@ -824,10 +921,13 @@ class Repository:
             except ValueError:
                 return False
             cursor = db.execute(
-                "UPDATE agent_run_leases SET heartbeat_at=?, expires_at=? "
+                "UPDATE agent_run_leases SET heartbeat_at=?, expires_at=?, "
+                "owner_host=CASE WHEN ?<>'' THEN ? ELSE owner_host END, "
+                "owner_pid=CASE WHEN ?>0 THEN ? ELSE owner_pid END, "
+                "owner_start=CASE WHEN ?<>'' THEN ? ELSE owner_start END "
                 "WHERE run_id=? AND owner_id=?",
                 (now.isoformat(), (now + timedelta(seconds=ttl)).isoformat(),
-                 run_id, owner_id),
+                 host, host, pid, pid, start, start, run_id, owner_id),
             )
             return cursor.rowcount > 0
 
@@ -843,21 +943,133 @@ class Repository:
     def get_run_lease(self, run_id: str) -> dict[str, Any] | None:
         with self._connection() as db:
             row = db.execute(
-                "SELECT run_id,owner_id,acquired_at,heartbeat_at,expires_at "
-                "FROM agent_run_leases WHERE run_id=?", (run_id,)
+                "SELECT * FROM agent_run_leases WHERE run_id=?", (run_id,)
             ).fetchone()
         if row is None:
             return None
-        try:
-            expires_at = _parse_utc(str(row["expires_at"]))
-            active = expires_at > _utc_now()
-        except ValueError:
-            active = False
         return {
             "run_id": row["run_id"], "owner_id": row["owner_id"],
+            "owner_host": str(row["owner_host"] or ""),
+            "owner_pid": int(row["owner_pid"] or 0),
+            "owner_start": str(row["owner_start"] or ""),
             "acquired_at": row["acquired_at"], "heartbeat_at": row["heartbeat_at"],
-            "expires_at": row["expires_at"], "active": active,
+            "expires_at": row["expires_at"],
+            "active": self._lease_active(row, _utc_now()),
         }
+
+    def acquire_workspace_lease(
+        self, workspace: str | Path, run_id: str, owner_id: str,
+        ttl_seconds: int = 300,
+        *, owner_host: str = "", owner_pid: int = 0, owner_start: str = "",
+    ) -> bool:
+        """Atomically admit one owner to a workspace; refuse a live holder."""
+        if not run_id.strip() or not owner_id.strip():
+            raise ValueError("Workspace run_id and owner_id must be non-empty")
+        ttl = max(5, min(int(ttl_seconds), 3_600))
+        now = _utc_now()
+        expires = now + timedelta(seconds=ttl)
+        key = self.workspace_lease_key(workspace)
+        path = self._canonical_workspace(workspace)
+        host, pid, start = self._owner_values(owner_id, owner_host, owner_pid, owner_start)
+        with self._connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT * FROM workspace_leases WHERE workspace_key=?", (key,)
+            ).fetchone()
+            if row is not None and str(row["owner_id"]) != owner_id:
+                if not self._lease_reclaimable(row, now):
+                    return False
+            db.execute(
+                """INSERT INTO workspace_leases(
+                    workspace_key,workspace_path,owner_id,run_id,owner_host,
+                    owner_pid,owner_start,acquired_at,heartbeat_at,expires_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(workspace_key) DO UPDATE SET
+                    workspace_path=excluded.workspace_path,owner_id=excluded.owner_id,
+                    run_id=excluded.run_id,owner_host=excluded.owner_host,
+                    owner_pid=excluded.owner_pid,owner_start=excluded.owner_start,
+                    acquired_at=excluded.acquired_at,
+                    heartbeat_at=excluded.heartbeat_at,expires_at=excluded.expires_at""",
+                (key, path, owner_id, run_id, host, pid, start,
+                 now.isoformat(), now.isoformat(), expires.isoformat()),
+            )
+        return True
+
+    def renew_workspace_lease(
+        self, workspace: str | Path, owner_id: str, ttl_seconds: int = 300,
+        *, owner_host: str = "", owner_pid: int = 0, owner_start: str = "",
+    ) -> bool:
+        ttl = max(5, min(int(ttl_seconds), 3_600))
+        now = _utc_now()
+        host, pid, start = self._owner_values(owner_id, owner_host, owner_pid, owner_start)
+        key = self.workspace_lease_key(workspace)
+        with self._connection() as db:
+            row = db.execute(
+                "SELECT * FROM workspace_leases WHERE workspace_key=?", (key,)
+            ).fetchone()
+            if row is None or str(row["owner_id"]) != owner_id:
+                return False
+            try:
+                if _parse_utc(str(row["expires_at"])) <= now:
+                    return False
+            except ValueError:
+                return False
+            cursor = db.execute(
+                "UPDATE workspace_leases SET heartbeat_at=?, expires_at=?, "
+                "owner_host=CASE WHEN ?<>'' THEN ? ELSE owner_host END, "
+                "owner_pid=CASE WHEN ?>0 THEN ? ELSE owner_pid END, "
+                "owner_start=CASE WHEN ?<>'' THEN ? ELSE owner_start END "
+                "WHERE workspace_key=? AND owner_id=?",
+                (now.isoformat(), (now + timedelta(seconds=ttl)).isoformat(),
+                 host, host, pid, pid, start, start, key, owner_id),
+            )
+            return cursor.rowcount > 0
+
+    def release_workspace_lease(self, workspace: str | Path, owner_id: str) -> bool:
+        key = self.workspace_lease_key(workspace)
+        with self._connection() as db:
+            cursor = db.execute(
+                "DELETE FROM workspace_leases WHERE workspace_key=? AND owner_id=?",
+                (key, owner_id),
+            )
+            return cursor.rowcount > 0
+
+    def get_workspace_lease(self, workspace: str | Path) -> dict[str, Any] | None:
+        key = self.workspace_lease_key(workspace)
+        with self._connection() as db:
+            row = db.execute(
+                "SELECT * FROM workspace_leases WHERE workspace_key=?", (key,)
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "workspace_key": key,
+            "workspace_path": str(row["workspace_path"]),
+            "owner_id": str(row["owner_id"]),
+            "run_id": str(row["run_id"]),
+            "owner_host": str(row["owner_host"] or ""),
+            "owner_pid": int(row["owner_pid"] or 0),
+            "owner_start": str(row["owner_start"] or ""),
+            "acquired_at": str(row["acquired_at"]),
+            "heartbeat_at": str(row["heartbeat_at"]),
+            "expires_at": str(row["expires_at"]),
+            "active": self._lease_active(row, _utc_now()),
+        }
+
+    def list_workspace_leases(self) -> list[dict[str, Any]]:
+        with self._connection() as db:
+            rows = db.execute(
+                "SELECT * FROM workspace_leases ORDER BY heartbeat_at DESC"
+            ).fetchall()
+        now = _utc_now()
+        return [{
+            "workspace_key": str(row["workspace_key"]),
+            "workspace_path": str(row["workspace_path"]),
+            "owner_id": str(row["owner_id"]),
+            "run_id": str(row["run_id"]),
+            "expires_at": str(row["expires_at"]),
+            "active": self._lease_active(row, now),
+        } for row in rows]
 
     # ------------------------------------------------------------------
     # Workforce orchestration state

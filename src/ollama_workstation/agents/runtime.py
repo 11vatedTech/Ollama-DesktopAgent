@@ -12,7 +12,11 @@ from pathlib import Path
 from threading import Event
 from typing import Any, Protocol
 
-from ollama_workstation.agents.execution_lease import ExecutionLease, LeaseLost
+from ollama_workstation.agents.execution_lease import (
+    ExecutionLease,
+    LeaseLost,
+    WorkspaceBusy,
+)
 from ollama_workstation.agents.memory import MemoryRecord, MemoryStore
 from ollama_workstation.agents.recovery import (
     CHECKPOINT_PROTOCOL,
@@ -102,7 +106,8 @@ class AgentRuntime:
             *, event: Callable[[AgentEvent], None] | None = None,
             cancel_event: Event | None = None,
             resume_checkpoint: dict[str, Any] | None = None,
-            lease_owner: str | None = None) -> AgentResult:
+            lease_owner: str | None = None,
+            admit_workspace: bool = True) -> AgentResult:
         """Execute or safely resume a bounded agent loop under a host lease.
 
         The runtime owns the lease for every repository-backed run, including
@@ -111,6 +116,9 @@ class AgentRuntime:
         example the CLI recovery path); ordinary callers let the runtime create
         a process-scoped owner. The lease is released by the context manager on
         normal completion as well as on an exception or cancellation.
+
+        ``admit_workspace`` is false only for a child agent whose workforce
+        parent already owns the workspace admission.
         """
         run_id = str(resume_checkpoint["run_id"]) if resume_checkpoint else str(uuid.uuid4())
         if self.repository is None:
@@ -119,15 +127,59 @@ class AgentRuntime:
                 event=event, cancel_event=cancel_event,
                 resume_checkpoint=resume_checkpoint,
             )
-        with ExecutionLease(
-            self.repository, run_id, lease_owner,
-            ttl_seconds=self.lease_ttl_seconds,
-        ) as lease:
-            return self._run_locked(
-                model, profile, task, tools, run_id=run_id, lease=lease,
-                event=event, cancel_event=cancel_event,
-                resume_checkpoint=resume_checkpoint,
+        try:
+            with ExecutionLease(
+                self.repository, run_id, lease_owner,
+                ttl_seconds=self.lease_ttl_seconds,
+                workspace=tools.workspace if admit_workspace else None,
+            ) as lease:
+                return self._run_locked(
+                    model, profile, task, tools, run_id=run_id, lease=lease,
+                    event=event, cancel_event=cancel_event,
+                    resume_checkpoint=resume_checkpoint,
+                )
+        except WorkspaceBusy as exc:
+            return self._workspace_busy_result(
+                model, profile, task, tools, run_id=run_id, error=exc, event=event,
             )
+
+    def _workspace_busy_result(
+        self,
+        model: str,
+        profile: ModelProfile,
+        task: str,
+        tools: AgentToolRegistry,
+        *,
+        run_id: str,
+        error: WorkspaceBusy,
+        event: Callable[[AgentEvent], None] | None,
+    ) -> AgentResult:
+        """Report a refused admission without calling a provider or tool."""
+        safe_task = str(_sanitize_event_value(task))
+        item = AgentEvent(
+            "workspace_busy", str(error),
+            {
+                "workspace": str(tools.workspace),
+                "expires_at": error.expires_at,
+            },
+        )
+        if event is not None:
+            event(item)
+        if self.repository is not None:
+            try:
+                self.repository.save_run(
+                    run_id, model, profile.professional_title, safe_task,
+                    "workspace_busy", utc_now(), utc_now(),
+                    [{
+                        "kind": item.kind, "message": item.message,
+                        "data": item.data, "timestamp": item.timestamp,
+                    }],
+                )
+            except Exception:
+                pass
+        return AgentResult(
+            run_id, "workspace_busy", str(error), 0, [item]
+        )
 
     def _run_locked(
         self,
