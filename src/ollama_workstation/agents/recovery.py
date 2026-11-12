@@ -429,11 +429,7 @@ def load_recovery_candidates(
                 workspace_expires_at=str(workspace_lease.get("expires_at") or ""),
                 workspace_run_id=str(workspace_lease.get("run_id") or ""),
             )
-            if (
-                workspace_active
-                and candidate.status is RecoveryStatus.RESUMABLE
-                and candidate.workspace_run_id != candidate.run_id
-            ):
+            if workspace_active and candidate.status is RecoveryStatus.RESUMABLE:
                 candidate = replace(
                     candidate,
                     status=RecoveryStatus.WORKSPACE_BUSY,
