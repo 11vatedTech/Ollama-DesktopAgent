@@ -12,7 +12,7 @@
 - Added chat user-message editing with branch-before-message behavior, branch/export controls and clearer artifact inspection.
 - Expanded intelligence-core state mapping and canonical aliases; removed legacy aliases that could disagree with the formal state set.
 - Live local evidence: Ollama 0.40.16, 15 models; `qwen2.5-coder:7b` empirical profile (16 probes, 44.22 tok/s mean), core benchmark 8/12 (66.67) with manifest `9e68732a7f0a648ab6cfaa6584d897be1abed8bbb32de59142a8eead52947f79`; CLI run `23dc040f-1aa3-40d1-882a-b3a2c7f6b6e0` and desktop run `beee5cd1-342a-449b-994b-e47d3a53d9be` completed with `verification_passed=true`; failure run `fb65bbb1-064e-4be6-9937-a40c2d3acd30` correctly blocked a claimed write that never occurred.
-- Full local suite: 191 passed, 4 skipped; 10 focused UI tests; Ruff and `compileall` clean. The hosted matrix for this execution-integrity branch is run after push; the earlier 43056402479 result covers the prior verifier head.
+- Full local suite: 191 passed, 4 skipped; 10 focused UI tests; Ruff and `compileall` clean. Hosted CI run 43136801011 passed all four Windows/Ubuntu Python 3.11/3.12 jobs, including Windows desktop import and UI tests.
 
 ## 0.2.0.dev0 — 2026-11-10
 
