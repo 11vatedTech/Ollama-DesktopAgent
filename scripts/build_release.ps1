@@ -74,7 +74,12 @@ if (Test-Path $smokeHome) { Remove-Item -Recurse -Force $smokeHome }
 $env:OLLAMA_WORKSTATION_HOME = $smokeHome
 $cliVersion = (& (Join-Path $app "11vated.exe") --version) -join ""
 if ($LASTEXITCODE -ne 0 -or -not $cliVersion.Contains($version)) { throw "Frozen CLI failed: $cliVersion" }
-& (Join-Path $app "11vated.exe") doctor | Out-File -Encoding utf8 (Join-Path $out "smoke-doctor.json")
+$doctorJson = (& (Join-Path $app "11vated.exe") doctor) -join "`n"
+# doctor exits 2 when Ollama is unreachable, which is expected on a build host
+# without Ollama; the build checks only what the frozen app itself controls.
+$doctor = $doctorJson | ConvertFrom-Json
+if ($doctor.database.integrity -ne "ok") { throw "Frozen doctor reported database integrity: $($doctor.database.integrity)" }
+$doctorJson | Out-File -Encoding utf8 (Join-Path $out "smoke-doctor.json")
 $gui = Start-Process -FilePath (Join-Path $app "11vated-Intelligence.exe") -ArgumentList "--smoke-test" -PassThru -Wait -NoNewWindow -RedirectStandardOutput (Join-Path $out "smoke-gui.log")
 if ($gui.ExitCode -ne 0) { throw "Frozen GUI smoke test failed (exit $($gui.ExitCode))." }
 Remove-Item Env:OLLAMA_WORKSTATION_HOME
@@ -103,3 +108,5 @@ $zipHash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLower()
 "$zipHash  $(Split-Path -Leaf $zip)" | Out-File -Encoding ascii "$zip.sha256"
 if (-not $KeepBuildEnv) { Remove-Item -Recurse -Force $buildEnv, $toolsEnv }
 Write-Host "Release $version written to $out"
+# Every failure above throws; do not let a stale native exit code fail the caller.
+exit 0
