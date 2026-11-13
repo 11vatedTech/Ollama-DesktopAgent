@@ -4,7 +4,7 @@
   "baseline_commit": "974517c0cf4f293192a289cb419f21654671c39b",
   "baseline_branch": "feat/execution-integrity-v1-1",
   "branch": "campaign/complete-agent-v1",
-  "current_commit": "0c2c935",
+  "current_commit": "8ffd076",
   "updated_at": "2026-11-13",
   "objectives": [
     "model -> qualified agent",
@@ -16,79 +16,93 @@
   "gates": {
     "G1": {
       "status": "PARTIAL",
-      "note": "baseline mapped; branch on integration tip; PRs unmerged; hosted CI not run",
+      "note": "committed locally; Windows suite green; not pushed; hosted CI not run on the campaign branch",
       "evidence": []
     },
     "G2": {
-      "status": "PARTIAL",
-      "note": "existing profiler/benchmarks plus new verified agent-task suite; no live run",
-      "evidence": []
+      "status": "VERIFIED",
+      "note": "agent-core suite run live on qwen2.5-coder:7b/14b and deepseek-r1:7b with diagnosable failures",
+      "evidence": [
+        "engineering/campaign/VERIFICATION_EVIDENCE.md#live-evidence-session-3-2026-11-13-windows-workstation"
+      ]
     },
     "G3": {
-      "status": "PARTIAL",
-      "note": "harness lab, agent definitions, readiness gate, CLI; scripted-model tests only",
-      "evidence": []
+      "status": "VERIFIED",
+      "note": "measured harness selection; shared execution gate on every run path; Agent Foundry UI",
+      "evidence": [
+        "engineering/campaign/VERIFICATION_EVIDENCE.md#live-evidence-session-3-2026-11-13-windows-workstation"
+      ]
     },
     "G4": {
-      "status": "PARTIAL",
-      "note": "RunPolicy budgets, usage, repair; time budget now survives resume; live scenario C pending",
-      "evidence": []
+      "status": "VERIFIED",
+      "note": "live scenarios A, B, C passed",
+      "evidence": [
+        "engineering/campaign/VERIFICATION_EVIDENCE.md#live-evidence-session-3-2026-11-13-windows-workstation"
+      ]
     },
     "G5": {
-      "status": "OPEN",
-      "note": "memory unchanged",
-      "evidence": []
+      "status": "VERIFIED",
+      "note": "hybrid embedding memory; live recall through nomic-embed-text",
+      "evidence": [
+        "engineering/campaign/VERIFICATION_EVIDENCE.md#live-evidence-session-3-2026-11-13-windows-workstation"
+      ]
     },
     "G6": {
       "status": "PARTIAL",
-      "note": "skill registry and evaluation loop; no UI; no live evaluation",
+      "note": "skills used live in scenario A; no live skill A/B evaluation; no authoring UI",
       "evidence": []
     },
     "G7": {
       "status": "PARTIAL",
-      "note": "RAM/VRAM admission control in front of agent runs (estimate-based, tested on synthetic measurements); workforce children still bypass agent definitions; no queue or parallel execution; never run on the real GPU",
+      "note": "live workforce D passed; admission calibrated; no queue/auto-unload/parallelism",
       "evidence": [
         "tests/test_resource_admission.py"
       ]
     },
     "G8": {
-      "status": "OPEN",
-      "note": "no OS-enforced isolation",
+      "status": "PARTIAL",
+      "note": "Job Object containment with OS tests; no filesystem/network sandbox",
       "evidence": []
     },
     "G9": {
-      "status": "OPEN",
-      "note": "tool ecosystem unchanged",
+      "status": "PARTIAL",
+      "note": "read-only git tools; no web/browser/computer-use tools by policy",
       "evidence": []
     },
     "G10": {
-      "status": "PARTIAL",
-      "note": "deterministic verification engine; reviewer evidence not attached",
-      "evidence": []
+      "status": "VERIFIED",
+      "note": "verifier contract refined live; D passed with independent verifier",
+      "evidence": [
+        "engineering/campaign/VERIFICATION_EVIDENCE.md#live-evidence-session-3-2026-11-13-windows-workstation"
+      ]
     },
     "G11": {
-      "status": "OPEN",
-      "note": "desktop unchanged; UI tests not runnable in campaign environment",
+      "status": "PARTIAL",
+      "note": "Agent Foundry page and settings; owner interactive QA outstanding",
       "evidence": []
     },
     "G12": {
-      "status": "PARTIAL",
-      "note": "process-kill recovery scenario on scripted model; live pending",
-      "evidence": []
+      "status": "VERIFIED",
+      "note": "live scenario E passed",
+      "evidence": [
+        "engineering/campaign/VERIFICATION_EVIDENCE.md#live-evidence-session-3-2026-11-13-windows-workstation"
+      ]
     },
     "G13": {
-      "status": "PARTIAL",
-      "note": "A,C,E,F implemented; none run on real models; B,D missing",
-      "evidence": []
+      "status": "VERIFIED",
+      "note": "A-F passed on real models (run 20261113-110646 and D re-run 20261113-112324)",
+      "evidence": [
+        "engineering/campaign/VERIFICATION_EVIDENCE.md#live-evidence-session-3-2026-11-13-windows-workstation"
+      ]
     },
     "G14": {
-      "status": "OPEN",
-      "note": "packaging unchanged",
+      "status": "PARTIAL",
+      "note": "clean-venv release, SBOM, licence audit, install cycle; unsigned; no clean VM",
       "evidence": []
     },
     "G15": {
       "status": "OPEN",
-      "note": "not certifiable",
+      "note": "depends on G1, G6-G9, G11, G14",
       "evidence": []
     }
   },
@@ -135,27 +149,36 @@
       "unit": "Delivery of increments 1-2 to the workstation folder",
       "commit": "0c2c935",
       "result": "files written into the working tree of the local checkout (branch feat/execution-integrity-v1-1, uncommitted there); git bundle provided"
+    },
+    {
+      "unit": "Session 3: live verification on the workstation and completion work",
+      "commit": "8ffd076",
+      "result": "344 passed, 5 skipped on Windows; 13 live tests passed; ruff clean; live scenarios A-F passed",
+      "files": [
+        "agentification/gate.py",
+        "agents/containment.py",
+        "agents/memory.py",
+        "agentification/foundry.py",
+        "ui/pages/agents.py",
+        "acceptance.py (B, D)",
+        "agents/tools.py (git, guidance)",
+        "agents/verification.py",
+        "packaging/",
+        "scripts/build_release.ps1"
+      ]
     }
   ],
   "active": [],
   "blockers": [
     {
-      "blocker": "No Ollama, GPU, Windows or PySide6 in the increment-1 engineering environment; PyPI and ollama.com unreachable",
-      "resolution": "Built a scripted Ollama HTTP server for machinery tests; live run delegated to scripts/live_acceptance.ps1 on the workstation"
-    },
-    {
-      "blocker": "GitHub token invalid in the engineering environment; branch could not be pushed",
-      "resolution": "Branch delivered as a git bundle and as files to the workstation folder"
-    },
-    {
-      "blocker": "Session 2: the shell on the workstation was unavailable and terminals cannot be typed into through desktop control, so the live run could not be started remotely; pypi.org unreachable from the engineering container",
-      "resolution": "Live acceptance remains a single owner-run command; everything else continued in the container"
+      "blocker": "Pushing to GitHub is an outward-facing action",
+      "resolution": "Owner runs: git push -u origin campaign/complete-agent-v1"
     }
   ],
   "next_action": {
-    "description": "Owner runs live acceptance on the Windows workstation; results are then recorded and failures fixed",
-    "command": "powershell -ExecutionPolicy Bypass -File scripts\\live_acceptance.ps1 -Models qwen2.5-coder:7b,deepseek-r1:7b -AllowCodeExecution",
-    "then": "Read .artifacts\\campaign\\acceptance-*.json and resources-*.json; record under 'Live evidence'; update gates G3, G4, G7, G12, G13 from what was measured; fix any Windows failures before new features"
+    "description": "Push the branch, open a PR and confirm hosted CI on Ubuntu and Windows",
+    "command": "git push -u origin campaign/complete-agent-v1",
+    "then": "Fix any Ubuntu-only failure; interactive QA of the Agent Foundry page; then G8 restricted token / AppContainer"
   },
   "evidence": {
     "document": "engineering/campaign/VERIFICATION_EVIDENCE.md",
