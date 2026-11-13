@@ -1,0 +1,18 @@
+# Known risks and limitations
+
+| ID | Risk | Impact | Mitigation in place | Resolution |
+|---|---|---|---|---|
+| R1 | Increment 1 has never run against a real Ollama model | Thresholds, prompts or task wording may need tuning; small models may fail tasks for reasons the scripted models do not exercise | Scenarios report blocked/inconclusive instead of passing; evidence JSON captures every attempt | Run `scripts/live_acceptance.ps1`; tune only with a suite version bump |
+| R2 | New code executed only on Linux / Python 3.13 | Windows path, process-kill or encoding differences could break tests or scenario E | Uses `pathlib`, `subprocess.kill`, UTF-8 everywhere; existing lease code already handles Windows PIDs | Run the suite on Windows 3.11/3.12 (hosted CI or locally) |
+| R3 | No OS-enforced sandbox | `run_command` and `command` checks run with the user's privileges; a model-written test file can execute arbitrary code | Shell off by default; allow-list; per-command approval; explicit `--allow-code-execution` consent; disposable workspaces in acceptance | Windows Job Objects + restricted token, then re-evaluate AppContainer |
+| R4 | Legacy execution paths bypass the readiness gate | `11vated run`, chat agent mode and workforce runs still execute from a profile alone | They keep the pre-existing digest binding check | Route them through `AgentService.run` |
+| R5 | Nothing in the desktop UI reaches the new subsystem | Agents, skills and qualification are CLI-only | - | Agent Management and Skill Studio pages |
+| R6 | (closed in 0c2c935) Time budget was per process | - | Elapsed time is checkpointed and restored on resume; regression test `test_resumed_run_continues_the_same_time_budget` | Closed |
+| R7 | Qualification suite is small (6 tasks) | Confidence intervals are wide; coverage of long-context and multi-file reasoning is absent | Wilson lower bound required; statuses are conservative | Add tasks under a new suite version |
+| R8 | Skill evaluation uses few trials by default | `improved` can be noise on a real model | Identical seeds in both arms; all attempts stored | Raise `--trials`; add a significance rule |
+| R9 | Scenario E timing depends on model latency | A very fast model could finish before the kill | Polls every 10 ms; reports inconclusive rather than pass | Acceptable; rerun if inconclusive |
+| R10 | `OLLAMA_WORKSTATION_OLLAMA_URL` redirects all model traffic | A hostile environment variable could point the client at a remote host | Documented; local-first default unchanged | Consider restricting to loopback unless a setting allows remote |
+| R11 | Recovery child uses `python -m` | Scenario E cannot run from a PyInstaller-frozen build | CLI/source installs are unaffected | Add a frozen-safe child entry point |
+| R12 | Hosted CI not run on this branch | Cross-platform regressions undetected | Local full suite | Push the branch and check the matrix |
+| R13 | Admission footprint is an estimate | A load may be admitted that Ollama then splits to CPU, or denied although it would fit | Outcomes and the basis (`model_geometry` / `fallback_constant`) are reported; unmeasured hosts are admitted with an explicit `admit_unmeasured` | Calibrate against `/api/ps` `size`/`size_vram` after real loads on the workstation |
+| R14 | Workstation folder holds the campaign as uncommitted working-tree files in a OneDrive-synced checkout | History on that machine does not yet contain the campaign commits | Git bundle delivered alongside | `git fetch campaign-complete-agent-v1.bundle campaign/complete-agent-v1:campaign/complete-agent-v1` then check it out |
