@@ -21,7 +21,11 @@ param(
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
-$buildEnv = Join-Path $root "build\release-venv"
+# Intermediate build state stays outside the checkout: a synced folder (OneDrive)
+# locks freshly written files and makes PyInstaller fail with "Access is denied".
+$work = Join-Path $env:LOCALAPPDATA "11vated-build"
+New-Item -ItemType Directory -Force -Path $work | Out-Null
+$buildEnv = Join-Path $work "release-venv"
 if (Test-Path $buildEnv) { Remove-Item -Recurse -Force $buildEnv }
 # "py -3.12" locally; plain "python" (no version switch) on CI runners.
 $versionArgs = @(if ($PythonVersion) { "-$PythonVersion" })
@@ -42,7 +46,7 @@ New-Item -ItemType Directory -Force -Path $out | Out-Null
 Write-Host "== SBOM and licence audit (shipped environment only) =="
 # The tools live in their own environment and inspect the build environment from
 # outside, so nothing they depend on is mistaken for a shipped component.
-$toolsEnv = Join-Path $root "build\release-tools"
+$toolsEnv = Join-Path $work "release-tools"
 if (Test-Path $toolsEnv) { Remove-Item -Recurse -Force $toolsEnv }
 & $Python @versionArgs -m venv $toolsEnv
 $tools = Join-Path $toolsEnv "Scripts\python.exe"
@@ -58,14 +62,14 @@ if ($LASTEXITCODE -ne 0) { throw "Licence audit blocked the release." }
 
 Write-Host "== Freeze =="
 & $py -m pip install --quiet --disable-pip-version-check pyinstaller
-& $py -m PyInstaller --noconfirm --clean --distpath (Join-Path $root "dist\pyinstaller") --workpath (Join-Path $root "build\pyinstaller") packaging\11vated.spec
+& $py -m PyInstaller --noconfirm --clean --distpath (Join-Path $work "dist") --workpath (Join-Path $work "pyinstaller") packaging\11vated.spec
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed." }
-$app = Join-Path $root "dist\pyinstaller\11vated-Intelligence"
+$app = Join-Path $work "dist\11vated-Intelligence"
 Copy-Item packaging\uninstall.ps1 $app
 Copy-Item (Join-Path $out "THIRD_PARTY_LICENSES.txt") $app
 
 Write-Host "== Smoke tests of the frozen build =="
-$smokeHome = Join-Path $root "build\smoke-home"
+$smokeHome = Join-Path $work "smoke-home"
 if (Test-Path $smokeHome) { Remove-Item -Recurse -Force $smokeHome }
 $env:OLLAMA_WORKSTATION_HOME = $smokeHome
 $cliVersion = (& (Join-Path $app "11vated.exe") --version) -join ""
@@ -78,7 +82,18 @@ Write-Host "Frozen CLI: $cliVersion; GUI: $(Get-Content (Join-Path $out 'smoke-g
 
 Write-Host "== Package =="
 $zip = Join-Path $out "11vated-Intelligence-$version-win64.zip"
-Compress-Archive -Path $app -DestinationPath $zip
+# Antivirus briefly locks freshly written executables; retry instead of failing.
+for ($attempt = 1; $attempt -le 6; $attempt++) {
+    try {
+        if (Test-Path $zip) { Remove-Item -Force $zip }
+        Compress-Archive -Path $app -DestinationPath $zip -ErrorAction Stop
+        break
+    } catch {
+        if ($attempt -eq 6) { throw }
+        Write-Host "Packaging attempt $attempt failed ($($_.Exception.Message)); retrying"
+        Start-Sleep -Seconds (5 * $attempt)
+    }
+}
 Copy-Item packaging\install.ps1, packaging\uninstall.ps1 $out
 foreach ($file in Get-ChildItem $out -File | Where-Object { $_.Extension -ne ".sha256" }) {
     $hash = (Get-FileHash -Algorithm SHA256 $file.FullName).Hash.ToLower()

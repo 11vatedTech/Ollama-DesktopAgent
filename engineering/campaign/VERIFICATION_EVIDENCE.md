@@ -161,7 +161,12 @@ Scenario D follow-up (writer and verifier both qwen2.5-coder:14b):
 components; licence audit 16 allowed, 3 review (certifi MPL-2.0,
 PySide6_Essentials and shiboken6 LGPL-3.0, shipped as unmodified DLLs with
 licence texts), 0 blocking; frozen CLI `--version` and `doctor` ok; frozen GUI
-`--smoke-test` rendered all 10 pages; 50 MB zip with SHA-256 sums.
+`--smoke-test` rendered all 10 pages; 48 MB zip (113 MB installed) with SHA-256
+sums; zip SHA-256 `165541940b249f225b641287d2e13893c26fb0668152b7e6512169425192d6d4`.
+Intermediate build state lives in `%LOCALAPPDATA%	vated-build` because the
+OneDrive-synced checkout locked PyInstaller output; archiving retries while
+antivirus holds a new executable and fails rather than skipping a file. Qt is
+collected by PyInstaller's hooks only (255 MB -> 113 MB installed).
 
 Install cycle with the release zip into an isolated folder: checksum verified
 -> installed CLI listed live models -> installed GUI smoke test ok -> HKCU

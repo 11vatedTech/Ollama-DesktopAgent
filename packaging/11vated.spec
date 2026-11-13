@@ -13,7 +13,10 @@ SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
 datas, binaries, hiddenimports = [], [], []
-for package in ("PySide6", "shiboken6", "jsonschema", "jsonschema_specifications"):
+# PySide6 is left to PyInstaller's own hooks, which collect only the Qt modules
+# and plugins the application imports (QtCore/QtGui/QtWidgets). collect_all
+# would ship QML, Quick, translations and the software OpenGL renderer (~200 MB).
+for package in ("jsonschema", "jsonschema_specifications"):
     package_datas, package_binaries, package_hidden = collect_all(package)
     datas += package_datas
     binaries += package_binaries
@@ -22,7 +25,10 @@ hiddenimports += collect_submodules("ollama_workstation")
 datas += [(str(ROOT / "LICENSE"), "."), (str(ROOT / "SECURITY.md"), ".")]
 
 common = dict(pathex=[str(SRC)], binaries=binaries, datas=datas, hiddenimports=hiddenimports,
-              excludes=["tkinter", "pytest", "ruff", "mypy"], noarchive=False)
+              excludes=["tkinter", "pytest", "ruff", "mypy", "PySide6.QtQml", "PySide6.QtQuick",
+                        "PySide6.QtNetwork", "PySide6.QtOpenGL", "PySide6.QtPdf",
+                        "PySide6.QtTest", "PySide6.QtDBus"],
+              noarchive=False)
 
 gui = Analysis([str(SRC / "ollama_workstation" / "__main__.py")], **common)
 cli = Analysis([str(ROOT / "packaging" / "cli_entry.py")], **common)
