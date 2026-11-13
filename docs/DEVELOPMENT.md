@@ -23,7 +23,7 @@ Python 3.12 is recommended on Windows 11.
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-python -m pip install -e ".[desktop,dev]"
+python -m pip install -e ".[desktop,dev,mcp]"
 ```
 
 ## Validation
@@ -32,9 +32,39 @@ python -m pip install -e ".[desktop,dev]"
 python -m compileall -q src
 ruff check .
 pytest --cov=ollama_workstation --cov-report=term-missing
+pytest tests/test_mcp_integration.py -q
 ```
 
-Core tests do not require Ollama or a GPU. Live integration tests should be opt-in and record endpoint version, model digest, hardware and task configuration.
+Core tests do not require Ollama or a GPU. The MCP transport suite launches the real SDK server over stdio and Streamable HTTP; it requires the `mcp` extra and is skipped without it. Live Ollama integration tests should be opt-in and record endpoint version, model digest, hardware and task configuration.
+
+Checkpoint recovery is covered by deterministic tests that simulate process death with `SystemExit`; no Ollama server is required:
+
+```powershell
+pytest tests/test_run_recovery.py -q
+11vated recover --list
+```
+
+Recovery tests cover safe-boundary writes, resume without tool replay, interrupted-tool review, binding and tamper rejection, staleness, budget exhaustion, cancelled-run resumption and CLI list/resume/discard.
+
+## Desktop UI verification
+
+The focused Qt checks run without a display server:
+
+```powershell
+$env:QT_QPA_PLATFORM="offscreen"
+python -m pytest tests/test_ui_workstation.py -q
+Remove-Item Env:QT_QPA_PLATFORM
+```
+
+They cover all nine workspace constructors, Command/Chat responsive layout, the compact Model vertical split, every intelligence-core state and reduced-motion timer, Markdown escaping, conversation repository persistence, and effective Settings values. The current local result is 10 passed; the Windows CI job installs the desktop extra and runs the same file after its import check.
+
+Regenerate the native Windows gallery with Ollama running and at least one model installed:
+
+```powershell
+python scripts/capture_ui_gallery.py --output tests/screenshots
+```
+
+Use the native Windows Qt platform for gallery captures. The `offscreen` platform reports no font families on the current host. The script captures nine desktop pages, three compact views, and the 1280 × 800, 1024 × 768 and 900 × 700 responsive matrix for Command, Chat, Model Intelligence and Workforce. Review [Desktop Intelligence Interface](UI_INTERFACE.md) for the evidence matrix and known gaps.
 
 ## Manual Windows integration test
 
@@ -47,9 +77,13 @@ Core tests do not require Ollama or a GPU. Live integration tests should be opt-
 7. Use a disposable workspace for a read-only inspection task.
 8. Test file creation and confirm overwrites are denied by default.
 9. Confirm shell is not exposed when disabled.
-10. Interrupt a run; verify no false completion is recorded.
-11. Inspect SQLite profile and run records.
-12. Repeat with a model that does not emit native tool calls to test fallback behavior.
+10. Interrupt a run before the next provider request; verify Run History offers an integrity-checked resume and that the original run ID and budget are reused.
+11. Interrupt a run during a tool operation; verify it shows REVIEW REQUIRED and cannot be resumed automatically.
+12. Inspect SQLite profile, run, event and checkpoint records.
+13. Repeat with a model that does not emit native tool calls to test fallback behavior.
+14. Enable a trusted local MCP stdio server first; verify only approved tools appear, a timeout reports unknown outcome, and Run History/agent execution does not replay the call. Repeat with a loopback Streamable HTTP server.
+15. Navigate all nine workspaces at desktop and compact widths; verify Chat hides context below its breakpoint, Workforce columns scroll independently, and selected two-line rows remain readable.
+16. Send a real local chat request, stop an active stream, and reopen the saved conversation from the session list.
 
 ## Desktop packaging
 

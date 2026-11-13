@@ -46,6 +46,7 @@ class CapabilityResult:
     method: str = ""
     evidence: list[str] = field(default_factory=list)
     limitations: list[str] = field(default_factory=list)
+    metrics: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -71,6 +72,9 @@ class ModelProfile:
     capabilities: list[CapabilityResult] = field(default_factory=list)
     known_limitations: list[str] = field(default_factory=list)
     operational: dict[str, Any] = field(default_factory=dict)
+    # Normalized Ollama artifact metadata. Kept as a mapping so old profiles
+    # remain readable and new evidence fields can evolve without a schema break.
+    intelligence: dict[str, Any] = field(default_factory=dict)
     identity_rationale: list[str] = field(default_factory=list)
     identity_confidence: float = 0.0
     profile_version: int = 1
@@ -79,7 +83,7 @@ class ModelProfile:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "ModelProfile":
+    def from_dict(cls, payload: dict[str, Any]) -> ModelProfile:
         values = dict(payload)
         values["origin_evidence"] = [Evidence(**x) for x in values.get("origin_evidence", [])]
         values["capabilities"] = [CapabilityResult(**x) for x in values.get("capabilities", [])]

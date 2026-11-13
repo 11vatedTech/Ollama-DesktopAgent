@@ -1,0 +1,188 @@
+{
+  "campaign": "11VATED INTELLIGENCE - complete Ollama desktop agent",
+  "repository": "https://github.com/11vatedTech/Ollama-DesktopAgent",
+  "baseline_commit": "974517c0cf4f293192a289cb419f21654671c39b",
+  "baseline_branch": "feat/execution-integrity-v1-1",
+  "branch": "campaign/complete-agent-v1",
+  "current_commit": "8ffd076",
+  "updated_at": "2026-11-13",
+  "objectives": [
+    "model -> qualified agent",
+    "multi-step task with real tools",
+    "recover from interruption",
+    "independently verified results",
+    "complete desktop product and release"
+  ],
+  "gates": {
+    "G1": {
+      "status": "PARTIAL",
+      "note": "committed locally; Windows suite green; not pushed; hosted CI not run on the campaign branch",
+      "evidence": []
+    },
+    "G2": {
+      "status": "VERIFIED",
+      "note": "agent-core suite run live on qwen2.5-coder:7b/14b and deepseek-r1:7b with diagnosable failures",
+      "evidence": [
+        "engineering/campaign/VERIFICATION_EVIDENCE.md#live-evidence-session-3-2026-11-13-windows-workstation"
+      ]
+    },
+    "G3": {
+      "status": "VERIFIED",
+      "note": "measured harness selection; shared execution gate on every run path; Agent Foundry UI",
+      "evidence": [
+        "engineering/campaign/VERIFICATION_EVIDENCE.md#live-evidence-session-3-2026-11-13-windows-workstation"
+      ]
+    },
+    "G4": {
+      "status": "VERIFIED",
+      "note": "live scenarios A, B, C passed",
+      "evidence": [
+        "engineering/campaign/VERIFICATION_EVIDENCE.md#live-evidence-session-3-2026-11-13-windows-workstation"
+      ]
+    },
+    "G5": {
+      "status": "VERIFIED",
+      "note": "hybrid embedding memory; live recall through nomic-embed-text",
+      "evidence": [
+        "engineering/campaign/VERIFICATION_EVIDENCE.md#live-evidence-session-3-2026-11-13-windows-workstation"
+      ]
+    },
+    "G6": {
+      "status": "PARTIAL",
+      "note": "skills used live in scenario A; no live skill A/B evaluation; no authoring UI",
+      "evidence": []
+    },
+    "G7": {
+      "status": "PARTIAL",
+      "note": "live workforce D passed; admission calibrated; no queue/auto-unload/parallelism",
+      "evidence": [
+        "tests/test_resource_admission.py"
+      ]
+    },
+    "G8": {
+      "status": "PARTIAL",
+      "note": "Job Object containment with OS tests; no filesystem/network sandbox",
+      "evidence": []
+    },
+    "G9": {
+      "status": "PARTIAL",
+      "note": "read-only git tools; no web/browser/computer-use tools by policy",
+      "evidence": []
+    },
+    "G10": {
+      "status": "VERIFIED",
+      "note": "verifier contract refined live; D passed with independent verifier",
+      "evidence": [
+        "engineering/campaign/VERIFICATION_EVIDENCE.md#live-evidence-session-3-2026-11-13-windows-workstation"
+      ]
+    },
+    "G11": {
+      "status": "PARTIAL",
+      "note": "Agent Foundry page and settings; owner interactive QA outstanding",
+      "evidence": []
+    },
+    "G12": {
+      "status": "VERIFIED",
+      "note": "live scenario E passed",
+      "evidence": [
+        "engineering/campaign/VERIFICATION_EVIDENCE.md#live-evidence-session-3-2026-11-13-windows-workstation"
+      ]
+    },
+    "G13": {
+      "status": "VERIFIED",
+      "note": "A-F passed on real models (run 20261113-110646 and D re-run 20261113-112324)",
+      "evidence": [
+        "engineering/campaign/VERIFICATION_EVIDENCE.md#live-evidence-session-3-2026-11-13-windows-workstation"
+      ]
+    },
+    "G14": {
+      "status": "PARTIAL",
+      "note": "clean-venv release, SBOM, licence audit, install cycle; unsigned; no clean VM",
+      "evidence": []
+    },
+    "G15": {
+      "status": "OPEN",
+      "note": "depends on G1, G6-G9, G11, G14",
+      "evidence": []
+    }
+  },
+  "completed": [
+    {
+      "unit": "Repository takeover and baseline",
+      "commit": "974517c0cf4f293192a289cb419f21654671c39b",
+      "result": "191 passed, 4 skipped; ruff clean"
+    },
+    {
+      "unit": "Increment 1: agentification engine",
+      "commit": "423c296451a5de0062f305a4daac43a363d64bf1",
+      "result": "281 passed, 4 skipped; ruff clean",
+      "files": [
+        "src/ollama_workstation/agentification/",
+        "src/ollama_workstation/agents/runtime.py",
+        "src/ollama_workstation/cli.py",
+        "src/ollama_workstation/config.py",
+        "tests/support/scripted_ollama.py",
+        "tests/conftest.py",
+        "tests/test_verifier_engine.py",
+        "tests/test_harness_qualification.py",
+        "tests/test_runtime_policy.py",
+        "tests/test_agent_service.py",
+        "tests/test_skill_system.py",
+        "tests/test_acceptance_scenarios.py",
+        "tests/test_agentification_cli.py"
+      ]
+    },
+    {
+      "unit": "Increment 2: resource admission and resume-safe time budget",
+      "commit": "0c2c935",
+      "result": "296 passed, 4 skipped; ruff clean",
+      "files": [
+        "src/ollama_workstation/agentification/resources.py",
+        "src/ollama_workstation/agentification/agents.py",
+        "src/ollama_workstation/agentification/commands.py",
+        "src/ollama_workstation/agents/runtime.py",
+        "tests/test_resource_admission.py",
+        "tests/test_run_recovery.py"
+      ]
+    },
+    {
+      "unit": "Delivery of increments 1-2 to the workstation folder",
+      "commit": "0c2c935",
+      "result": "files written into the working tree of the local checkout (branch feat/execution-integrity-v1-1, uncommitted there); git bundle provided"
+    },
+    {
+      "unit": "Session 3: live verification on the workstation and completion work",
+      "commit": "8ffd076",
+      "result": "344 passed, 5 skipped on Windows; 13 live tests passed; ruff clean; live scenarios A-F passed",
+      "files": [
+        "agentification/gate.py",
+        "agents/containment.py",
+        "agents/memory.py",
+        "agentification/foundry.py",
+        "ui/pages/agents.py",
+        "acceptance.py (B, D)",
+        "agents/tools.py (git, guidance)",
+        "agents/verification.py",
+        "packaging/",
+        "scripts/build_release.ps1"
+      ]
+    }
+  ],
+  "active": [],
+  "blockers": [
+    {
+      "blocker": "Pushing to GitHub is an outward-facing action",
+      "resolution": "Owner runs: git push -u origin campaign/complete-agent-v1"
+    }
+  ],
+  "next_action": {
+    "description": "Push the branch, open a PR and confirm hosted CI on Ubuntu and Windows",
+    "command": "git push -u origin campaign/complete-agent-v1",
+    "then": "Fix any Ubuntu-only failure; interactive QA of the Agent Foundry page; then G8 restricted token / AppContainer"
+  },
+  "evidence": {
+    "document": "engineering/campaign/VERIFICATION_EVIDENCE.md",
+    "live_evidence_dir": ".artifacts/campaign/"
+  },
+  "recovery": "engineering/campaign/RECOVERY_PROTOCOL.md"
+}

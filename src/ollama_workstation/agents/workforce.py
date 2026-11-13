@@ -2,19 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
-from ollama_workstation.models.schemas import ModelProfile
-
+from ollama_workstation.models.identity import ROLE_DEFINITIONS
+from ollama_workstation.models.schemas import ModelProfile, ModelRef
 
 ROLE_REQUIREMENTS: dict[str, tuple[str, ...]] = {
-    "software_engineering": ("code_generation", "instruction_following"),
-    "repository_analysis": ("code_comprehension", "long_context"),
-    "workflow_operations": ("tool_calling", "structured_actions"),
-    "research": ("structured_output", "instruction_following", "long_context"),
-    "visual_analysis": ("vision",),
-    "quantitative_analysis": ("mathematics", "reasoning"),
-    "general_assistance": ("instruction_following",),
+    definition.key: definition.capabilities for definition in ROLE_DEFINITIONS
 }
 
 
@@ -34,6 +29,7 @@ class WorkforceMatcher:
 
     @staticmethod
     def rank(role: str, profiles: list[ModelProfile]) -> list[RoleMatch]:
+        """Rank profiles for one canonical role and expose missing evidence."""
         requirements = ROLE_REQUIREMENTS.get(role)
         if requirements is None:
             raise ValueError(f"Unknown workforce role: {role}")
@@ -53,10 +49,95 @@ class WorkforceMatcher:
             fit = sum(adjusted_scores) / len(adjusted_scores)
             completeness = len(observed) / len(requirements)
             fit *= 0.7 + 0.3 * completeness
-            certified_evidence = not missing and all(item.confidence >= 0.7 and item.status == "passed"
-                                                     for item in observed)
+            role_qualified = (
+                profile.agentability_status == "role_qualified"
+                and not missing
+                and all(item.confidence >= 0.7 and item.status == "passed" for item in observed)
+            )
             matches.append(RoleMatch(
                 profile.model_name, profile.professional_title, role, round(fit, 1),
-                len(observed), missing, "evidence-backed" if certified_evidence else "provisional",
+                len(observed), missing, "role-qualified" if role_qualified else "provisional",
             ))
         return sorted(matches, key=lambda item: (item.fit_score, item.evidence_count), reverse=True)
+
+
+@dataclass(frozen=True, slots=True)
+class WorkforceSelection:
+    """A role assignment plus the evidence used to choose it."""
+
+    assignments: dict[str, str]
+    reasons: dict[str, str] = field(default_factory=dict)
+    rejected: dict[str, tuple[str, ...]] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "assignments": dict(self.assignments),
+            "reasons": dict(self.reasons),
+            "rejected": {key: list(value) for key, value in self.rejected.items()},
+        }
+
+
+class WorkforceSelector:
+    """Selects complementary local specialists from observed profiles.
+
+    Selection is deliberately conservative: a profile must have at least one
+    observed role capability. Declared model metadata can route a single model,
+    but it cannot create a specialist assignment without evidence.
+    """
+
+    @staticmethod
+    def select(
+        tasks: list[dict[str, Any]],
+        profiles: list[ModelProfile],
+        installed: list[ModelRef],
+        *,
+        preferred_models: tuple[str, ...] = (),
+    ) -> WorkforceSelection:
+        installed_names = {item.name for item in installed}
+        available_profiles = [
+            profile for profile in profiles
+            if profile.model_name in installed_names
+        ]
+        assignments: dict[str, str] = {}
+        reasons: dict[str, str] = {}
+        rejected: dict[str, tuple[str, ...]] = {}
+        used: set[str] = set()
+        for task in tasks:
+            task_id = str(task.get("task_id") or "")
+            role = str(task.get("role") or "")
+            requirements = ROLE_REQUIREMENTS.get(role)
+            if requirements is None:
+                rejected[task_id] = (f"unknown role: {role}",)
+                continue
+            matches = WorkforceMatcher.rank(role, available_profiles)
+            if not matches:
+                rejected[task_id] = (
+                    "no installed profile has observed evidence for: " + ", ".join(requirements),
+                )
+                continue
+            # Prefer an unused model, then preferred metadata, then fit. The
+            # verifier gets the best distinct profile when one exists.
+            ranked = sorted(
+                matches,
+                key=lambda item: (
+                    item.model_name in used,
+                    item.model_name not in preferred_models,
+                    -item.fit_score,
+                    -item.evidence_count,
+                    item.model_name,
+                ),
+            )
+            chosen = ranked[0]
+            assignments[task_id] = chosen.model_name
+            used.add(chosen.model_name)
+            missing = (", ".join(chosen.missing_capabilities)
+                       or "none")
+            reasons[task_id] = (
+                f"selected {chosen.model_name} for {role}: fit={chosen.fit_score:.1f}, "
+                f"evidence={chosen.evidence_count}, missing={missing}, status={chosen.status}"
+            )
+            rejected[task_id] = tuple(
+                f"{item.model_name}: fit={item.fit_score:.1f}, missing={', '.join(item.missing_capabilities) or 'none'}"
+                for item in ranked[1:]
+            )
+        return WorkforceSelection(assignments, reasons, rejected)

@@ -1,7 +1,10 @@
 """Small QRunnable adapter for keeping blocking operations off the Qt UI thread."""
 from __future__ import annotations
+
 import traceback
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
+
 from PySide6.QtCore import QObject, QRunnable, Signal
 
 
@@ -9,6 +12,7 @@ class WorkerSignals(QObject):
     result = Signal(object)
     error = Signal(str)
     progress = Signal(str)
+    stream = Signal(str, str)
     finished = Signal()
 
 
@@ -21,10 +25,21 @@ class FunctionWorker(QRunnable):
         self.signals = WorkerSignals()
 
     def run(self) -> None:
+        def safe_emit(signal: Signal, value: object) -> None:
+            try:
+                signal.emit(value)
+            except RuntimeError:
+                # The owning window may have been destroyed while a blocking
+                # provider or filesystem operation was still finishing.
+                pass
+
         try:
             result = self.function(*self.args, **self.kwargs)
-            self.signals.result.emit(result)
+            safe_emit(self.signals.result, result)
         except Exception as exc:
-            self.signals.error.emit(f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}")
+            safe_emit(self.signals.error, f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}")
         finally:
-            self.signals.finished.emit()
+            try:
+                self.signals.finished.emit()
+            except RuntimeError:
+                pass
