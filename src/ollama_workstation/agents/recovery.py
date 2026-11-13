@@ -298,8 +298,9 @@ def classify_checkpoint(
     max_age_seconds: int = DEFAULT_MAX_CHECKPOINT_AGE_SECONDS,
 ) -> RecoveryCandidate:
     """Classify an integrity-verified checkpoint for display and eligibility."""
-    payload = checkpoint.get("payload") if isinstance(checkpoint.get("payload"), dict) else {}
-    pending = ()
+    raw_payload = checkpoint.get("payload")
+    payload: dict[str, Any] = raw_payload if isinstance(raw_payload, dict) else {}
+    pending: tuple[str, ...] = ()
     try:
         pending = _pending_names(payload)
     except CheckpointIntegrityError:

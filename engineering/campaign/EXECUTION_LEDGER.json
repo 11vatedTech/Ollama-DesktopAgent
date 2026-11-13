@@ -3,7 +3,7 @@
   "repository": "https://github.com/11vatedTech/Ollama-DesktopAgent",
   "baseline_commit": "974517c0cf4f293192a289cb419f21654671c39b",
   "baseline_branch": "feat/execution-integrity-v1-1",
-  "branch": "campaign/complete-agent-v1",
+  "branch": "campaign/complete-agent-v2",
   "current_commit": "8ffd076",
   "updated_at": "2026-11-13",
   "objectives": [
@@ -16,8 +16,11 @@
   "gates": {
     "G1": {
       "status": "PARTIAL",
-      "note": "pushed with owner approval; hosted CI green on Ubuntu and Windows (3.11, 3.12) and the Windows package workflow green; remaining: merge PRs #1-#3 and this branch to main, mypy debt",
-      "evidence": ["actions/runs/43491738032", "actions/runs/43491747263"]
+      "evidence": [
+        "PR #4 merged (c549c43)",
+        "engineering/campaign/VERIFICATION_EVIDENCE.md#session-4-2026-11-13"
+      ],
+      "note": "PR #4 merged by the owner; PRs #2/#3 have no commits outside main (verified) but closing them was blocked by permissions; strict mypy 0 errors and enforced in CI; remaining: merge campaign/complete-agent-v2, close #2/#3"
     },
     "G2": {
       "status": "VERIFIED",
@@ -48,26 +51,36 @@
       ]
     },
     "G6": {
-      "status": "PARTIAL",
-      "note": "skills used live in scenario A; no live skill A/B evaluation; no authoring UI",
-      "evidence": []
+      "status": "VERIFIED",
+      "evidence": [
+        "engineering/campaign/VERIFICATION_EVIDENCE.md#session-4-2026-11-13"
+      ],
+      "note": "paired sign-test evaluation; live: recover-from-tool-error 7b 0/6->4/6 p=0.06 accepted; content-is-data 14b 1/10->7/10 p=0.016 accepted; authoring and evaluation in the Agent Foundry Skills tab"
     },
     "G7": {
-      "status": "PARTIAL",
-      "note": "live workforce D passed; admission calibrated; no queue/auto-unload/parallelism",
+      "status": "VERIFIED",
       "evidence": [
-        "tests/test_resource_admission.py"
-      ]
+        "engineering/campaign/VERIFICATION_EVIDENCE.md#session-4-2026-11-13",
+        "tests/test_resource_scheduler.py"
+      ],
+      "note": "resource scheduler (reservations, automatic unload, queue); parallel read-only waves; live parallel workforce twice, 3 automatic unloads per run"
     },
     "G8": {
-      "status": "PARTIAL",
-      "note": "Job Object containment with OS tests; no filesystem/network sandbox",
-      "evidence": []
+      "status": "VERIFIED",
+      "evidence": [
+        "engineering/campaign/VERIFICATION_EVIDENCE.md#session-4-2026-11-13",
+        "tests/test_command_sandbox.py"
+      ],
+      "note": "AppContainer + Job Object for every agent command on Windows; real-kernel tests with job-only negative control; live scenario A ran pytest inside the sandbox. Residual: MCP servers and POSIX hosts are not sandboxed"
     },
     "G9": {
       "status": "PARTIAL",
-      "note": "read-only git tools; no web/browser/computer-use tools by policy",
-      "evidence": []
+      "evidence": [
+        "engineering/campaign/VERIFICATION_EVIDENCE.md#session-4-2026-11-13",
+        "tests/test_web_tools.py",
+        "tests/test_web_qualification.py"
+      ],
+      "note": "web research tools behind an egress policy, qualified on an offline test web (14b provisional, web tasks 4/4 on the selected harness), live network test; NOT done: JavaScript browser rendering and computer-use. Deliberately deferred: measured injection obedience (8/10 without mitigation) makes autonomous GUI control unsafe with the installed models; owner decision"
     },
     "G10": {
       "status": "VERIFIED",
@@ -78,8 +91,10 @@
     },
     "G11": {
       "status": "PARTIAL",
-      "note": "Agent Foundry page and settings; owner interactive QA outstanding",
-      "evidence": []
+      "evidence": [
+        "engineering/campaign/VERIFICATION_EVIDENCE.md#session-4-2026-11-13"
+      ],
+      "note": "all 10 pages and 5 Foundry tabs rendered and reviewed; layout defects fixed; owner interactive QA outstanding"
     },
     "G12": {
       "status": "VERIFIED",
@@ -97,13 +112,15 @@
     },
     "G14": {
       "status": "PARTIAL",
-      "note": "clean-venv release, SBOM, licence audit, install cycle; unsigned; no clean VM",
-      "evidence": []
+      "evidence": [
+        "engineering/campaign/VERIFICATION_EVIDENCE.md#session-4-2026-11-13"
+      ],
+      "note": "optional Authenticode signing in the build; release manifest records signing; CI install runs with no Python/dev tools on PATH on a fresh runner VM; remaining: an owner code-signing certificate"
     },
     "G15": {
       "status": "OPEN",
-      "note": "depends on G1, G6-G9, G11, G14",
-      "evidence": []
+      "evidence": [],
+      "note": "depends on G1 (merge), G9 (browser/computer-use decision), G11 (owner QA), G14 (certificate)"
     }
   },
   "completed": [
@@ -166,14 +183,39 @@
         "packaging/",
         "scripts/build_release.ps1"
       ]
+    },
+    {
+      "unit": "Session 4: sandbox, scheduler, web research, skills evaluation, strict typing",
+      "commit": "campaign/complete-agent-v2",
+      "result": "see VERIFICATION_EVIDENCE session 4",
+      "files": [
+        "agents/sandbox.py",
+        "agents/web.py",
+        "agentification/resources.py (scheduler)",
+        "agents/orchestration.py (waves, grounding)",
+        "agentification/harness.py (web tasks)",
+        "agentification/skills.py (sign test, content-is-data)",
+        "ui/pages/agents.py (Skills tab)",
+        "scripts/build_release.ps1 (signing)",
+        ".github/workflows (mypy, clean-machine)"
+      ]
     }
   ],
   "active": [],
-  "blockers": [],
+  "blockers": [
+    {
+      "blocker": "Closing superseded PRs #2/#3 needs the owner's GitHub action",
+      "resolution": "gh pr close 2; gh pr close 3 (both fully contained in main)"
+    },
+    {
+      "blocker": "Code signing needs a certificate",
+      "resolution": "set SIGNING_CERT_THUMBPRINT or SIGNING_PFX_PATH and rebuild"
+    }
+  ],
   "next_action": {
-    "description": "Owner: interactive QA of the Agent Foundry page; open a PR and merge to main",
-    "command": "11vated-Intelligence (open Agent Foundry, Ctrl+0)",
-    "then": "G8 restricted token / AppContainer for executed code"
+    "description": "Owner: merge campaign/complete-agent-v2; interactive QA of Agent Foundry",
+    "command": "gh pr create --base main --head campaign/complete-agent-v2",
+    "then": "decide browser/computer-use scope (G9); supply signing certificate (G14)"
   },
   "evidence": {
     "document": "engineering/campaign/VERIFICATION_EVIDENCE.md",

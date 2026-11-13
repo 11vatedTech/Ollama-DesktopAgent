@@ -351,11 +351,14 @@ class ModelCenterPage(QWidget):
     def _clear_detail(self) -> None:
         while self.detail_layout.count():
             item = self.detail_layout.takeAt(0)
+            if item is None:
+                break
             widget = item.widget()
+            nested = item.layout()
             if widget is not None:
                 widget.deleteLater()
-            elif item.layout() is not None:
-                self._clear_layout(item.layout())
+            elif nested is not None:
+                self._clear_layout(nested)
 
     @staticmethod
     def _clear_layout(layout: Any) -> None:
@@ -615,13 +618,13 @@ class ModelCenterPage(QWidget):
                 f"Modelfile · {profile.model_name}", modelfile
             )) if modelfile else None,
         ]
-        row = QHBoxLayout()
+        action_row = QHBoxLayout()
         for action in actions:
             if action is not None:
-                row.addWidget(action)
+                action_row.addWidget(action)
         if template or modelfile:
-            row.addStretch(1)
-            card.body.addLayout(row)
+            action_row.addStretch(1)
+            card.body.addLayout(action_row)
         else:
             card.body.addWidget(label(
                 "Ollama did not return a template or Modelfile for this artifact. "
@@ -709,6 +712,7 @@ class ModelCenterPage(QWidget):
         self.profile_button.setEnabled(False)
         self.progress.show()
         self.context.set_state("planning", f"Profiling {len(missing)} installed models")
+        worker: FunctionWorker
         worker = FunctionWorker(
             self.context.profiler.profile_inventory,
             names=missing,
@@ -752,6 +756,7 @@ class ModelCenterPage(QWidget):
         self.progress.show()
         self.context.set_state("thinking", f"Profiling {name}")
         repeats = 1
+        worker: FunctionWorker
         worker = FunctionWorker(
             self.context.profiler.profile,
             name,
@@ -802,6 +807,7 @@ class ModelCenterPage(QWidget):
         self.progress.show()
         self.context.set_state("executing", f"Benchmarking {self._selected}")
         runner = BenchmarkRunner(self.context.client, keep_alive=self.context.settings.keep_alive)
+        worker: FunctionWorker
         worker = FunctionWorker(
             runner.run,
             self._selected,
@@ -895,6 +901,7 @@ class ModelCenterPage(QWidget):
         model_name = self._selected
         self.context.set_state("thinking", f"Searching publisher evidence for {model_name}")
         researcher = HuggingFaceResearcher()
+        worker: FunctionWorker
         worker = FunctionWorker(researcher.search_candidates, model_name)
         worker.signals.result.connect(lambda candidates: self._research_candidates(model_name, candidates))
         worker.signals.error.connect(self._operation_failed)
@@ -918,6 +925,7 @@ class ModelCenterPage(QWidget):
             return
         candidate = candidates[labels.index(selected)]
         self.context.set_state("thinking", "Retrieving publisher dossier")
+        worker: FunctionWorker
         worker = FunctionWorker(HuggingFaceResearcher().fetch_model_card, candidate.repository_id)
         worker.signals.result.connect(lambda card: self._attach_card(model_name, card))
         worker.signals.error.connect(self._operation_failed)

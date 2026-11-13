@@ -5,7 +5,7 @@ import traceback
 from collections.abc import Callable
 from typing import Any
 
-from PySide6.QtCore import QObject, QRunnable, Signal
+from PySide6.QtCore import QObject, QRunnable, Signal, SignalInstance
 
 
 class WorkerSignals(QObject):
@@ -25,7 +25,7 @@ class FunctionWorker(QRunnable):
         self.signals = WorkerSignals()
 
     def run(self) -> None:
-        def safe_emit(signal: Signal, value: object) -> None:
+        def safe_emit(signal: SignalInstance, value: object) -> None:
             try:
                 signal.emit(value)
             except RuntimeError:

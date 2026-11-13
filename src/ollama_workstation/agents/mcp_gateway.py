@@ -771,7 +771,8 @@ class MCPToolGateway:
                 "preview": encoded[:self.result_limit_chars],
                 "original_characters": len(encoded),
             }, ensure_ascii=False)
-        return json.loads(encoded)
+        bounded: dict[str, Any] = json.loads(encoded)
+        return bounded
 
 
 def _redact_mcp_value(value: Any, key: str = "") -> Any:

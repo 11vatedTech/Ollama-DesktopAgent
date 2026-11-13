@@ -202,7 +202,8 @@ class LaboratoryPage(QWidget):
         used = gpu.get("memory_used_mib")
         self.vram.set_value(
             used / total * 100 if total and used is not None else None,
-            detail=f"{used / 1024:.1f} / {total / 1024:.1f} GB" if total else "unavailable",
+            detail=(f"{used / 1024:.1f} / {total / 1024:.1f} GB"
+                    if total and used is not None else "unavailable"),
         )
         memory = payload.get("system_memory") or {}
         ram_total = memory.get("total_bytes")

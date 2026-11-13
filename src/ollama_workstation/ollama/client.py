@@ -61,6 +61,10 @@ class OllamaClient:
         models = self._request("GET", "/api/ps").get("models", [])
         return models if isinstance(models, list) else []
 
+    def unload(self, name: str) -> None:
+        """Ask Ollama to evict a resident model now (keep_alive 0)."""
+        self._request("POST", "/api/generate", {"model": name, "keep_alive": 0})
+
     def embed(self, model: str, input_text: str | list[str], *,
               keep_alive: str = "5m") -> list[list[float]]:
         """Return local embedding vectors using Ollama's native /api/embed."""

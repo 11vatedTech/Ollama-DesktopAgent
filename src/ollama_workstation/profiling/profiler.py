@@ -10,6 +10,7 @@ from typing import Any
 from ollama_workstation.models.identity import assign_identity
 from ollama_workstation.models.model_intelligence import inspect_ollama_model
 from ollama_workstation.models.schemas import (
+    AssessmentStatus,
     CapabilityResult,
     Evidence,
     ModelProfile,
@@ -179,7 +180,7 @@ class ModelProfiler:
                          "ollama_digest": model.digest, "probe_profile": "local_low_cost_v1"},
         )
         if run_probes:
-            probes = [
+            probes: list[tuple[str, Callable[[], CapabilityResult]]] = [
                 ("instruction_following", lambda: self._probe_instruction(model_name)),
                 ("structured_output", lambda: self._probe_structured(model_name)),
                 ("structured_actions", lambda: self._probe_structured_actions(model_name)),
@@ -321,7 +322,8 @@ class ModelProfiler:
         passed = sum(item.status == "passed" for item in outcomes)
         attempts = len(outcomes)
         has_partial = any(item.status == "partial" for item in outcomes)
-        status = "passed" if passed == attempts else "partial" if passed or has_partial else "failed"
+        status: AssessmentStatus = (
+            "passed" if passed == attempts else "partial" if passed or has_partial else "failed")
         scored = [item.score for item in outcomes if item.score is not None]
         score = (sum(scored) / len(scored)) if scored else None
         durations = [item.duration_ms for item in outcomes if item.duration_ms is not None]

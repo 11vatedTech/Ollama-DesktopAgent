@@ -258,3 +258,170 @@ class AdmissionController:
         if not decision.admitted:
             raise ResourceDenied(decision)
         return decision
+
+
+class ResourceScheduler:
+    """Admission queue for concurrent model loads in one process.
+
+    ``AdmissionController`` judges one load against the machine as it is now.
+    Concurrent agents need more: two children that each fit alone may not fit
+    together, a model that is reserved but still loading is not yet visible in
+    Ollama's resident list, and a model being used by a running agent must not
+    be evicted to make room for another.
+
+    ``lease(model)`` therefore:
+
+    * subtracts every reserved-but-not-yet-resident model from free VRAM/RAM;
+    * when the load fits only after unloading, unloads resident models that no
+      lease holds (automatic unload), then re-evaluates;
+    * when the models that must go are leased, waits for a release (queue),
+      up to ``timeout``;
+    * refuses a load that cannot fit even with everything unloaded.
+
+    Leases on the same model share it. ``require`` is the gate-compatible
+    entry point: inside a lease held by the calling thread it admits at once,
+    otherwise it falls back to plain admission.
+    """
+
+    def __init__(self, controller: AdmissionController, *,
+                 unload: Callable[[str], None] | None = None,
+                 poll_seconds: float = 0.5,
+                 notify: Callable[[str], None] | None = None) -> None:
+        import threading
+
+        self.controller = controller
+        self.notify = notify or (lambda _message: None)
+        self._unload = unload if unload is not None else getattr(controller.client, "unload", None)
+        self.poll_seconds = poll_seconds
+        self._condition = threading.Condition()
+        self._leases: dict[str, int] = {}
+        self._reserved: dict[str, Footprint] = {}
+        self._local = threading.local()
+        self.unloaded: list[str] = []  # audit trail of automatic unloads
+
+    def _held(self) -> dict[str, int]:
+        held = getattr(self._local, "held", None)
+        if held is None:
+            held = self._local.held = {}
+        return held
+
+    def _evaluate(self, model: str, num_ctx: int | None) -> AdmissionDecision:
+        resident = self.controller.resident()
+        resident_names = {item.name for item in resident}
+        host = HostResources.from_snapshot(self.controller._snapshot())  # noqa: SLF001
+        pending = sum(footprint.total_bytes for name, footprint in self._reserved.items()
+                      if name not in resident_names and name != model)
+        if pending:
+            host = _minus(host, pending)
+        footprint = self.controller.footprint(model, num_ctx)
+        # A resident model that a lease holds cannot be counted as reclaimable.
+        return decide(model, footprint, host, resident)
+
+    def acquire(self, model: str, num_ctx: int | None = None, *, timeout: float = 600.0,
+                cancel_event: Any | None = None) -> AdmissionDecision:
+        import time
+
+        deadline = time.monotonic() + max(0.0, timeout)
+        attempted_unload: set[str] = set()
+        with self._condition:
+            while True:
+                if model in self._leases:
+                    decision = AdmissionDecision(model, ADMIT, ("shares a model another agent holds",),
+                                                 0, self._reserved.get(model), 0, None)
+                    break
+                decision = self._evaluate(model, num_ctx)
+                blocked_by_leases = decision.outcome == DENY and bool(self._leases)
+                if decision.outcome == DENY and not blocked_by_leases:
+                    raise ResourceDenied(decision)  # cannot fit even with nothing else loaded
+                if decision.outcome not in (ADMIT_AFTER_UNLOAD, DENY):
+                    break
+                idle = [name for name in decision.unload_candidates
+                        if name not in self._leases and name not in attempted_unload]
+                if idle and self._unload is not None:
+                    for name in idle:
+                        attempted_unload.add(name)
+                        try:
+                            self._unload(name)
+                            self.unloaded.append(name)
+                            self.notify(f"unloaded idle model {name} to admit {model}")
+                        except Exception as exc:  # noqa: BLE001 - re-evaluation decides next
+                            self.notify(f"could not unload {name}: {exc}")
+                    continue
+                if not blocked_by_leases and not any(
+                        name in self._leases for name in decision.unload_candidates):
+                    break  # nothing leased stands in the way; Ollama evicts on load
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or (cancel_event is not None and cancel_event.is_set()):
+                    raise ResourceDenied(AdmissionDecision(
+                        model, DENY,
+                        (*decision.reasons,
+                         f"waited {timeout:.0f}s for leased models to be released: "
+                         + ", ".join(sorted(self._leases))),
+                        decision.required_bytes, decision.footprint, decision.vram_free_bytes,
+                        decision.ram_usable_bytes, decision.unload_candidates, decision.resident))
+                if not getattr(self._local, "announced_wait", False):
+                    self._local.announced_wait = True
+                    self.notify(f"{model} queued: waiting for "
+                                + ", ".join(sorted(self._leases)) + " to be released")
+                self._condition.wait(min(self.poll_seconds, remaining))
+            self._local.announced_wait = False
+            self._leases[model] = self._leases.get(model, 0) + 1
+            if decision.footprint is not None:
+                self._reserved.setdefault(model, decision.footprint)
+            held = self._held()
+            held[model] = held.get(model, 0) + 1
+        return decision
+
+    def release(self, model: str) -> None:
+        with self._condition:
+            count = self._leases.get(model, 0) - 1
+            if count <= 0:
+                self._leases.pop(model, None)
+                self._reserved.pop(model, None)
+            else:
+                self._leases[model] = count
+            held = self._held()
+            if held.get(model, 0) <= 1:
+                held.pop(model, None)
+            else:
+                held[model] -= 1
+            self._condition.notify_all()
+
+    def lease(self, model: str, num_ctx: int | None = None, *, timeout: float = 600.0,
+              cancel_event: Any | None = None) -> Any:
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _lease() -> Any:
+            decision = self.acquire(model, num_ctx, timeout=timeout, cancel_event=cancel_event)
+            try:
+                yield decision
+            finally:
+                self.release(model)
+
+        return _lease()
+
+    def active(self) -> dict[str, int]:
+        with self._condition:
+            return dict(self._leases)
+
+    def require(self, model: str, num_ctx: int | None = None) -> AdmissionDecision:
+        if self._held().get(model):
+            return AdmissionDecision(model, ADMIT, ("reserved by the resource scheduler",),
+                                     0, self._reserved.get(model), 0, None)
+        return self.controller.require(model, num_ctx)
+
+
+def _minus(host: HostResources, reserved: int) -> HostResources:
+    """Host resources with ``reserved`` bytes already spoken for (VRAM first, then RAM)."""
+    gpus = list(host.gpus)
+    left = reserved
+    adjusted: list[GpuState] = []
+    for gpu in gpus:
+        take = min(left, gpu.free_bytes)
+        adjusted.append(GpuState(gpu.name, gpu.total_bytes, gpu.free_bytes - take))
+        left -= take
+    available = host.ram_available_bytes
+    if left and available is not None:
+        available = max(0, available - left)
+    return HostResources(host.ram_total_bytes, available, tuple(adjusted))

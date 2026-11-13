@@ -11,7 +11,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Event
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from ollama_workstation.agents.execution_lease import (
     ExecutionLease,
@@ -448,9 +448,9 @@ class AgentRuntime:
                 candidate = _sanitize_event_value([*pinned, *tail])
                 encoded = json.dumps(candidate, ensure_ascii=False, default=str)
                 if len(encoded) <= self.MAX_CHECKPOINT_CHARS:
-                    return candidate
+                    return cast(list[dict[str, Any]], candidate)
                 tail.pop(0)
-            return _sanitize_event_value(pinned)
+            return cast(list[dict[str, Any]], _sanitize_event_value(pinned))
 
         def persist_checkpoint(
             state: str,

@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased — Complete Agent campaign, session 4 (2026-11-13)
+
+- **Command sandbox (AppContainer).** On Windows every agent command now runs in an AppContainer inside its Job Object: write access to the agent workspace only, read access to the executable's runtime folders, no network and no loopback. Fail-closed; real-kernel tests with a job-only negative control. `11vated sandbox status|revoke` lists and removes folder grants; Settings switch `command_sandbox`. Live scenario A (model runs pytest) passed inside the sandbox.
+- **Resource scheduler and parallel workforces.** Concurrent model loads take scheduler leases that count reserved-but-loading models, unload idle models automatically and queue behind models other agents hold. Ready read-only workforce tasks run in parallel up to `max_parallel` (`workforce run --parallel N`); writers run alone. Live: two reviewers in parallel on qwen2.5-coder:7b, writer on 14b, three automatic unloads per run, host-verified figures.
+- **Grounding rule.** A read-only research task with no artifact check completes only if the agent actually observed the workspace. Found live: a reviewer that never read its file was counted complete and the writer invented its figures.
+- **Web research behind an egress policy.** `web_search` and `web_fetch` per agent (`--web`, `--web-domain`, Agent Foundry), https only, public addresses only (DNS-checked, every redirect re-checked), domain allow-list or per-session approval, size/type limits, untrusted marking and redaction. Qualification gained an offline test web and two web tasks (research, web injection) that run only for web catalogues, so every existing qualification keeps its suite fingerprint (verified against the stored records). Live: qwen2.5-coder:14b provisional on the web catalogue, web tasks 4/4 on the selected harness.
+- **Skill evaluation with a significance rule.** Paired with/without trials now need a one-sided sign test p <= 0.1 to count as improved (`inconclusive` otherwise). Live: `recover-from-tool-error` on 7b 0/6 -> 4/6 (p=0.06, accepted); the new built-in `content-is-data` on 14b 1/10 -> 7/10 (p=0.016, accepted), cutting injection obedience from 8/10 to 3/10. Web agents pin it automatically.
+- **Agent Foundry Skills tab** (author, publish, evaluate), web permission and offline-web qualification; qualified models listed first; layout fixes from a rendered visual review.
+- **Strict mypy clean** (134 errors -> 0), now enforced in CI. Fixed on the way: a button attribute overwrote the Integration Hub's `test_runtime` method; VRAM gauges crashed when the GPU reported a total but no used figure.
+- **Release**: optional code signing (`SIGNING_CERT_THUMBPRINT` or `SIGNING_PFX_PATH`), `release-manifest.json` records signing state; the CI install test runs the installed app with no Python or developer tools on PATH. The `OLLAMA_WORKSTATION_OLLAMA_URL` override is honoured only for loopback hosts unless `allow_remote_ollama` is set.
+
 ## Unreleased — Complete Agent campaign, session 3 (2026-11-13)
 
 First session on the Windows workstation with a live Ollama (0.40.16, RTX 5070 Ti Laptop 12 GiB).

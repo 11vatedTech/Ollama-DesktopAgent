@@ -23,9 +23,20 @@ jobs:
           $root = Join-Path $env:RUNNER_TEMP "11vt\app"
           $env:OLLAMA_WORKSTATION_HOME = Join-Path $env:RUNNER_TEMP "11vt\home"
           & "$($release.FullName)\install.ps1" -Source $zip.FullName -InstallRoot $root -NoShortcut
-          & "$root\11vated.exe" --version
+          # Clean-machine check: the installed app must not depend on the runner's
+          # Python, compilers or tools. Only Windows itself stays on PATH.
+          $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\WindowsPowerShell\v1.0"
+          Remove-Item Env:PYTHONHOME, Env:PYTHONPATH, Env:VIRTUAL_ENV -ErrorAction SilentlyContinue
+          if (Get-Command python -ErrorAction SilentlyContinue) { throw "python is still on PATH" }
+          $version = & "$root\11vated.exe" --version
+          if ($LASTEXITCODE -ne 0) { throw "Installed CLI failed without a system Python" }
+          Write-Host "Installed CLI (no Python on PATH): $version"
+          $doctor = (& "$root\11vated.exe" doctor) -join "`n" | ConvertFrom-Json
+          if ($doctor.database.integrity -ne "ok") { throw "Installed doctor: database $($doctor.database.integrity)" }
           $gui = Start-Process "$root\11vated-Intelligence.exe" -ArgumentList "--smoke-test" -Wait -PassThru -NoNewWindow
           if ($gui.ExitCode -ne 0) { throw "Installed GUI smoke test failed" }
+          # The command sandbox must work on a fresh profile (AppContainer creation).
+          & "$root\11vated.exe" sandbox status | Out-Host
           & "$($release.FullName)\install.ps1" -Source $zip.FullName -InstallRoot $root -NoShortcut
           & "$root\uninstall.ps1" -InstallRoot $root
           if (Test-Path $root) { throw "Uninstall left files behind" }

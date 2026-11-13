@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+from functools import partial
 from typing import Any
 
 from PySide6.QtCore import Qt
@@ -112,8 +113,9 @@ class IntegrationHubPage(QWidget):
             "Tool policy: model requests are validated host-side. Ollama itself has no filesystem grant.",
             "Faint", wrap=True,
         ), 1)
-        self.test_runtime = button("Test runtime", variant="Secondary", on_click=self.test_runtime)
-        row.addWidget(self.test_runtime)
+        self.test_runtime_button = button("Test runtime", variant="Secondary",
+                                          on_click=self.test_runtime)
+        row.addWidget(self.test_runtime_button)
         card.body.addLayout(row)
         return card
 
@@ -181,6 +183,8 @@ class IntegrationHubPage(QWidget):
     def _render_servers(self) -> None:
         while self.server_layout.count():
             item = self.server_layout.takeAt(0)
+            if item is None:
+                break
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
@@ -220,7 +224,7 @@ class IntegrationHubPage(QWidget):
         top.addWidget(status)
         test = button(
             "Test connection", variant="Ghost",
-            on_click=lambda checked=False, spec=spec, raw=raw: self.test_server(spec, raw),
+            on_click=partial(self.test_server, spec, raw),
         )
         test.setEnabled(spec.enabled)
         top.addWidget(test)
@@ -238,7 +242,7 @@ class IntegrationHubPage(QWidget):
         return row
 
     def test_runtime(self) -> None:
-        self.test_runtime.setEnabled(False)
+        self.test_runtime_button.setEnabled(False)
         self.runtime_pill.setText("TESTING")
         self.runtime_pill.set_tone("cyan")
 
@@ -253,7 +257,7 @@ class IntegrationHubPage(QWidget):
         worker = FunctionWorker(task)
         worker.signals.result.connect(self._runtime_tested)
         worker.signals.error.connect(self._test_failed)
-        worker.signals.finished.connect(lambda: self.test_runtime.setEnabled(True))
+        worker.signals.finished.connect(lambda: self.test_runtime_button.setEnabled(True))
         self.context.pool.start(worker)
 
     def _runtime_tested(self, payload: dict[str, Any]) -> None:

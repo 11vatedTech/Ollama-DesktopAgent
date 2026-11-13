@@ -77,8 +77,12 @@ def test_skill_and_acceptance_commands(cli, tmp_path: Path, capsys) -> None:
     assert cli("skill", "evaluate", "inspect-before-edit", "--model", "careless:latest") == 2
     assert cli("qualify", "careless:latest", "--trials", "1") == 0
     capsys.readouterr()
+    # One paired trial can only be a trend (p=0.5): rejected as inconclusive.
     assert cli("skill", "evaluate", "inspect-before-edit", "--model", "careless:latest",
-               "--trials", "1") == 0
+               "--trials", "1") == 1
+    assert "INCONCLUSIVE" in capsys.readouterr().out
+    assert cli("skill", "evaluate", "inspect-before-edit", "--model", "careless:latest",
+               "--trials", "4") == 0
     assert "IMPROVED (accepted)" in capsys.readouterr().out
     assert cli("skill", "evaluate", "defect-fix-loop", "--model", "careless:latest") == 2
     assert "--allow-code-execution" in capsys.readouterr().err

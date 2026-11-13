@@ -518,7 +518,7 @@ class CommandCenterPage(QWidget):
             vram_percent,
             detail=(
                 f"{used_vram / 1024:.1f} / {total_vram / 1024:.1f} GB"
-                if total_vram else "unavailable"
+                if total_vram and used_vram is not None else "unavailable"
             ),
         )
         used = gpu.get("memory_used_mib")

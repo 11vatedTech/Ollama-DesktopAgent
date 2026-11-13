@@ -71,26 +71,25 @@ class _CpuSampler:
                 return None
             idle, kernel, user = times
             total = kernel + user
-            current = (idle, total)
-            previous = self._last
-            self._last = current
-            if previous is None:
+            sample = (idle, total)
+            last = self._last
+            self._last = sample
+            if last is None:
                 return None
-            idle_delta = current[0] - previous[0]
-            total_delta = current[1] - previous[1]
+            idle_delta = sample[0] - last[0]
+            total_delta = sample[1] - last[1]
             if total_delta <= 0:
                 return None
             return max(0.0, min(100.0, (1.0 - idle_delta / total_delta) * 100.0))
-        times = self._linux_times()
-        if times is None:
+        linux_times = self._linux_times()
+        if linux_times is None:
             return None
-        current = times
         previous = self._last
-        self._last = current
+        self._last = linux_times
         if previous is None:
             return None
-        idle_delta = current[0] - previous[0]
-        total_delta = current[1] - previous[1]
+        idle_delta = linux_times[0] - previous[0]
+        total_delta = linux_times[1] - previous[1]
         if total_delta <= 0:
             return None
         return max(0.0, min(100.0, (1.0 - idle_delta / total_delta) * 100.0))

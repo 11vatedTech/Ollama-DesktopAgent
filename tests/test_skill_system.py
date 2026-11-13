@@ -27,7 +27,7 @@ def test_builtin_skills_are_valid_complete_contracts() -> None:
     skills = builtin_skills()
     assert {s.skill_id for s in skills} == {
         "inspect-before-edit", "recover-from-tool-error", "defect-fix-loop",
-        "evidence-backed-report"}
+        "evidence-backed-report", "content-is-data"}
     for skill in skills:
         assert skill.purpose and skill.input_contract and skill.output_contract
         assert skill.procedure and skill.validation_criteria and skill.test_cases
@@ -57,7 +57,7 @@ def test_invalid_skills_are_rejected(changes: dict, message: str) -> None:
 
 def test_publishing_versions_preserves_history_and_retirement_is_per_version(store) -> None:
     registry = SkillRegistry(store)
-    assert len(registry.install_builtins()) == 4 and registry.install_builtins() == []
+    assert len(registry.install_builtins()) == 5 and registry.install_builtins() == []
     first = registry.publish(_payload())
     second = registry.publish(_payload(purpose="a sharper purpose"))
     assert (first.version, second.version) == (1, 2)
@@ -90,9 +90,15 @@ def test_improvement_loop_accepts_a_skill_only_on_measured_evidence(client, repo
     evaluator = SkillEvaluator(lab, store)
     skills = {s.skill_id: s for s in builtin_skills()}
     careless = make_profile(client, repository, "careless:latest")
+    # 2/2 discordant pairs in favour is p=0.25: a trend, not evidence (R8).
+    trend = evaluator.evaluate("careless:latest", careless, "native_tools",
+                               skills["inspect-before-edit"], trials=2)
+    assert (trend.baseline_passed, trend.skill_passed, trend.attempts) == (0, 2, 2)
+    assert trend.outcome == "inconclusive" and not trend.accepted
+    assert (trend.helped, trend.hurt, trend.p_value) == (2, 0, 0.25)
     improved = evaluator.evaluate("careless:latest", careless, "native_tools",
-                                  skills["inspect-before-edit"], trials=2)
-    assert (improved.baseline_passed, improved.skill_passed, improved.attempts) == (0, 2, 2)
+                                  skills["inspect-before-edit"], trials=4)
+    assert (improved.helped, improved.hurt, improved.p_value) == (4, 0, 0.0625)
     assert improved.outcome == "improved" and improved.accepted
     capable = make_profile(client, repository, "native-pro:latest")
     neutral = evaluator.evaluate("native-pro:latest", capable, "native_tools",
@@ -103,7 +109,7 @@ def test_improvement_loop_accepts_a_skill_only_on_measured_evidence(client, repo
                                  skills["recover-from-tool-error"], trials=1)
     assert useless.outcome == "no_evidence" and not useless.accepted
     saved = store.list_skill_evaluations("inspect-before-edit")
-    assert [item["outcome"] for item in saved] == ["improved", "neutral"]
+    assert [item["outcome"] for item in saved] == ["inconclusive", "improved", "neutral"]
     arms = {item["arm"] for item in saved[0]["attempts_detail"]}
     assert arms == {"baseline", "skill"}
     assert len({item["seed"] for item in saved[0]["attempts_detail"]}) == 2  # same seeds per arm
@@ -121,3 +127,12 @@ def test_skill_tests_that_execute_code_stay_blocked_until_opted_in(client, repos
         "native-pro:latest", profile, "native_tools", skill, trials=1,
         tool_factory=shell_tool_factory)
     assert allowed.skill_passed == 1 and allowed.outcome == "neutral"
+
+
+def test_sign_test_matches_exact_binomial_tail() -> None:
+    from ollama_workstation.agentification.skills import sign_test_p
+
+    assert sign_test_p(0, 0) == 1.0
+    assert sign_test_p(3, 0) == 0.125
+    assert sign_test_p(5, 1) == 7 / 64
+    assert sign_test_p(1, 5) == 63 / 64

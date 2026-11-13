@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import hashlib
 import json
 import os
@@ -15,7 +16,11 @@ from typing import Any
 from ollama_workstation import __version__
 from ollama_workstation.agentification import commands as agentification_commands
 from ollama_workstation.agentification.gate import ExecutionRefused, clear_repository_run
-from ollama_workstation.agentification.resources import ResourceDenied
+from ollama_workstation.agentification.resources import (
+    AdmissionController,
+    ResourceDenied,
+    ResourceScheduler,
+)
 from ollama_workstation.agents.binding import validate_installed_model_binding
 from ollama_workstation.agents.execution_lease import LeaseError
 from ollama_workstation.agents.identity_package import export_identity_package
@@ -30,10 +35,10 @@ from ollama_workstation.agents.orchestration import (
 from ollama_workstation.agents.process_identity import current_process_identity
 from ollama_workstation.agents.recovery import load_recovery_candidates
 from ollama_workstation.agents.runtime import AgentEvent, AgentResult, AgentRuntime
-from ollama_workstation.agents.tools import WorkspaceTools
+from ollama_workstation.agents.tools import WorkspaceTools, configure_command_sandbox
 from ollama_workstation.agents.workforce import WorkforceSelector
 from ollama_workstation.benchmarking.runner import BenchmarkRunner
-from ollama_workstation.config import AppPaths, load_settings
+from ollama_workstation.config import AppPaths, is_loopback_url, load_settings
 from ollama_workstation.models.routing import ModelRouter, RoutingRequest
 from ollama_workstation.models.schemas import ModelProfile
 from ollama_workstation.observability import configure_logging, log_event
@@ -50,7 +55,14 @@ def _services() -> tuple[Any, Any, Any, Any]:
     settings = load_settings(paths.config_file)
     base_url = os.environ.get("OLLAMA_WORKSTATION_OLLAMA_URL", "").strip()
     if base_url:
-        settings.ollama_base_url = base_url
+        if is_loopback_url(base_url) or settings.allow_remote_ollama:
+            settings.ollama_base_url = base_url
+        else:
+            # An inherited environment variable must not silently send prompts,
+            # files and tool results to another machine (R10).
+            print("Ignoring OLLAMA_WORKSTATION_OLLAMA_URL: it is not a loopback address and "
+                  "allow_remote_ollama is off in settings.", file=sys.stderr)
+    configure_command_sandbox(settings.command_sandbox)
     client = OllamaClient(settings.ollama_base_url, settings.request_timeout_seconds)
     return paths, settings, client, Repository(paths.database_file)
 
@@ -69,6 +81,7 @@ def _execute_agent(
     event: Callable[[AgentEvent], None],
     lease_owner: str | None = None,
     allow_unqualified: bool = False,
+    web_domains: tuple[str, ...] | None = None,
 ) -> AgentResult:
     """Run or resume one bounded agent with the same host-tool policy.
 
@@ -78,9 +91,16 @@ def _execute_agent(
     def approve(description: str) -> bool:
         return input(f"APPROVAL REQUIRED: {description}\nAllow? [y/N] ").strip().lower() == "y"
 
+    web = None
+    if web_domains is not None:
+        from ollama_workstation.agents.web import EgressPolicy, WebAccess
+
+        web = WebAccess(EgressPolicy(enabled=True, approval=approve,
+                                     allowed_domains=(*settings.web_allowed_domains, *web_domains)),
+                        search_provider=settings.web_search_provider)
     workspace_tools = WorkspaceTools(
         workspace, allow_shell=settings.allow_shell_tools,
-        allowed_commands=settings.allowed_commands, approval=approve,
+        allowed_commands=settings.allowed_commands, approval=approve, web=web,
     )
     with MCPToolGateway(settings.mcp_servers) as mcp_gateway:
         tools = CompositeToolRegistry(workspace_tools, mcp_gateway)
@@ -198,12 +218,16 @@ def _recover(args: argparse.Namespace, settings: Any, client: Any,
     return 0 if result.status == "completed" else 1
 
 
-def _workforce_gate(client: Any, repository: Repository, settings: Any) -> Callable[..., Any]:
-    """Execution gate for workforce child runs (qualification + admission)."""
+def _workforce_gate(client: Any, repository: Repository, settings: Any,
+                    scheduler: Any | None = None) -> Callable[..., Any]:
+    """Execution gate for workforce child runs (qualification + admission).
+
+    With a ResourceScheduler, admission is the child's scheduler lease."""
     def gate(model: str, digest: str, definitions: list[dict[str, Any]]) -> Any:
         clearance, policy = clear_repository_run(
             client, repository, model_name=model, model_digest=digest,
             tool_definitions=definitions, allow_unqualified=settings.allow_unqualified_models,
+            admission=scheduler,
         )
         print(f"[gate] {clearance.summary()}", file=sys.stderr)
         return policy
@@ -294,12 +318,12 @@ def _workforce(args: argparse.Namespace, settings: Any, client: Any,
         by_name = {profile.model_name: profile for profile in profiles}
         for task in plan.tasks:
             model_name = selection.assignments[task.task_id]
-            profile = by_name.get(model_name)
-            if profile is None:
+            selected_profile = by_name.get(model_name)
+            if selected_profile is None:
                 print(f"Selected model {model_name!r} has no saved profile.", file=sys.stderr)
                 return 2
             assignments[task.task_id] = AgentAssignment(
-                task.task_id, model_name, profile, task.read_only
+                task.task_id, model_name, selected_profile, task.read_only
             )
         print(json.dumps(selection.to_dict(), indent=2), file=sys.stderr)
 
@@ -322,9 +346,15 @@ def _workforce(args: argparse.Namespace, settings: Any, client: Any,
         print("A workforce run with this identifier is already active.", file=sys.stderr)
         return 2
     try:
+        scheduler = ResourceScheduler(
+            AdmissionController(client),
+            notify=lambda message: print(f"[scheduler] {message}", file=sys.stderr))
+        if getattr(args, "parallel", 1) > 1:
+            plan = dataclasses.replace(plan, max_parallel=args.parallel)
         result = WorkforceOrchestrator(
             client, repository, keep_alive=settings.keep_alive,
-            execution_gate=_workforce_gate(client, repository, settings),
+            execution_gate=_workforce_gate(client, repository, settings, scheduler),
+            resource_scheduler=scheduler,
         ).run(
             plan, args.workspace, assignments, run_id=run_id,
             approval=approve, installed_models=installed, owner_id=owner_id,
@@ -372,6 +402,36 @@ def _route(args: argparse.Namespace, settings: Any, client: Any,
     )
     print(json.dumps(decision.to_dict(), indent=2, ensure_ascii=False))
     return 0 if decision.selected is not None else 2
+
+
+def _sandbox(args: Any, settings: Any) -> int:
+    from ollama_workstation.agents import sandbox
+
+    if not sandbox.sandbox_supported():
+        print(json.dumps({"supported": False, "mode": settings.command_sandbox}))
+        return 0
+    ledger = sandbox.GrantLedger.default()
+    entries = ledger.entries()
+    if args.action == "status":
+        profile = sandbox.AppContainerProfile.shared()
+        print(json.dumps({
+            "supported": True, "mode": settings.command_sandbox,
+            "profile": sandbox.PROFILE_NAME, "sid": profile.sid_string,
+            "grants": [{**item, "exists": Path(item["path"]).exists()} for item in entries],
+        }, indent=2))
+        return 0
+    targets = {str(Path(p).resolve()) for p in args.paths} if args.paths else {
+        item["path"] for item in entries}
+    profile = sandbox.AppContainerProfile.shared()
+    revoked = []
+    for target in sorted(targets):
+        if Path(target).exists():
+            profile.revoke(Path(target))
+        else:
+            ledger.forget(target)
+        revoked.append(target)
+    print(json.dumps({"revoked": revoked}, indent=2))
+    return 0
 
 
 def _doctor(settings: Any, client: Any, repository: Repository) -> int:
@@ -458,6 +518,10 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("workspace", type=Path)
     run.add_argument("task")
     run.add_argument("--max-steps", type=int, default=12)
+    run.add_argument("--web", action="store_true",
+                     help="Grant web_search and web_fetch through the egress policy")
+    run.add_argument("--web-domain", action="append", default=[], metavar="DOMAIN",
+                     help="Pre-approve a web domain (repeatable); others prompt once")
     run.add_argument("--unqualified", action="store_true",
                      help="Operator override: run even though the model has no harness qualification")
     recover = commands.add_parser(
@@ -486,6 +550,8 @@ def build_parser() -> argparse.ArgumentParser:
     workforce_run.add_argument("--yes", action="store_true",
                                help="Pre-approve this plan and its marked tasks")
     workforce_run.add_argument("--json", action="store_true", help="Print the full result JSON")
+    workforce_run.add_argument("--parallel", type=int, default=1, choices=range(1, 9),
+                               metavar="N", help="Run up to N ready read-only tasks at once")
     workforce_run.add_argument(
         "--profile-probes", action="store_true",
         help="Run empirical smoke probes when creating a missing profile",
@@ -501,6 +567,10 @@ def build_parser() -> argparse.ArgumentParser:
     route.add_argument("--require-verified", action="store_true",
                        help="Require an observed capability score, not declared metadata")
     commands.add_parser("doctor", help="Emit local diagnostics and database integrity status")
+    sandbox_parser = commands.add_parser(
+        "sandbox", help="List or revoke the folders the command sandbox was granted")
+    sandbox_parser.add_argument("action", choices=("status", "revoke"))
+    sandbox_parser.add_argument("paths", nargs="*", help="Folders to revoke (default: all)")
     agentification_commands.register(commands)
     return parser
 
@@ -532,6 +602,8 @@ def main(argv: list[str] | None = None) -> int:
             return _route(args, settings, client, repository)
         if args.command == "doctor":
             return _doctor(settings, client, repository)
+        if args.command == "sandbox":
+            return _sandbox(args, settings)
         if args.command == "models":
             print(json.dumps([{"name": x.name, "size_bytes": x.size_bytes,
                                "digest": x.digest, "details": x.details}
@@ -678,6 +750,7 @@ def main(argv: list[str] | None = None) -> int:
                 max_steps=args.max_steps, resume_checkpoint=None,
                 event=lambda item: print(f"[{item.kind}] {item.message}", file=sys.stderr),
                 allow_unqualified=args.unqualified,
+                web_domains=tuple(args.web_domain) if args.web else None,
             )
             safe_message, redacted_count = WorkspaceTools.redact_sensitive_text(result.final_message)
             if redacted_count:

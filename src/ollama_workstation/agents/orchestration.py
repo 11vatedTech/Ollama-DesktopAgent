@@ -8,6 +8,7 @@ single-agent runtime; delegation never grants extra privileges.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import time
@@ -15,7 +16,7 @@ import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from threading import Event, Thread
+from threading import Event, RLock, Thread
 from typing import Any, Literal
 
 from ollama_workstation.agents.binding import validate_installed_model_binding
@@ -138,8 +139,13 @@ class WorkforcePlan:
     max_wall_seconds: float = 1_800.0
     require_approval: bool = True
     plan_version: int = 1
+    # Ready read-only tasks may run concurrently up to this many children; a
+    # task that can write runs alone so children never race on the workspace.
+    max_parallel: int = 1
 
     def validate(self) -> None:
+        if self.max_parallel < 1 or self.max_parallel > 8:
+            raise ValueError("max_parallel must be between 1 and 8")
         if not self.objective.strip():
             raise ValueError("Workforce objective cannot be empty")
         if not self.tasks:
@@ -212,6 +218,7 @@ class WorkforcePlan:
             "max_total_steps": self.max_total_steps,
             "max_wall_seconds": self.max_wall_seconds,
             "require_approval": self.require_approval,
+            "max_parallel": self.max_parallel,
         }
 
     @classmethod
@@ -227,6 +234,7 @@ class WorkforcePlan:
             max_wall_seconds=max(1.0, min(float(payload.get("max_wall_seconds") or 1_800), 86_400)),
             require_approval=bool(payload.get("require_approval", True)),
             plan_version=int(payload.get("plan_version") or 1),
+            max_parallel=max(1, min(int(payload.get("max_parallel") or 1), 8)),
         )
         plan.validate()
         return plan
@@ -306,7 +314,8 @@ class ReadOnlyWorkspaceTools(WorkspaceTools):
 
     @staticmethod
     def _tool_name(item: dict[str, Any]) -> str:
-        function = item.get("function") if isinstance(item.get("function"), dict) else {}
+        raw = item.get("function")
+        function: dict[str, Any] = raw if isinstance(raw, dict) else {}
         return str(function.get("name") or "")
 
 
@@ -426,8 +435,13 @@ class WorkforceOrchestrator:
         keep_alive: str = "5m",
         tool_factory: Callable[[Path, bool], WorkspaceTools] | None = None,
         execution_gate: Callable[[str, str, list[dict[str, Any]]], Any] | None = None,
+        resource_scheduler: Any | None = None,
     ) -> None:
         self.client = client
+        # Optional agentification.resources.ResourceScheduler: each child holds a
+        # model lease for its whole run, so concurrent children queue for memory
+        # and idle models are unloaded instead of over-committing the GPU.
+        self.resource_scheduler = resource_scheduler
         # Production callers pass the shared execution gate
         # (agentification.gate.clear_repository_run): it refuses a child whose
         # model is unqualified or does not fit in RAM/VRAM, and returns the
@@ -549,7 +563,15 @@ class WorkforceOrchestrator:
         workspace.mkdir(parents=True, exist_ok=True)
         events: list[AgentEvent] = []
 
+        # Parallel children report concurrently; one lock keeps the trace and the
+        # durable hash-chained event log in a single order.
+        record_lock = RLock()
+
         def record(kind: str, message: str, **data: Any) -> None:
+            with record_lock:
+                _record(kind, message, **data)
+
+        def _record(kind: str, message: str, **data: Any) -> None:
             safe_message = redact_text(message)
             safe_data = redact_data(data) if isinstance(data, dict) else {}
             item = AgentEvent(kind, safe_message, safe_data)
@@ -617,149 +639,97 @@ class WorkforceOrchestrator:
         total_steps = 0
         remaining_steps = plan.max_total_steps
 
-        for task_id in plan.topological_order():
-            task = plan.task_map()[task_id]
-            assignment = assignments[task_id]
-            if workspace_admission is not None:
-                try:
-                    workspace_admission.check()
-                except LeaseLost as exc:
-                    return self._finish(
-                        identifier, plan, executions, "failed",
-                        "Workforce stopped because workspace admission was lost.",
-                        started, False, str(exc), record,
-                    )
-            if cancel_event is not None and cancel_event.is_set():
-                execution = self._blocked(task, "cancelled", "Workforce cancellation acknowledged.")
-                executions.append(execution)
-                results_by_id[task_id] = execution
-                status_by_id[task_id] = "cancelled"
-                self._save_task(identifier, task, execution)
-                continue
-            if time.monotonic() - started_monotonic > plan.max_wall_seconds:
-                execution = self._blocked(task, "timed_out", "Workforce wall-clock budget exhausted.")
-                executions.append(execution)
-                results_by_id[task_id] = execution
-                status_by_id[task_id] = "timed_out"
-                self._save_task(identifier, task, execution)
-                continue
-            failed_dependencies = [
-                dep for dep in task.depends_on
-                if status_by_id.get(dep) not in {"completed"}
-            ]
-            if failed_dependencies:
-                execution = self._blocked(
-                    task, "blocked",
-                    "Blocked by dependency status: " + ", ".join(
-                        f"{dep}={status_by_id.get(dep, 'pending')}" for dep in failed_dependencies
-                    ),
-                )
-                executions.append(execution)
-                results_by_id[task_id] = execution
-                status_by_id[task_id] = "blocked"
-                self._save_task(identifier, task, execution)
-                record("task_blocked", execution.error, task_id=task.task_id)
-                continue
-            if task.requires_approval and approval is not None:
-                if not approval(f"Task {task.task_id}: {task.objective}"):
-                    execution = self._blocked(task, "rejected", "Task approval was not granted.")
-                    executions.append(execution)
-                    results_by_id[task_id] = execution
-                    status_by_id[task_id] = "rejected"
-                    self._save_task(identifier, task, execution)
-                    continue
-            if remaining_steps <= 0:
-                execution = self._blocked(task, "blocked", "Workforce step budget exhausted.")
-                executions.append(execution)
-                results_by_id[task_id] = execution
-                status_by_id[task_id] = "blocked"
-                self._save_task(identifier, task, execution)
-                continue
+        task_map = plan.task_map()
+        pending_ids = list(plan.topological_order())
 
-            model = installed.get(assignment.model_name)
-            if installed_models is not None:
-                if model is None:
-                    execution = self._blocked(
-                        task, "failed",
-                        f"Model {assignment.model_name!r} is not installed in Ollama.",
-                    )
-                    executions.append(execution)
-                    results_by_id[task_id] = execution
-                    status_by_id[task_id] = "failed"
-                    self._save_task(identifier, task, execution)
-                    continue
-                try:
-                    validate_installed_model_binding(assignment.profile, model)
-                except ValueError as exc:
-                    execution = self._blocked(task, "failed", str(exc))
-                    executions.append(execution)
-                    results_by_id[task_id] = execution
-                    status_by_id[task_id] = "failed"
-                    self._save_task(identifier, task, execution)
-                    continue
-
-            dependency_context = self._dependency_context(task, results_by_id)
-            record(
-                "task_started", f"Starting task {task.task_id}.",
-                task_id=task.task_id, role=task.role, model=assignment.model_name,
-            )
-
-            def child_trace(item: AgentEvent, task_id: str = task.task_id) -> None:
-                record(
-                    f"child_{item.kind}", item.message, task_id=task_id,
-                    data=item.data,
-                )
-
-            manifest: ArtifactManifest | None = None
-            acceptance: list[dict[str, Any]] = []
-            if task.verdict_required:
-                try:
-                    acceptance = self._acceptance_criteria(
-                        plan, results_by_id, exclude_task_id=task.task_id
-                    )
-                    manifest = ArtifactManifest.build(
-                        workspace,
-                        [str(item["target"]) for item in acceptance],
-                    )
-                except VerificationProtocolError as exc:
-                    execution = self._blocked(
-                        task, "verification_failed",
-                        f"The host could not build the verifier artifact manifest: {exc}",
-                    )
-                    executions.append(execution)
-                    results_by_id[task.task_id] = execution
-                    status_by_id[task.task_id] = execution.status
-                    self._save_task(identifier, task, execution)
-                    record("verification_rejected", execution.error, task_id=task.task_id)
-                    continue
-
-            execution = self._execute_task(
-                task, assignment, workspace, dependency_context,
-                max_steps=min(task.max_steps, remaining_steps),
-                timeout_seconds=min(task.timeout_seconds, max(1.0, plan.max_wall_seconds - (time.monotonic() - started_monotonic))),
-                run_id=identifier, cancel_event=cancel_event, record=record,
-                child_event=child_trace, plan_objective=plan.objective,
-                manifest=manifest, acceptance=acceptance,
-            )
+        def settle(task: TaskSpec, execution: TaskExecution) -> None:
             executions.append(execution)
-            results_by_id[task_id] = execution
-            status_by_id[task_id] = execution.status
-            total_steps += min(task.max_steps, max(0, min(task.max_steps, remaining_steps)))
-            remaining_steps = max(0, plan.max_total_steps - total_steps)
+            results_by_id[task.task_id] = execution
+            status_by_id[task.task_id] = execution.status
             self._save_task(identifier, task, execution)
-            record(
-                "task_finished", f"Task {task.task_id} finished with {execution.status}.",
-                task_id=task.task_id, status=execution.status,
-                attempts=execution.attempts, duration_ms=round(execution.duration_ms, 1),
-                error=execution.error, verdict=execution.verdict,
-            )
-            if execution.status in {"failed", "timed_out", "cancelled", "rejected", "verification_failed"}:
-                record(
-                    "verification_failed" if execution.status == "verification_failed"
-                    else "task_failed",
-                    execution.error or execution.final_message,
-                    task_id=task.task_id, verdict=execution.verdict,
+
+        while pending_ids:
+            # A wave: the next ready task; if it is read-only, every following
+            # ready read-only task joins it up to max_parallel. Writers run alone.
+            ready = [task_id for task_id in pending_ids
+                     if all(dep in status_by_id for dep in task_map[task_id].depends_on)]
+            first = ready[0]
+            wave = [first]
+            if self._is_read_only(task_map[first], assignments.get(first)):
+                for task_id in ready[1:]:
+                    if len(wave) >= plan.max_parallel:
+                        break
+                    if self._is_read_only(task_map[task_id], assignments.get(task_id)):
+                        wave.append(task_id)
+            for task_id in wave:
+                pending_ids.remove(task_id)
+            launches: list[tuple[TaskSpec, dict[str, Any]]] = []
+            for task_id in wave:
+                prepared = self._prepare_task(
+                    task_map[task_id], assignments[task_id], plan, workspace, identifier,
+                    status_by_id, results_by_id, installed, installed_models,
+                    remaining_steps, started_monotonic, cancel_event, approval,
+                    workspace_admission, record,
                 )
+                if isinstance(prepared, TaskExecution):
+                    settle(task_map[task_id], prepared)
+                    if prepared.error and prepared.status == "blocked":
+                        record("task_blocked", prepared.error, task_id=task_id)
+                    if prepared.error.startswith("Workforce stopped because workspace admission"):
+                        return self._finish(
+                            identifier, plan, executions, "failed", prepared.error,
+                            started, False, prepared.final_message, record)
+                    continue
+                remaining_steps = max(0, remaining_steps - prepared["max_steps"])
+                total_steps += prepared["max_steps"]
+                launches.append((task_map[task_id], prepared))
+            if not launches:
+                continue
+            if len(launches) > 1:
+                record("wave_started", f"Running {len(launches)} read-only tasks in parallel.",
+                       tasks=[task.task_id for task, _ in launches])
+            outcomes: dict[str, TaskExecution] = {}
+
+            def launch(task: TaskSpec, prepared: dict[str, Any],
+                       outcomes: dict[str, TaskExecution] = outcomes) -> None:
+                outcomes[task.task_id] = self._execute_task(
+                    task, assignments[task.task_id], workspace, prepared["dependency_context"],
+                    max_steps=prepared["max_steps"],
+                    timeout_seconds=min(task.timeout_seconds, max(
+                        1.0, plan.max_wall_seconds - (time.monotonic() - started_monotonic))),
+                    run_id=identifier, cancel_event=cancel_event, record=record,
+                    child_event=prepared["child_trace"], plan_objective=plan.objective,
+                    manifest=prepared["manifest"], acceptance=prepared["acceptance"],
+                )
+
+            if len(launches) == 1:
+                launch(*launches[0])
+            else:
+                threads = [Thread(target=launch, args=item, daemon=True,
+                                  name=f"workforce-wave-{item[0].task_id}") for item in launches]
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join()
+            for task, _prepared in launches:
+                execution = outcomes.get(task.task_id) or TaskExecution(
+                    task.task_id, task.role, "failed", assignments[task.task_id].model_name,
+                    error="Task produced no result.")
+                settle(task, execution)
+                record(
+                    "task_finished", f"Task {task.task_id} finished with {execution.status}.",
+                    task_id=task.task_id, status=execution.status,
+                    attempts=execution.attempts, duration_ms=round(execution.duration_ms, 1),
+                    error=execution.error, verdict=execution.verdict,
+                )
+                if execution.status in {"failed", "timed_out", "cancelled", "rejected",
+                                        "verification_failed"}:
+                    record(
+                        "verification_failed" if execution.status == "verification_failed"
+                        else "task_failed",
+                        execution.error or execution.final_message,
+                        task_id=task.task_id, verdict=execution.verdict,
+                    )
 
         verification = self._aggregate_verification(executions)
         verification_passed = verification["passed"]
@@ -783,6 +753,119 @@ class WorkforceOrchestrator:
             identifier, plan, executions, status, final, started,
             verification_passed, "", record,
             result_extra={"verification": verification},
+        )
+
+    GROUNDING_TOOLS = frozenset({"read_file", "search_text", "list_files",
+                                 "git_status", "git_diff", "git_log"})
+
+    @classmethod
+    def _grounding_check(cls, result: AgentResult) -> dict[str, Any]:
+        """A read-only research task with no artifact to check must at least have
+        observed the workspace: one successful read/search/list. A model that only
+        reports "file not found" (or answers from nothing) is not a completed
+        research result, and dependants must not build on it."""
+        observed = sorted({str(item.data.get("tool")) for item in result.trace
+                           if item.kind == "tool_completed"
+                           and item.data.get("tool") in cls.GROUNDING_TOOLS})
+        return {
+            "kind": "grounded_in_workspace", "target": "",
+            "passed": bool(observed),
+            "detail": ("observed the workspace with " + ", ".join(observed)) if observed else
+                      "the agent completed without a single successful workspace read; "
+                      "its answer is not grounded in the workspace",
+        }
+
+    @staticmethod
+    def _is_read_only(task: TaskSpec, assignment: AgentAssignment | None) -> bool:
+        return bool(task.read_only or (assignment is not None and assignment.read_only))
+
+    def _prepare_task(
+        self, task: TaskSpec, assignment: AgentAssignment, plan: WorkforcePlan,
+        workspace: Path, identifier: str, status_by_id: dict[str, TaskStatus],
+        results_by_id: dict[str, TaskExecution], installed: dict[str, ModelRef],
+        installed_models: list[ModelRef] | None, remaining_steps: int,
+        started_monotonic: float, cancel_event: Event | None,
+        approval: Callable[[str], bool] | None,
+        workspace_admission: WorkspaceAdmission | None, record: Callable[..., None],
+    ) -> TaskExecution | dict[str, Any]:
+        """Every pre-launch check for one task: a blocked execution, or launch inputs."""
+        if workspace_admission is not None:
+            try:
+                workspace_admission.check()
+            except LeaseLost as exc:
+                return TaskExecution(
+                    task.task_id, task.role, "failed", assignment.model_name,
+                    final_message=str(exc),
+                    error="Workforce stopped because workspace admission was lost.")
+        if cancel_event is not None and cancel_event.is_set():
+            return self._blocked(task, "cancelled", "Workforce cancellation acknowledged.")
+        if time.monotonic() - started_monotonic > plan.max_wall_seconds:
+            return self._blocked(task, "timed_out", "Workforce wall-clock budget exhausted.")
+        failed_dependencies = [dep for dep in task.depends_on
+                               if status_by_id.get(dep) not in {"completed"}]
+        if failed_dependencies:
+            return self._blocked(task, "blocked", "Blocked by dependency status: " + ", ".join(
+                f"{dep}={status_by_id.get(dep, 'pending')}" for dep in failed_dependencies))
+        if task.requires_approval and approval is not None:
+            if not approval(f"Task {task.task_id}: {task.objective}"):
+                return self._blocked(task, "rejected", "Task approval was not granted.")
+        if remaining_steps <= 0:
+            return self._blocked(task, "blocked", "Workforce step budget exhausted.")
+        if installed_models is not None:
+            model = installed.get(assignment.model_name)
+            if model is None:
+                return self._blocked(task, "failed",
+                                     f"Model {assignment.model_name!r} is not installed in Ollama.")
+            try:
+                validate_installed_model_binding(assignment.profile, model)
+            except ValueError as exc:
+                return self._blocked(task, "failed", str(exc))
+        dependency_context = self._dependency_context(task, results_by_id)
+        record("task_started", f"Starting task {task.task_id}.",
+               task_id=task.task_id, role=task.role, model=assignment.model_name)
+
+        def child_trace(item: AgentEvent, task_id: str = task.task_id) -> None:
+            record(f"child_{item.kind}", item.message, task_id=task_id, data=item.data)
+
+        manifest: ArtifactManifest | None = None
+        acceptance: list[dict[str, Any]] = []
+        if task.verdict_required:
+            try:
+                acceptance = self._acceptance_criteria(plan, results_by_id,
+                                                       exclude_task_id=task.task_id)
+                manifest = ArtifactManifest.build(
+                    workspace, [str(item["target"]) for item in acceptance])
+            except VerificationProtocolError as exc:
+                execution = self._blocked(
+                    task, "verification_failed",
+                    f"The host could not build the verifier artifact manifest: {exc}")
+                record("verification_rejected", execution.error, task_id=task.task_id)
+                return execution
+        return {"dependency_context": dependency_context, "child_trace": child_trace,
+                "manifest": manifest, "acceptance": acceptance,
+                "max_steps": min(task.max_steps, remaining_steps)}
+
+    def _run_child(self, assignment: AgentAssignment, task: TaskSpec,
+                   tool_registry: WorkspaceTools, local_cancel: Event, max_steps: int,
+                   dependency_context: str, plan_objective: str,
+                   manifest: ArtifactManifest | None, acceptance: list[dict[str, Any]],
+                   child_event: Callable[[AgentEvent], None] | None) -> AgentResult:
+        """Gate and run one child agent (inside the caller's resource lease)."""
+        child_policy = (
+            None if self.execution_gate is None
+            else self.execution_gate(assignment.model_name, assignment.profile.digest,
+                                     tool_registry.definitions())
+        )
+        return AgentRuntime(
+            self.client, max_steps=max_steps, keep_alive=self.keep_alive,
+            repository=self.repository,
+            memory_store=(memory_store_for(self.repository, self.client)
+                          if self.repository else None),
+        ).run(
+            assignment.model_name, assignment.profile,
+            self._task_prompt(task, dependency_context, plan_objective, manifest, acceptance),
+            tool_registry, event=child_event, cancel_event=local_cancel,
+            admit_workspace=False, policy=child_policy,
         )
 
     def _execute_task(
@@ -828,28 +911,15 @@ class WorkforceOrchestrator:
                 local_cancel: Event = child_cancel,
                 tool_registry: WorkspaceTools = tools,
             ) -> None:
+                lease = (contextlib.nullcontext() if self.resource_scheduler is None
+                         else self.resource_scheduler.lease(
+                             assignment.model_name, cancel_event=local_cancel))
                 try:
-                    child_policy = (
-                        None if self.execution_gate is None
-                        else self.execution_gate(
-                            assignment.model_name, assignment.profile.digest,
-                            tool_registry.definitions(),
-                        )
-                    )
-                    box["result"] = AgentRuntime(
-                        self.client, max_steps=max_steps, keep_alive=self.keep_alive,
-                        repository=self.repository,
-                        memory_store=(memory_store_for(self.repository, self.client)
-                                      if self.repository else None),
-                    ).run(
-                        assignment.model_name, assignment.profile,
-                        self._task_prompt(
-                            task, dependency_context, plan_objective,
-                            manifest, acceptance,
-                        ), tool_registry,
-                        event=child_event, cancel_event=local_cancel,
-                        admit_workspace=False, policy=child_policy,
-                    )
+                    with lease:
+                        box["result"] = self._run_child(
+                            assignment, task, tool_registry, local_cancel, max_steps,
+                            dependency_context, plan_objective, manifest, acceptance,
+                            child_event)
                 except BaseException as exc:  # child failure must not kill the supervisor
                     box["error"] = exc
 
@@ -910,6 +980,8 @@ class WorkforceOrchestrator:
                 )
             else:
                 checks = self._check_artifacts(task.verification, workspace)
+                if not task.verification and self._is_read_only(task, assignment):
+                    checks.append(self._grounding_check(result))
             failed_checks = [item for item in checks if not item.get("passed")]
             host_override = any(item.get("host_override") for item in checks)
             last = TaskExecution(
@@ -1289,8 +1361,8 @@ class WorkforceOrchestrator:
             elif check.kind == "json_keys":
                 try:
                     payload = json.loads(target.read_text(encoding="utf-8", errors="replace")[:200_000])
-                    expected = check.expected if isinstance(check.expected, tuple) else (check.expected,)
-                    passed = isinstance(payload, dict) and all(key in payload for key in expected)
+                    keys = check.expected if isinstance(check.expected, tuple) else (check.expected,)
+                    passed = isinstance(payload, dict) and all(key in payload for key in keys)
                     detail = "" if passed else "required JSON keys are missing"
                 except (json.JSONDecodeError, OSError, TypeError):
                     detail = "artifact is not valid JSON"

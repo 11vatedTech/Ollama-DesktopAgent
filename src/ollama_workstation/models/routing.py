@@ -110,7 +110,7 @@ _DECLARED_TO_CAPABILITY = {
     "embedding": "embedding",
 }
 
-_TASK_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+_TASK_HINTS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
     (("code", "python", "typescript", "javascript", "refactor", "bug", "test",
       "function", "repository", "compile", "debug"), ("code_generation", "code_comprehension")),
     (("json", "schema", "structured", "extract", "fields"), ("structured_output",)),
@@ -306,15 +306,16 @@ class ModelRouter:
         for capability in required:
             observed = _capability_result(profile, capability)
             observed_ok = observed is not None and observed.status in {"passed", "partial"} and observed.score is not None
+            observed_status = observed.status if observed is not None else "not_assessed"
             if request.require_verified:
                 if not observed_ok:
                     missing.append(capability)
                     evidence_sources.append(f"{capability}: no verified observation")
                 else:
-                    evidence_sources.append(f"{capability}: observed {observed.status}")
+                    evidence_sources.append(f"{capability}: observed {observed_status}")
                 continue
             if observed_ok:
-                evidence_sources.append(f"{capability}: observed {observed.status}")
+                evidence_sources.append(f"{capability}: observed {observed_status}")
             elif capability in declared:
                 evidence_sources.append(f"{capability}: declared by artifact, unverified")
             else:

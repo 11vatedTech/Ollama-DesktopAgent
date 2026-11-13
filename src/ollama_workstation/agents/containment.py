@@ -102,7 +102,7 @@ class _UiRestrictions(ctypes.Structure):
 
 
 def _kernel32() -> Any:
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined,unused-ignore]
     kernel32.CreateJobObjectW.restype = wintypes.HANDLE
     kernel32.CreateJobObjectW.argtypes = (ctypes.c_void_p, wintypes.LPCWSTR)
     kernel32.SetInformationJobObject.restype = wintypes.BOOL
@@ -122,8 +122,8 @@ def _kernel32() -> Any:
 
 
 def _error(action: str) -> ContainmentError:
-    code = ctypes.get_last_error()  # type: ignore[attr-defined]
-    return ContainmentError(f"{action} failed: {ctypes.FormatError(code)} ({code})")  # type: ignore[attr-defined]
+    code = ctypes.get_last_error()  # type: ignore[attr-defined,unused-ignore]
+    return ContainmentError(f"{action} failed: {ctypes.FormatError(code)} ({code})")  # type: ignore[attr-defined,unused-ignore]
 
 
 @dataclass(slots=True)
@@ -174,18 +174,23 @@ class WindowsJob:
         The process is still suspended, so it cannot have created children.
         If assignment fails the process is killed before it executes anything.
         """
-        handle = int(process._handle)  # type: ignore[attr-defined]  # noqa: SLF001
+        handle = int(process._handle)  # type: ignore[attr-defined,unused-ignore]  # noqa: SLF001
         if not self._kernel32.AssignProcessToJobObject(self._handle, handle):
             error = _error("AssignProcessToJobObject")
             process.kill()
             raise error
-        ntdll = ctypes.WinDLL("ntdll")  # type: ignore[attr-defined]
+        ntdll = ctypes.WinDLL("ntdll")  # type: ignore[attr-defined,unused-ignore]
         ntdll.NtResumeProcess.argtypes = (wintypes.HANDLE,)
         ntdll.NtResumeProcess.restype = ctypes.c_long
         status = int(ntdll.NtResumeProcess(handle))
         if status != 0:
             process.kill()
             raise ContainmentError(f"NtResumeProcess failed: NTSTATUS {status & 0xFFFFFFFF:#x}")
+
+    def adopt_handle(self, process_handle: int) -> None:
+        """Assign a suspended process by raw handle; the caller resumes or kills it."""
+        if not self._kernel32.AssignProcessToJobObject(self._handle, process_handle):
+            raise _error("AssignProcessToJobObject")
 
     def terminate(self, exit_code: int = 1) -> None:
         if self._handle:

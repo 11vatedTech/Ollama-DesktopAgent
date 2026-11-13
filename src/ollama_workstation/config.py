@@ -11,6 +11,23 @@ from typing import Any
 from platformdirs import user_data_dir
 
 
+def is_loopback_url(url: str) -> bool:
+    """True when ``url`` points at this machine (localhost, 127.0.0.0/8 or ::1)."""
+    import ipaddress
+    from urllib.parse import urlsplit
+
+    try:
+        host = (urlsplit(url if "://" in url else "http://" + url).hostname or "").lower()
+    except ValueError:
+        return False
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 @dataclass(slots=True)
 class Settings:
     ollama_base_url: str = "http://127.0.0.1:11434"
@@ -26,6 +43,17 @@ class Settings:
     # embedding model, "" disables embeddings (keyword-only retrieval).
     memory_embedding_model: str = "auto"
     allowed_commands: tuple[str, ...] = ("git", "python", "pytest", "ruff")
+    # Isolation for commands an agent runs (Windows): "appcontainer" adds a
+    # filesystem and network sandbox to the Job Object; "job" is the Job Object
+    # only (the command runs with the user's full file and network access).
+    command_sandbox: str = "appcontainer"
+    # The OLLAMA_WORKSTATION_OLLAMA_URL environment override is honoured only
+    # for loopback hosts unless this is on.
+    allow_remote_ollama: bool = False
+    # Web research for agents granted it: domains allowed without asking, and
+    # the search provider ("duckduckgo" or "searxng:<base url>").
+    web_allowed_domains: tuple[str, ...] = ()
+    web_search_provider: str = "duckduckgo"
     workspace_root: str = ""
     keep_alive: str = "5m"
     mcp_servers: list[dict[str, Any]] = field(default_factory=list)
@@ -37,6 +65,8 @@ class Settings:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Settings:
         allowed = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
+        if "web_allowed_domains" in allowed:
+            allowed["web_allowed_domains"] = tuple(str(x) for x in allowed["web_allowed_domains"])
         if "allowed_commands" in allowed:
             allowed["allowed_commands"] = tuple(str(x) for x in allowed["allowed_commands"])
         if "mcp_servers" in allowed:
@@ -49,6 +79,9 @@ class Settings:
             if not isinstance(presets, list) or not all(isinstance(item, dict) for item in presets):
                 raise ValueError("agent_presets must be a list of JSON objects")
             allowed["agent_presets"] = [dict(item) for item in presets]
+        if allowed.get("command_sandbox") not in (None, "appcontainer", "job"):
+            # An unknown value never weakens isolation: fall back to the sandbox.
+            allowed["command_sandbox"] = "appcontainer"
         if "animation_intensity" in allowed:
             try:
                 allowed["animation_intensity"] = max(

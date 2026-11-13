@@ -116,6 +116,7 @@ class AgentFoundryPage(QWidget):
         self.tabs.addTab(self._agents_tab(), "Agents")
         self.tabs.addTab(self._run_tab(), "Run")
         self.tabs.addTab(self._memory_tab(), "Memory")
+        self.tabs.addTab(self._skills_tab(), "Skills")
         root.addWidget(self.tabs, 1)
 
     # -- qualification tab ------------------------------------------------------------------
@@ -133,8 +134,12 @@ class AgentFoundryPage(QWidget):
         self.trials.setRange(1, 10)
         self.trials.setValue(2)
         controls.addWidget(self.trials)
-        self.qualify_shell = QCheckBox("Include run_command (executes model-written code)")
+        self.qualify_shell = QCheckBox("Include run_command (sandboxed)")
         controls.addWidget(self.qualify_shell)
+        self.qualify_web = QCheckBox("Include web tools (offline test web)")
+        self.qualify_web.setToolTip("Qualifies the catalogue with web_search/web_fetch and adds "
+                                    "web research and web-injection tasks. No network is used.")
+        controls.addWidget(self.qualify_web)
         controls.addStretch(1)
         self.admission_button = button("Check resources", variant="Secondary",
                                        on_click=self._check_admission)
@@ -144,6 +149,9 @@ class AgentFoundryPage(QWidget):
         layout.addLayout(controls)
         self.model_detail = QTextBrowser()
         self.model_detail.setOpenExternalLinks(False)
+        self.model_detail.setPlaceholderText(
+            "Select a model to see every harness result, its confidence interval and the "
+            "final message of each failed attempt.")
         layout.addWidget(self.model_detail, 2)
         return tab
 
@@ -198,10 +206,14 @@ class AgentFoundryPage(QWidget):
         if not model:
             self.status.setText("Select a model to qualify.")
             return
+        if self.qualify_shell.isChecked() and self.qualify_web.isChecked():
+            self.status.setText("Qualify the shell and web catalogues separately.")
+            return
         cancel = Event()
         self._start(
             f"Qualifying {model}", self.controller.qualify, model,
             trials=self.trials.value(), shell=self.qualify_shell.isChecked(),
+            web=self.qualify_web.isChecked(),
             cancel_event=cancel, cancel=cancel, with_progress=True,
             on_result=lambda record: self._after(
                 f"{record.model_name}: {record.status} "
@@ -224,6 +236,9 @@ class AgentFoundryPage(QWidget):
         layout.setContentsMargins(0, 12, 0, 0)
         left = QVBoxLayout()
         self.agents_table = _table(["Agent", "Status", "Version", "Model", "Role", "Readiness"])
+        header = self.agents_table.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)  # role text elides first
         self.agents_table.itemSelectionChanged.connect(self._show_agent_detail)
         left.addWidget(self.agents_table, 3)
         buttons = QHBoxLayout()
@@ -234,6 +249,9 @@ class AgentFoundryPage(QWidget):
         buttons.addStretch(1)
         left.addLayout(buttons)
         self.agent_detail = QTextBrowser()
+        self.agent_detail.setPlaceholderText(
+            "Select an agent to see its bound model digest, configuration hash, permissions "
+            "and anything blocking it from running.")
         left.addWidget(self.agent_detail, 2)
         layout.addLayout(left, 3)
 
@@ -251,10 +269,16 @@ class AgentFoundryPage(QWidget):
         self.agent_write.setChecked(True)
         self.agent_shell = QCheckBox("May run Python (contained)")
         self.agent_git = QCheckBox("May inspect git (read-only)")
+        self.agent_web = QCheckBox("May research the web (egress policy)")
+        self.agent_web_domains = QLineEdit()
+        self.agent_web_domains.setPlaceholderText("Allowed domains, comma separated "
+                                                  "(others are refused when unattended)")
         self.agent_memory = QCheckBox("Use memory")
         self.agent_memory.setChecked(True)
         self.agent_skills = QListWidget()
-        self.agent_skills.setFixedHeight(92)
+        self.agent_skills.setFixedHeight(124)
+        self.agent_skills.setTextElideMode(Qt.TextElideMode.ElideRight)
+        self.agent_skills.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.agent_skills.setToolTip("Pinned skills are versioned procedures added to the "
                                      "agent's instructions; their tool needs are checked.")
         self.agent_instructions = QPlainTextEdit()
@@ -266,6 +290,8 @@ class AgentFoundryPage(QWidget):
         form.addRow("", self.agent_write)
         form.addRow("", self.agent_shell)
         form.addRow("", self.agent_git)
+        form.addRow("", self.agent_web)
+        form.addRow("Web domains", self.agent_web_domains)
         form.addRow("", self.agent_memory)
         form.addRow("Skills", self.agent_skills)
         form.addRow("Instructions", self.agent_instructions)
@@ -314,7 +340,9 @@ class AgentFoundryPage(QWidget):
             name=name, model=model, role=self.agent_role.currentData(),
             instructions=self.agent_instructions.toPlainText(),
             write=self.agent_write.isChecked(), shell=self.agent_shell.isChecked(),
-            git=self.agent_git.isChecked(),
+            git=self.agent_git.isChecked(), web=self.agent_web.isChecked(),
+            web_domains=tuple(item.strip() for item in self.agent_web_domains.text().split(",")
+                              if item.strip()),
             skills=[self.agent_skills.item(index).data(Qt.ItemDataRole.UserRole)
                     for index in range(self.agent_skills.count())
                     if self.agent_skills.item(index).checkState() == Qt.CheckState.Checked],
@@ -452,7 +480,8 @@ class AgentFoundryPage(QWidget):
         data = self.memory_scope.currentData()
         if data is None:
             return [("project", str(self.context.workspace_path().resolve()))]
-        return [tuple(data)]  # type: ignore[list-item]
+        scope, scope_id = data
+        return [(str(scope), str(scope_id))]
 
     def _load_memory(self) -> None:
         query = self.memory_query.text()
@@ -477,7 +506,7 @@ class AgentFoundryPage(QWidget):
         scope, scope_id = self._scopes()[0]
         self._start("Saving memory", self.controller.memory.remember, text, scope=scope,
                     scope_id=scope_id, category=self.memory_category.currentText(),
-                    on_result=lambda _record: (self.memory_new.clear(), self._load_memory()))
+                    on_result=lambda _record: self._memory_saved())
 
     def _forget_memory(self) -> None:
         current = self.memory_table.currentRow()
@@ -492,9 +521,123 @@ class AgentFoundryPage(QWidget):
 
     def _consolidate_memory(self) -> None:
         self._start("Consolidating memory", self.controller.memory.consolidate, self._scopes(),
-                    on_result=lambda archived: (
-                        self.status.setText(f"Archived {len(archived)} stale note(s)."),
-                        self._load_memory()))
+                    on_result=self._memory_consolidated)
+
+    def _memory_saved(self) -> None:
+        self.memory_new.clear()
+        self._load_memory()
+
+    def _memory_consolidated(self, archived: list[str]) -> None:
+        self.status.setText(f"Archived {len(archived)} stale note(s).")
+        self._load_memory()
+
+    # -- skills tab -------------------------------------------------------------------------
+    def _skills_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QHBoxLayout(tab)
+        layout.setContentsMargins(0, 12, 0, 0)
+        left = QVBoxLayout()
+        self.skills_table = _table(["Skill", "Version", "Status", "Last evaluation"])
+        self.skills_table.itemSelectionChanged.connect(self._show_skill)
+        left.addWidget(self.skills_table, 3)
+        evaluate = QHBoxLayout()
+        evaluate.addWidget(label("Evaluate on", "Muted"))
+        self.skill_model = QComboBox()
+        evaluate.addWidget(self.skill_model, 1)
+        evaluate.addWidget(label("Trials", "Muted"))
+        self.skill_trials = QSpinBox()
+        self.skill_trials.setRange(1, 10)
+        self.skill_trials.setValue(4)
+        self.skill_trials.setToolTip("Paired trials per test case. Improved needs a one-sided "
+                                     "sign test p <= 0.1, i.e. at least 4 clean wins.")
+        evaluate.addWidget(self.skill_trials)
+        self.skill_evaluate_button = button("Evaluate selected", on_click=self._evaluate_skill)
+        evaluate.addWidget(self.skill_evaluate_button)
+        left.addLayout(evaluate)
+        self.skill_log = QTextBrowser()
+        self.skill_log.setPlaceholderText(
+            "Select a skill to load it into the editor and see its evaluations. An evaluation "
+            "runs each test case with and without the skill on the same seeds; 'improved' "
+            "requires a significant paired difference.")
+        left.addWidget(self.skill_log, 2)
+        layout.addLayout(left, 3)
+
+        editor = Card(margins=(16, 14, 16, 14))
+        editor.body.addWidget(label("Skill definition (JSON)", "SectionTitle"))
+        editor.body.addWidget(label(
+            "A skill is a versioned procedure with contracts, required tools and at least "
+            "one verified test case. Publishing never changes an existing version.",
+            "Faint", wrap=True))
+        self.skill_editor = QPlainTextEdit()
+        self.skill_editor.setPlainText(json.dumps(FoundryController.skill_template(), indent=2))
+        editor.body.addWidget(self.skill_editor, 1)
+        row = QHBoxLayout()
+        row.addWidget(button("New from template", variant="Secondary",
+                             on_click=lambda: self.skill_editor.setPlainText(
+                                 json.dumps(FoundryController.skill_template(), indent=2))))
+        row.addStretch(1)
+        row.addWidget(button("Publish version", on_click=self._publish_skill))
+        editor.body.addLayout(row)
+        layout.addWidget(editor, 2)
+        return tab
+
+    def _selected_skill(self) -> str:
+        current = self.skills_table.currentRow()
+        item = self.skills_table.item(current, 0) if current >= 0 else None
+        return "" if item is None else str(item.text())
+
+    def _show_skill(self) -> None:
+        skill_id = self._selected_skill()
+        if not skill_id:
+            return
+        skill = self.controller.service.skills.get(skill_id)
+        payload = skill.to_dict()
+        payload.pop("version", None)  # publishing assigns the next version
+        self.skill_editor.setPlainText(json.dumps(payload, indent=2, ensure_ascii=False))
+        evaluations = self.controller.store.list_skill_evaluations(skill_id)
+        lines = [f"<p><b>{html.escape(skill.name)}</b> v{skill.version}: "
+                 f"{html.escape(skill.purpose)}</p>"]
+        for item in evaluations[-6:]:
+            stats = (f"; helped {item.get('helped', 0)}, hurt {item.get('hurt', 0)}, "
+                     f"p={item.get('p_value')}") if "p_value" in item else ""
+            lines.append(
+                f"<p>{html.escape(str(item['created_at'])[:19])} - "
+                f"{html.escape(item['model_name'])} on {html.escape(item['harness'])}: "
+                f"<b>{html.escape(item['outcome'])}</b> baseline "
+                f"{item['baseline_passed']}/{item['attempts']}, with skill "
+                f"{item['skill_passed']}/{item['attempts']}{stats}"
+                + ("; accepted" if item["accepted"] else "; not accepted") + "</p>")
+        self.skill_log.setHtml("".join(lines))
+
+    def _publish_skill(self) -> None:
+        try:
+            payload = json.loads(self.skill_editor.toPlainText())
+        except json.JSONDecodeError as exc:
+            self.status.setText(f"Skill JSON is not valid: {exc}")
+            return
+        if not isinstance(payload, dict):
+            self.status.setText("A skill definition is a JSON object.")
+            return
+        self._start("Publishing skill", self.controller.publish_skill, payload,
+                    on_result=lambda skill: self._after(
+                        f"Published {skill.skill_id} v{skill.version}."))
+
+    def _evaluate_skill(self) -> None:
+        skill_id = self._selected_skill()
+        model = self.skill_model.currentText().strip()
+        if not skill_id or not model:
+            self.status.setText("Select a skill and a qualified model.")
+            return
+        self.skill_log.clear()
+        cancel = Event()
+        self._start(
+            f"Evaluating {skill_id} on {model}", self.controller.evaluate_skill, skill_id, model,
+            trials=self.skill_trials.value(), cancel_event=cancel, cancel=cancel,
+            with_progress=True,
+            on_result=lambda evaluation: self._after(
+                f"{evaluation.skill_id} on {evaluation.model_name}: {evaluation.outcome} "
+                f"(baseline {evaluation.baseline_passed}, with skill {evaluation.skill_passed} "
+                f"of {evaluation.attempts}; p={evaluation.p_value})"))
 
     # -- refresh ----------------------------------------------------------------------------
     def refresh(self) -> None:
@@ -504,10 +647,12 @@ class AgentFoundryPage(QWidget):
     def _load_all(self) -> dict[str, Any]:
         controller = self.controller
         return {"models": controller.model_rows(), "agents": controller.agent_rows(),
-                "skills": controller.skills()}
+                "skills": controller.skills(), "skill_rows": controller.skill_rows()}
 
     def _render_all(self, data: dict[str, Any]) -> None:
-        self._model_rows = data["models"]
+        rank = {"qualified": 0, "provisional": 1, "unqualified": 2, "not qualified": 3}
+        self._model_rows = sorted(data["models"], key=lambda row: (
+            rank.get(row.qualification_status, 4), row.name.casefold()))
         self._agent_rows = data["agents"]
         self.models_table.setRowCount(len(self._model_rows))
         self.agent_model.clear()
@@ -533,6 +678,16 @@ class AgentFoundryPage(QWidget):
             entry.setCheckState(Qt.CheckState.Checked if skill["skill_id"] in checked
                                 else Qt.CheckState.Unchecked)
             self.agent_skills.addItem(entry)
+        skill_rows = data.get("skill_rows", [])
+        self.skills_table.setRowCount(len(skill_rows))
+        for index, item in enumerate(skill_rows):
+            for column, value in enumerate([item["skill_id"], f"v{item['version']}",
+                                            item["status"], item["evaluation"] or "-"]):
+                self.skills_table.setItem(index, column, _cell(value))
+        self.skill_model.clear()
+        for row in self._model_rows:
+            if row.qualification_status in {"qualified", "provisional"}:
+                self.skill_model.addItem(row.name)
         self.agents_table.setRowCount(len(self._agent_rows))
         self.run_agent.clear()
         for index, agent in enumerate(self._agent_rows):
@@ -594,6 +749,8 @@ class AgentFoundryPage(QWidget):
         self.status.setText(message[:160])
         if self.tabs.currentIndex() == 2:
             self.run_log.append(html.escape(message))
+        elif self.tabs.currentIndex() == 4:
+            self.skill_log.append(html.escape(message))
         if self._activity_id:
             self.context.activity.update(self._activity_id, message[:160])
 

@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 from ollama_workstation.agentification.gate import clear_repository_run
+from ollama_workstation.agentification.resources import AdmissionController, ResourceScheduler
 from ollama_workstation.agents.orchestration import (
     AgentAssignment,
     WorkforceOrchestrator,
@@ -591,6 +592,8 @@ class WorkforcePage(QWidget):
     def _render_assignments(self) -> None:
         while self.assignment_layout.count():
             item = self.assignment_layout.takeAt(0)
+            if item is None:
+                break
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
@@ -691,6 +694,7 @@ class WorkforcePage(QWidget):
             cancel_event=cancel, cancel=lambda: cancel.set(), page="workforce",
             metadata={"run_id": run_id, "tasks": len(self.plan.tasks)},
         )
+        worker: FunctionWorker
         worker = FunctionWorker(
             self._run_plan, self.plan, assignments, self.context.workspace_path(),
             run_id, owner, cancel,
@@ -728,12 +732,16 @@ class WorkforcePage(QWidget):
             raise ValueError("Another workstation process already owns this workforce lease.")
         try:
             context = self.context
+            scheduler = ResourceScheduler(
+                AdmissionController(context.client),
+                notify=lambda message: progress(AgentEvent("scheduler", message, {})))
 
             def gate(model: str, digest: str, definitions: list[dict[str, Any]]) -> Any:
                 clearance, policy = clear_repository_run(
                     context.client, context.repository, model_name=model,
                     model_digest=digest, tool_definitions=definitions,
                     allow_unqualified=context.settings.allow_unqualified_models,
+                    admission=scheduler,
                 )
                 progress(AgentEvent("execution_cleared", clearance.summary(),
                                     clearance.to_dict()))
@@ -742,6 +750,7 @@ class WorkforcePage(QWidget):
             return WorkforceOrchestrator(
                 self.context.client, self.context.repository,
                 keep_alive=self.context.settings.keep_alive, execution_gate=gate,
+                resource_scheduler=scheduler,
             ).run(
                 plan, workspace, assignments, run_id=run_id, owner_id=owner,
                 cancel_event=cancel, approval=lambda _message: True,

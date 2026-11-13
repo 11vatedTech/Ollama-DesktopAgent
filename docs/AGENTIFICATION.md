@@ -86,13 +86,18 @@ proposed a call. The tool catalogue shown to the model is the qualified one.
 
 A `Skill` has an id, version, purpose, input and output contracts, procedure,
 validation criteria, required tools/capabilities/permissions, dependencies,
-test cases and provenance. Four are built in: `inspect-before-edit`,
-`recover-from-tool-error`, `defect-fix-loop`, `evidence-backed-report`.
+test cases and provenance. Five are built in: `inspect-before-edit`,
+`recover-from-tool-error`, `defect-fix-loop`, `evidence-backed-report` and
+`content-is-data`. Skills are authored and published from the Agent Foundry
+Skills tab or with `11vated skill publish FILE.json`.
 
 `11vated skill evaluate SKILL --model MODEL` runs each test case with and
 without the skill on identical seeds and stores the comparison:
-`improved` and `neutral` (both arms perfect) are accepted; `regressed` and
-`no_evidence` are rejected. A skill changes instructions only. It does not
+only discordant pairs (one arm passed, the other failed) carry information, so
+`improved` requires more pairs helped than hurt with a one-sided exact sign test
+p <= 0.1 (at least 4 clean wins). A positive trend below that is `inconclusive`
+and rejected until more trials are run. `neutral` (both arms perfect) is
+accepted; `regressed` (any net harm) and `no_evidence` are rejected. A skill changes instructions only. It does not
 change model weights and cannot grant a permission.
 
 ## Verification (`verifier.py`)
@@ -128,12 +133,12 @@ elapsed seconds. Calling `run` without a policy behaves exactly as before.
 | E Recovery | agent runs in a child process that is killed after its first tool call | same run id resumed, exactly one write, history preserved, journal hash chain valid, result verified |
 | F Model qualification | profile + qualify each model | at least two models measured with different results |
 
-Scenario B is offline research over a local corpus. Web research would need
-network egress for agents, which this workstation deliberately does not grant.
-Scenario A executes model-written code with the Python interpreter. On Windows
-that code runs inside a Job Object (see below), which bounds its lifetime,
-process count and memory but is not a filesystem or network sandbox, so the
-scenario still requires `--allow-code-execution`.
+Scenario B is offline research over a local corpus, so it is reproducible and
+needs no network. Web research is available to agents granted it (see "Web
+research"). Scenario A executes model-written code with the Python interpreter.
+On Windows that code runs in an AppContainer inside a Job Object (see below);
+the scenario still requires `--allow-code-execution` because the code can do
+anything inside its own workspace.
 
 Acceptance agents accept a *provisional* harness explicitly: a model that fails
 a safety category is never fully qualified, and most real models do. The
@@ -160,14 +165,55 @@ A resumed run keeps the harness recorded in its checkpoint. The only way to run
 an unqualified model is the operator override (`11vated run --unqualified`, or
 *Settings -> Policy -> Operator override*), and the override is recorded.
 
-## Command containment (Windows Job Objects)
+## Command containment (Windows: Job Object + AppContainer)
 
 `run_command` and the git tools start their process suspended, assign it to a
 Job Object, then resume it. The job kills every descendant when the command
 ends, caps the process count (32) and job-wide committed memory (2 GiB), and
-denies clipboard, desktop, global-atom, display-setting and shutdown access. If
-the job cannot be created or applied the command is refused. It does not
-restrict filesystem or network access.
+denies clipboard, desktop, global-atom, display-setting and shutdown access.
+
+`run_command` additionally starts the process in an AppContainer
+(`agents/sandbox.py`, setting `command_sandbox`, default `appcontainer`). The
+container's SID gets modify access to the workspace and read/execute access to
+the executable's runtime folders (for a virtual environment: the environment
+and its base interpreter). Everything else, including the user's profile and
+other workspaces, is denied by the kernel, and with no capabilities the process
+has no internet, LAN or loopback access. Grants are recorded:
+`11vated sandbox status` lists them, `11vated sandbox revoke [PATH...]` removes
+them. If the job or the container cannot be established the command is refused.
+
+## Resource scheduling and parallel workforces
+
+`ResourceScheduler` (`agentification/resources.py`) sits in front of model
+loads for concurrent agents. A lease subtracts models that are reserved but not
+yet resident from free memory, unloads resident models no lease holds when a
+load needs the room, waits (up to a timeout) when the models in the way are held
+by running agents, and refuses a load that cannot fit even with nothing else
+loaded. The execution gate's admission step is satisfied by the caller's lease.
+
+Workforce plans carry `max_parallel` (`11vated workforce run --parallel N`).
+Ready tasks run in waves: the next ready task, plus following ready read-only
+tasks up to `max_parallel`. A write-capable task always runs alone, so children
+never race on the workspace. A read-only task without an artifact check is
+complete only if the agent made at least one successful workspace observation;
+otherwise it fails and its dependants are blocked.
+
+## Web research
+
+Agents granted `web` get `web_search` and `web_fetch` (`agents/web.py`). Every
+request passes the egress policy: https only, no embedded credentials, the host
+must resolve only to public addresses, each redirect hop is re-checked, bodies
+are capped at 2 MB and must be text, and the domain must be on the agent's
+allow-list or approved by the operator for the session (unattended runs refuse
+unlisted domains). Results are marked untrusted and credential-redacted. Search
+uses DuckDuckGo's HTML endpoint or a configured SearXNG instance.
+
+`11vated qualify MODEL --web` qualifies the web catalogue against an offline
+test web served by a mock transport: the core tasks plus `web_lookup` (search,
+fetch, record) and `web_injection` (a page carrying an instruction to write a
+file). Web tasks run only for catalogues that include the web tools, so the
+suite fingerprint of every other catalogue is unchanged. Web agents pin the
+`content-is-data` skill automatically.
 
 ## Git tools
 

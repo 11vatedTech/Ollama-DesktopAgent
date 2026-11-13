@@ -1,47 +1,45 @@
 # Campaign state
 
 **Product:** 11VATED INTELLIGENCE - Ollama Desktop Agent
-**Branch:** `campaign/complete-agent-v1` (created from `feat/execution-integrity-v1-1`)
+**Branch:** `campaign/complete-agent-v2` (from `main` after PR #4)
 **Baseline commit:** `974517c0cf4f293192a289cb419f21654671c39b`
-**Last updated:** 2026-11-13 (session 3)
-**Overall status:** IN PROGRESS. 7 of 15 gates VERIFIED, 7 PARTIAL, 1 OPEN. See IMPLEMENTATION_MATRIX.md.
+**Last updated:** 2026-11-13 (session 4)
+**Overall status:** 10 of 15 gates VERIFIED, 4 PARTIAL, 1 OPEN. Every open item
+needs an owner action or decision. See IMPLEMENTATION_MATRIX.md.
 
 ## Where the campaign stands
 
-The product works end to end on the reference workstation against real local
-models: a model is profiled, qualified on verified tasks, bound into a versioned
-agent, admitted against measured RAM/VRAM, run through the measured harness,
-independently verified, and recovered after a hard kill. All six acceptance
-scenarios have passed live (D after two fixes; the failed runs are recorded).
+A model is profiled, qualified on verified tasks (including web tasks on an
+offline test web), bound into a versioned agent, admitted against measured
+RAM/VRAM through a scheduler that queues and unloads, run through its measured
+harness with commands in an AppContainer and web access behind an egress
+policy, independently verified, and recovered after a hard kill. Workforces
+run read-only tasks in parallel. Skills are authored and accepted only on a
+significant paired improvement.
 
-## Session 3 (2026-11-13) - first session on the workstation
+## Session 4 (2026-11-13)
 
-1. Ran the suite on Windows (green) and live Ollama tests (green).
-2. Qualified qwen2.5-coder:7b, qwen2.5-coder:14b and deepseek-r1:7b live.
-3. Built and wired the shared execution gate into every legacy run path.
-4. Added Windows Job Object containment for commands, with OS-level tests.
-5. Added hybrid embedding memory with conflict and poisoning defences.
-6. Added the Agent Foundry desktop page and the related settings.
-7. Implemented acceptance scenarios B (offline research) and D (workforce).
-8. Added read-only, hostile-config-safe git tools.
-9. Fixed defects found only by live runs: fenced-JSON native tool calls,
-   cp1252 console crashes, missing diagnostics in failed attempts, UI worker
-   lifetime, verifier path guidance and supporting-evidence citations.
-10. Built a release with SBOM and licence audit, and exercised install,
-    upgrade, tamper refusal and uninstall on the workstation.
+1. AppContainer sandbox for agent commands; live scenario A inside it.
+2. Resource scheduler (reservations, automatic unload, queue) and parallel
+   read-only workforce waves; live parallel runs.
+3. Grounding rule after a live run produced invented figures.
+4. Web research tools with an egress policy; web qualification tasks that keep
+   existing qualification fingerprints valid.
+5. Sign-test skill evaluation; live A/B on two skills; new built-in
+   `content-is-data` (injection obedience 8/10 -> 3/10).
+6. Agent Foundry Skills tab and web permission; rendered visual review and fixes.
+7. Strict mypy clean and enforced in CI; release signing support; clean-machine
+   CI install check; loopback-only URL override.
 
 ## Next exact action
 
-The branch is pushed and hosted CI is green (Ubuntu and Windows, Python 3.11
-and 3.12; Windows package workflow including the install cycle). Owner: review
-the Agent Foundry page interactively (G11).
+Owner: open and merge a PR for `campaign/complete-agent-v2`, close PRs #2/#3
+(fully contained in `main`), and try the Agent Foundry page.
 
-## After that, in dependency order
+## Owner decisions and inputs still needed
 
-1. Merge PRs #1-#3 and this branch to `main`; reduce mypy debt (G1).
-2. Restricted token / AppContainer for executed code, or a VM runner (G8, R3).
-3. Admission queue with automatic unload; parallel workforce children (G7).
-4. Live skill A/B evaluation and a skill authoring view (G6).
-5. Code-signing certificate and a clean-VM install test (G14, R17).
-6. Egress policy, then web research / browser tools (G9, R18).
-7. Release certification (G15).
+1. G9: whether to build a JavaScript browser and computer-use tools now. The
+   measured injection behaviour (R15) argues for waiting for stronger models.
+2. G14: a code-signing certificate (thumbprint or PFX) for signed releases.
+3. G11: interactive QA of the desktop.
+4. G15: release certification once the above are done.

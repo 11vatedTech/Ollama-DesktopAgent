@@ -149,6 +149,8 @@ class BenchmarkRunner:
                     eval_count = response.get("eval_count")
                     eval_duration = response.get("eval_duration")
                     try:
+                        if eval_count is None or eval_duration is None:
+                            raise TypeError("Ollama did not report eval timing")
                         numeric_eval_count = float(eval_count)
                         numeric_eval_duration = float(eval_duration)
                     except (TypeError, ValueError):

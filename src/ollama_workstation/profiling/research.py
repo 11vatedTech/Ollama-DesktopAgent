@@ -11,7 +11,7 @@ from typing import Any
 
 import httpx
 
-from ollama_workstation.models.schemas import Evidence
+from ollama_workstation.models.schemas import Evidence, EvidenceLevel
 from ollama_workstation.profiling.model_card import extract_model_card_dossier
 
 
@@ -136,7 +136,7 @@ def attach_model_card_evidence(profile: Any, card: dict[str, Any]) -> Any:
     ]
     url = dossier.model_card_url or f"https://huggingface.co/{dossier.repository_id}"
 
-    def add(claim: str, value: str, *, level: str = "documented", notes: str = "") -> None:
+    def add(claim: str, value: str, *, level: EvidenceLevel = "documented", notes: str = "") -> None:
         if value:
             profile.origin_evidence.append(Evidence(
                 claim, value, level, "User-selected Hugging Face model card", url, notes=notes

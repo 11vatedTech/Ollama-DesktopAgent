@@ -24,6 +24,7 @@ from ollama_workstation.agentification.harness import (
     HarnessQualification,
     default_tool_factory,
     shell_tool_factory,
+    web_tool_factory,
 )
 from ollama_workstation.agentification.resources import AdmissionController
 from ollama_workstation.agentification.store import AgentStore
@@ -116,7 +117,7 @@ class FoundryController:
             self.repository.save_profile(profile)
         return profile  # type: ignore[no-any-return]
 
-    def qualify(self, model: str, *, trials: int = 2, shell: bool = False,
+    def qualify(self, model: str, *, trials: int = 2, shell: bool = False, web: bool = False,
                 progress: Callable[[str], None] | None = None,
                 cancel_event: Event | None = None) -> HarnessQualification:
         self.admission.require(model)  # never start a model that cannot fit
@@ -124,7 +125,8 @@ class FoundryController:
         record = HarnessLab(self.client, keep_alive=getattr(self.settings, "keep_alive", "5m")
                             ).qualify(
             model, profile, trials=trials, progress=progress, cancel_event=cancel_event,
-            tool_factory=shell_tool_factory if shell else default_tool_factory,
+            tool_factory=(web_tool_factory if web else shell_tool_factory if shell
+                          else default_tool_factory),
         )
         self.store.save_qualification(record.to_dict())
         return record
@@ -151,13 +153,22 @@ class FoundryController:
     def create_agent(self, *, name: str, model: str, role: str | None = None,
                      instructions: str = "", write: bool = True, shell: bool = False,
                      memory: bool = True, allow_provisional: bool = True, git: bool = False,
-                     skills: list[str] | None = None, max_steps: int = 12) -> Any:
+                     skills: list[str] | None = None, max_steps: int = 12,
+                     web: bool = False, web_domains: tuple[str, ...] = ()) -> Any:
         profile = self.profile(model)
+        chosen = list(skills or [])
+        if web:
+            # Web pages are attacker-controlled; the content-is-data skill is the measured
+            # mitigation for instruction-following from content (R15).
+            if "content-is-data" not in chosen:
+                chosen.append("content-is-data")
+            web_domains = tuple(web_domains) or tuple(getattr(self.settings, "web_allowed_domains", ()))
         pinned = tuple({"skill_id": skill_id, "version": self.service.skills.get(skill_id).version}
-                       for skill_id in (skills or []))
+                       for skill_id in chosen)
         return self.service.create(
             name=name, profile=profile, role=role, instructions=instructions, skills=pinned,
-            permissions=Permissions(write=write, shell=shell, git=git,
+            permissions=Permissions(write=write, shell=shell, git=git, web=web,
+                                    web_domains=tuple(web_domains),
                                     allowed_commands=("{python}",) if shell else ()),
             budget=Budget(max_steps=max_steps), memory={"enabled": memory},
             allow_provisional=allow_provisional,
@@ -181,6 +192,66 @@ class FoundryController:
 
     def skills(self) -> list[dict[str, Any]]:
         return self.store.list_skills()
+
+    def skill_rows(self) -> list[dict[str, Any]]:
+        rows = []
+        for raw in self.store.list_skills():
+            evaluations = self.store.list_skill_evaluations(str(raw["skill_id"]))
+            latest = evaluations[-1] if evaluations else None
+            rows.append({
+                "skill_id": raw["skill_id"], "version": raw["version"], "name": raw["name"],
+                "status": raw.get("_status", ""), "purpose": raw.get("purpose", ""),
+                "evaluation": "" if latest is None else (
+                    f"{latest['outcome']} on {latest['model_name']} "
+                    f"({latest['baseline_passed']}->{latest['skill_passed']}/{latest['attempts']}"
+                    + (f", p={latest['p_value']}" if "p_value" in latest else "") + ")"),
+            })
+        return rows
+
+    @staticmethod
+    def skill_template() -> dict[str, Any]:
+        """A complete, valid starting point for a new skill (one test case)."""
+        return {
+            "skill_id": "my-skill", "name": "My skill",
+            "purpose": "when the agent should apply this procedure",
+            "input_contract": "What the agent is given.",
+            "output_contract": "What the agent must produce.",
+            "procedure": ["First step.", "Second step."],
+            "validation_criteria": ["How a reviewer can tell the result is right."],
+            "required_tools": ["read_file", "write_file"], "permissions": ["read", "write"],
+            "test_cases": [{
+                "task_id": "my_skill_case", "category": "multi_step",
+                "objective": "Read input.txt and write its first line into output.txt.",
+                "files": {"input.txt": "value {code}\nsecond\n"},
+                "variables": {"code": {"kind": "token", "length": 7}},
+                "checks": [{"kind": "run_completed"},
+                           {"kind": "file_contains", "path": "output.txt", "text": "value {code}"},
+                           {"kind": "changes_within", "allowed": ["output.txt"]}],
+            }],
+            "provenance": {"author": "operator", "source": "Agent Foundry"},
+        }
+
+    def publish_skill(self, payload: dict[str, Any]) -> Any:
+        """Validate and publish a new immutable skill version."""
+        return self.service.skills.publish(payload)
+
+    def evaluate_skill(self, skill_id: str, model: str, *, trials: int = 4,
+                       progress: Callable[[str], None] | None = None,
+                       cancel_event: Event | None = None) -> Any:
+        """Paired with/without evaluation on the model's qualified harness."""
+        from ollama_workstation.agentification.skills import SkillEvaluator
+
+        self.admission.require(model)
+        profile = self.profile(model)
+        record = self.latest_qualification(model, profile.digest)
+        if record is None or record.selected_harness is None:
+            raise LookupError(f"Qualify {model} first: a skill is evaluated on its qualified harness")
+        skill = self.service.skills.get(skill_id)
+        lab = HarnessLab(self.client, keep_alive=getattr(self.settings, "keep_alive", "5m"))
+        factory = shell_tool_factory if "run_command" in skill.required_tools else default_tool_factory
+        return SkillEvaluator(lab, self.store).evaluate(
+            model, profile, record.selected_harness, skill, trials=trials, progress=progress,
+            cancel_event=cancel_event, tool_factory=factory)
 
     # -- memory ---------------------------------------------------------------------------
     def memory_rows(self, scopes: list[tuple[str, str]], query: str = "") -> list[Any]:

@@ -73,6 +73,10 @@ class Permissions:
     command: str = "ask"
     # Read-only git inspection tools (git_status, git_diff, git_log).
     git: bool = False
+    # Web research (web_search, web_fetch) through the egress policy. Domains on
+    # web_domains are allowed; any other domain needs approval per session.
+    web: bool = False
+    web_domains: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         payload = {"write": self.write, "shell": self.shell,
@@ -81,6 +85,9 @@ class Permissions:
                    "overwrite": self.overwrite, "command": self.command}
         if self.git:  # omitted when off so existing agent digests are unchanged
             payload["git"] = True
+        if self.web:  # likewise omitted when off
+            payload["web"] = True
+            payload["web_domains"] = list(self.web_domains)
         return payload
 
 
@@ -162,6 +169,8 @@ class AgentDefinition:
                     overwrite=str(permissions.get("overwrite", "ask")),
                     command=str(permissions.get("command", "ask")),
                     git=bool(permissions.get("git", False)),
+                    web=bool(permissions.get("web", False)),
+                    web_domains=tuple(str(item) for item in permissions.get("web_domains") or ()),
                 ),
                 budget=Budget(
                     max_steps=int(budget.get("max_steps", 12)),
@@ -247,6 +256,8 @@ class GrantedTools:
             raise ToolError("This agent does not hold the write permission.")
         if name == "run_command" and not self._permissions.shell:
             raise ToolError("This agent does not hold the shell permission.")
+        if name in ("web_search", "web_fetch") and not self._permissions.web:
+            raise ToolError("This agent does not hold the web permission.")
         return self._inner.invoke(name, arguments)
 
 
@@ -384,10 +395,18 @@ class AgentService:
             approval=decide, cancel_event=cancel_event,
             allow_sensitive_files=permissions.sensitive_files,
             allow_git=permissions.git,
+            web=AgentService.web_access(permissions, decide) if permissions.web else None,
         )
         if permissions.shell and "{python}" in permissions.allowed_commands:
             inner.allowed_command_paths["python"] = Path(sys.executable).resolve()
         return GrantedTools(inner, permissions)
+
+    @staticmethod
+    def web_access(permissions: Permissions, approval: Callable[[str], bool]) -> Any:
+        from ollama_workstation.agents.web import EgressPolicy, WebAccess
+
+        return WebAccess(EgressPolicy(enabled=True, allowed_domains=permissions.web_domains,
+                                      approval=approval))
 
     def tool_manifest(self, agent: AgentDefinition) -> str:
         """Digest of the catalogue this agent would be given. The catalogue depends

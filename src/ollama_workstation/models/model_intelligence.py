@@ -251,7 +251,7 @@ def estimate_resource_envelope(
         block_count and effective_context and head_count_kv
         and (key_length or (embedding_length and head_count))
     ):
-        head_dim = key_length or max(1, int(embedding_length / max(1, head_count)))
+        head_dim = key_length or max(1, int((embedding_length or 0) / max(1, head_count or 1)))
         value_dim = value_length or head_dim
         kv_bytes = int(
             2 * block_count * effective_context * head_count_kv * (head_dim + value_dim) * 2
@@ -276,8 +276,9 @@ def inspect_ollama_model(
     context_tokens: int | None = None,
 ) -> ModelIntelligence:
     """Normalize one `/api/show` response and preserve evidence boundaries."""
-    details = show.get("details") if isinstance(show.get("details"), dict) else {}
-    info = show.get("model_info") if isinstance(show.get("model_info"), dict) else {}
+    raw_details, raw_info = show.get("details"), show.get("model_info")
+    details: dict[str, Any] = raw_details if isinstance(raw_details, dict) else {}
+    info: dict[str, Any] = raw_info if isinstance(raw_info, dict) else {}
     capabilities = _copy_strings(show.get("capabilities"))
     families = details.get("families")
     family = (

@@ -15,6 +15,7 @@ import socket
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 WINDOWS_STILL_ACTIVE = 259
 WINDOWS_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
@@ -27,7 +28,7 @@ class ProcessIdentity:
     pid: int
     start_token: str
 
-    def as_lease_metadata(self) -> dict[str, str | int]:
+    def as_lease_metadata(self) -> dict[str, Any]:
         return {
             "owner_host": self.host,
             "owner_pid": self.pid,
@@ -90,13 +91,13 @@ def _posix_alive(pid: int) -> bool | None:
     return True
 
 
-def _windows_kernel32():
+def _windows_kernel32() -> Any:
     import ctypes
 
-    return ctypes.WinDLL("kernel32", use_last_error=True)
+    return ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined,unused-ignore]
 
 
-def _windows_handle(pid: int):
+def _windows_handle(pid: int) -> tuple[Any, Any]:
     import ctypes
 
     kernel32 = _windows_kernel32()
@@ -105,7 +106,7 @@ def _windows_handle(pid: int):
     )
     if handle:
         return kernel32, handle
-    if ctypes.get_last_error() == WINDOWS_ERROR_ACCESS_DENIED:
+    if ctypes.get_last_error() == WINDOWS_ERROR_ACCESS_DENIED:  # type: ignore[attr-defined,unused-ignore]
         return kernel32, None
     return kernel32, 0
 

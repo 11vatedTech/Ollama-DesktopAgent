@@ -9,6 +9,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QIntValidator
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
@@ -121,17 +122,38 @@ class SettingsPage(QWidget):
             "Operator override: run models that have no harness qualification (not recommended)"
         )
         card.body.addWidget(self.allow_unqualified)
+        sandbox_row = QHBoxLayout()
+        sandbox_row.addWidget(label("Agent command isolation", "Muted"))
+        self.command_sandbox = QComboBox()
+        self.command_sandbox.addItem("Sandbox: workspace only, no network (recommended)", "appcontainer")
+        self.command_sandbox.addItem("Process limits only: full file and network access", "job")
+        sandbox_row.addWidget(self.command_sandbox, 1)
+        card.body.addLayout(sandbox_row)
         embedding_row = QHBoxLayout()
         embedding_row.addWidget(label("Memory embedding model", "Muted"))
         self.embedding_model = QLineEdit()
         self.embedding_model.setPlaceholderText('"auto", a model name, or empty for keyword-only')
         embedding_row.addWidget(self.embedding_model, 1)
         card.body.addLayout(embedding_row)
+        web_row = QHBoxLayout()
+        web_row.addWidget(label("Web domains allowed for agents", "Muted"))
+        self.web_domains = QLineEdit()
+        self.web_domains.setPlaceholderText("Comma separated, e.g. docs.python.org, github.com")
+        web_row.addWidget(self.web_domains, 1)
+        card.body.addLayout(web_row)
+        search_row = QHBoxLayout()
+        search_row.addWidget(label("Web search provider", "Muted"))
+        self.web_search_provider = QLineEdit()
+        self.web_search_provider.setPlaceholderText('"duckduckgo" or "searxng:http://127.0.0.1:8080"')
+        search_row.addWidget(self.web_search_provider, 1)
+        card.body.addLayout(search_row)
         self.shell_note = label(
-            "Chat and workforce agents never run commands. Agents created in the Agent "
-            "Foundry may run Python only inside a Windows Job Object (process, memory and "
-            "lifetime limits); that is not a filesystem or network sandbox. Workspace tools "
-            "are path-contained and MCP grants are exact-name only.",
+            "Chat and workforce agents never run commands. Agents granted Python run it inside "
+            "a Windows Job Object (process, memory and lifetime limits) and, with the sandbox "
+            "selected above, inside an AppContainer that can reach only the agent's workspace "
+            "and has no network. Web research goes only through the audited web tools: https, "
+            "public addresses, and the domains above (others need approval). Workspace tools are "
+            "path-contained and MCP grants are exact-name only.",
             "Muted", wrap=True,
         )
         card.body.addWidget(self.shell_note)
@@ -215,6 +237,10 @@ class SettingsPage(QWidget):
         self.remote_research.setChecked(settings.enable_remote_model_research)
         self.allow_unqualified.setChecked(settings.allow_unqualified_models)
         self.embedding_model.setText(settings.memory_embedding_model)
+        self.web_domains.setText(", ".join(settings.web_allowed_domains))
+        self.web_search_provider.setText(settings.web_search_provider)
+        index = self.command_sandbox.findData(settings.command_sandbox)
+        self.command_sandbox.setCurrentIndex(max(0, index))
         self.reduced_motion.setChecked(settings.reduced_motion)
         self.intensity.setValue(int(settings.animation_intensity * 100))
         self.mcp_config.setPlainText(json.dumps(settings.mcp_servers, indent=2, ensure_ascii=False))
@@ -273,6 +299,10 @@ class SettingsPage(QWidget):
         settings.enable_remote_model_research = self.remote_research.isChecked()
         settings.allow_unqualified_models = self.allow_unqualified.isChecked()
         settings.memory_embedding_model = self.embedding_model.text().strip()
+        settings.web_allowed_domains = tuple(
+            item.strip() for item in self.web_domains.text().split(",") if item.strip())
+        settings.web_search_provider = self.web_search_provider.text().strip() or "duckduckgo"
+        settings.command_sandbox = str(self.command_sandbox.currentData() or "appcontainer")
         settings.reduced_motion = self.reduced_motion.isChecked()
         settings.animation_intensity = self.intensity.value() / 100.0
         settings.mcp_servers = raw_servers

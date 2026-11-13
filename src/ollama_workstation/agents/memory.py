@@ -20,6 +20,7 @@ Writes are defended:
 from __future__ import annotations
 
 import array
+import builtins
 import hashlib
 import math
 import re
@@ -186,7 +187,8 @@ class MemoryStore:
         existing = [MemoryRecord(**raw) for raw in
                     self.repository.list_memories([(scope, scope_id)], limit=500)]
         same_category = [item for item in existing if item.category == category]
-        vector = (self._embed([normalized]) or [None])[0]
+        embedded = self._embed([normalized])
+        vector: list[float] | None = embedded[0] if embedded else None
         conflicts: list[tuple[MemoryRecord, float, str]] = []
         if same_category:
             for other, similarity in self._similarities(normalized, vector, same_category):
@@ -316,8 +318,9 @@ class MemoryStore:
         """Archive one note so it is excluded from future retrieval."""
         return self.repository.archive_memory(memory_id)
 
-    def consolidate(self, scopes: list[tuple[str, str]], *, max_idle_days: int = 90,
-                    keep_confidence: float = 0.8, now: datetime | None = None) -> list[str]:
+    def consolidate(self, scopes: builtins.list[tuple[str, str]], *, max_idle_days: int = 90,
+                    keep_confidence: float = 0.8,
+                    now: datetime | None = None) -> builtins.list[str]:
         """Retention: archive notes idle for ``max_idle_days`` that were never
         retrieved and are below ``keep_confidence``. Returns archived ids."""
         moment = now or datetime.now(UTC)
@@ -339,7 +342,8 @@ class MemoryStore:
 def ollama_embedder(client: Any, model: str, *, keep_alive: str = "5m") -> Embedder:
     """Embedder backed by a local Ollama embedding model."""
     def embed(texts: list[str]) -> list[list[float]]:
-        return client.embed(model, texts, keep_alive=keep_alive)
+        vectors: list[list[float]] = client.embed(model, texts, keep_alive=keep_alive)
+        return vectors
     return embed
 
 

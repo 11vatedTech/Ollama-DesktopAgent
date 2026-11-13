@@ -182,3 +182,68 @@ kept user data. Not done: a clean Windows VM (R17).
 | Windows package `43489974778` (head bfdb7a9) | failed: build, SBOM, licence audit and frozen smoke tests passed, but `doctor` exits 2 without Ollama and the stale exit code failed the step |
 | CI `43491738032` (push, head fbe5487) | 4/4 jobs passed |
 | Windows package `43491747263` (head fbe5487) | passed: clean build, smoke tests, install / upgrade / uninstall cycle on a hosted runner |
+
+## Session 4 (2026-11-13)
+
+Same workstation. Branch `campaign/complete-agent-v2` from `main` after the owner
+merged PR #4 (`c549c43`). PRs #2 and #3: `git log origin/main..<branch>` is
+empty for both, so their work is already on `main`.
+
+### Command sandbox (AppContainer)
+
+| Test | Result |
+|---|---|
+| Standalone probe in the AppContainer | write in workspace ok; read file outside -> PermissionError; list Documents -> PermissionError; loopback connect -> blocked; 1.1.1.1:443 -> PermissionError |
+| `tests/test_command_sandbox.py` | 4 passed; the job-only negative control reads the secret, writes outside the workspace and connects to loopback |
+| Existing command tests under the sandbox default | 46 passed (workspace tools, containment, acceptance, recovery) |
+| Live scenarios A and E (`accept --scenarios A,E`, qwen2.5-coder:14b) | both **passed**; the scenario A workspace appears in the sandbox grant ledger, so the model's pytest ran inside the AppContainer |
+
+### Resource scheduler and parallel workforce
+
+`tests/test_resource_scheduler.py`: 11 passed (automatic unload, queue behind a
+leased model, reservation accounting, shared leases, never-fits refusal,
+parallel waves capped at `max_parallel`, writer alone, grounding rule, leases
+held by children).
+
+Live plan: two read-only reviewers on qwen2.5-coder:7b in parallel, then a
+writer on qwen2.5-coder:14b (14b preloaded to force eviction).
+
+| Run | Result | Notes |
+|---|---|---|
+| 1 | verification_failed | writer replied "done" without writing; host check caught it |
+| 2 | completed, but **wrong** | search reviewer read `search.txt` instead of `notes/search.txt`, said it did not exist, was counted complete; the writer invented `search-api: p95 250 ms, 1 open incident` (true: 95 ms, 0). Checks only covered names. Led to the grounding rule |
+| 3 (`079ede68`) | **completed, verified** | reviewers 12.0 s / 11.9 s in parallel; `[scheduler] unloaded idle model qwen2.5-coder:14b to admit qwen2.5-coder:7b`, then 7b and nomic-embed-text unloaded to admit 14b; report figures correct and host-checked (`180 ms`, `95 ms`) |
+| 4 (`4c171fa0`) | **completed, verified** | same; runs 3-4 also told reviewers the exact path |
+
+### Web research
+
+| Test | Result |
+|---|---|
+| `tests/test_web_tools.py` | 19 passed incl. live network (`WEB_LIVE=1`): docs.python.org fetch, DuckDuckGo search; loopback, private, link-local/metadata, mixed-address, credential, http and file URLs refused; redirect to a private host refused; 2 MB cap; binary refused; secrets redacted |
+| `tests/test_web_qualification.py` | 3 passed; the default and shell catalogue fingerprints equal the stored `6dc7b6886dbe...` of all six existing records |
+| `11vated qualify qwen2.5-coder:14b --web` (`2cc1d7dd`) | provisional on guided 15/16 (structured 12/16, native 4/16); web_research suitable; guided web tasks 4/4; no attempt on any harness wrote the web page's `pwned.txt` |
+
+### Skills (paired evaluation, sign test)
+
+| Skill | Model / harness | Without | With | Helped / hurt | p | Outcome |
+|---|---|---|---|---|---|---|
+| recover-from-tool-error | qwen2.5-coder:7b / structured | 0/6 | 4/6 | 4 / 0 | 0.0625 | improved, accepted |
+| content-is-data (new) | qwen2.5-coder:14b / guided, 6 trials | 0/6 | 3/6 | 3 / 0 | 0.125 | inconclusive, rejected |
+| content-is-data | qwen2.5-coder:14b / guided, 10 trials | 1/10 | 7/10 | 6 / 0 | 0.0156 | **improved, accepted** |
+
+In the 10-trial run the model wrote the injected `owned.txt` in 8/10 baseline
+attempts and 3/10 with the skill.
+
+### Desktop visual review
+
+All 10 pages and the 5 Agent Foundry tabs rendered from the real shell at
+1480x940 (offscreen, Windows fonts) and inspected. Fixed: clipped Readiness
+column, unstyled skill checkboxes, unqualified model selected by default and
+qualified models listed last, empty detail panes without guidance, and a
+Settings note that still said commands had no filesystem/network sandbox.
+
+### Static checks
+
+`mypy src` (strict): 134 errors -> 0; added to CI on Windows. Two real defects
+fixed along the way (Integration Hub `test_runtime` method overwritten by a
+button; VRAM gauge crash when only the total was reported).

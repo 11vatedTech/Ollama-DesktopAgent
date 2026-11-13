@@ -16,7 +16,13 @@
 param(
     [string]$Python = "py",
     [string]$PythonVersion = "3.12",
-    [switch]$KeepBuildEnv
+    [switch]$KeepBuildEnv,
+    # Code signing (optional). Either a certificate thumbprint in Cert:\CurrentUser\My
+    # or a PFX file (password from $env:SIGNING_PFX_PASSWORD). Without either, the
+    # release is built unsigned and says so in release-manifest.json.
+    [string]$SigningThumbprint = $env:SIGNING_CERT_THUMBPRINT,
+    [string]$SigningPfx = $env:SIGNING_PFX_PATH,
+    [string]$TimestampServer = "http://timestamp.digicert.com"
 )
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
@@ -68,6 +74,32 @@ $app = Join-Path $work "dist\11vated-Intelligence"
 Copy-Item packaging\uninstall.ps1 $app
 Copy-Item (Join-Path $out "THIRD_PARTY_LICENSES.txt") $app
 
+Write-Host "== Code signing =="
+$signing = @{ signed = $false; reason = "no signing certificate configured" }
+$certificate = $null
+if ($SigningThumbprint) {
+    $certificate = Get-Item "Cert:\CurrentUser\My\$SigningThumbprint" -ErrorAction Stop
+} elseif ($SigningPfx) {
+    $password = ConvertTo-SecureString -String $env:SIGNING_PFX_PASSWORD -AsPlainText -Force
+    $certificate = Get-PfxData -FilePath $SigningPfx -Password $password |
+        Select-Object -ExpandProperty EndEntityCertificates | Select-Object -First 1
+}
+if ($certificate) {
+    $targets = Get-ChildItem $app -Recurse -Include "11vated.exe", "11vated-Intelligence.exe"
+    foreach ($target in $targets) {
+        $arguments = @{ FilePath = $target.FullName; Certificate = $certificate; HashAlgorithm = "SHA256" }
+        if ($TimestampServer) { $arguments.TimestampServer = $TimestampServer }
+        $result = Set-AuthenticodeSignature @arguments
+        if (-not $result.SignerCertificate) { throw "Signing $($target.Name) failed: $($result.StatusMessage)" }
+        Write-Host "Signed $($target.Name): $($result.Status) ($($certificate.Subject))"
+    }
+    $signing = @{ signed = $true; subject = $certificate.Subject; thumbprint = $certificate.Thumbprint;
+                  timestamped = [bool]$TimestampServer;
+                  status = (Get-AuthenticodeSignature (Join-Path $app "11vated.exe")).Status.ToString() }
+} else {
+    Write-Host "Release is UNSIGNED (set SIGNING_CERT_THUMBPRINT or SIGNING_PFX_PATH to sign)."
+}
+
 Write-Host "== Smoke tests of the frozen build =="
 $smokeHome = Join-Path $work "smoke-home"
 if (Test-Path $smokeHome) { Remove-Item -Recurse -Force $smokeHome }
@@ -100,6 +132,11 @@ for ($attempt = 1; $attempt -le 6; $attempt++) {
     }
 }
 Copy-Item packaging\install.ps1, packaging\uninstall.ps1 $out
+[ordered]@{
+    version = $version; built_at = (Get-Date).ToUniversalTime().ToString("o")
+    python = (& $py -c "import sys; print(sys.version.split()[0])").Trim()
+    signing = $signing; commit = (git rev-parse HEAD 2>$null)
+} | ConvertTo-Json -Depth 4 | Out-File -Encoding utf8 (Join-Path $out "release-manifest.json")
 foreach ($file in Get-ChildItem $out -File | Where-Object { $_.Extension -ne ".sha256" }) {
     $hash = (Get-FileHash -Algorithm SHA256 $file.FullName).Hash.ToLower()
     "$hash  $($file.Name)" | Out-File -Encoding ascii -Append (Join-Path $out "SHA256SUMS.txt")

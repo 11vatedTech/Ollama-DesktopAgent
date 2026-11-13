@@ -32,6 +32,9 @@ jobs:
         run: |
           python -m pip install -e ".[desktop]"
           python -c "from ollama_workstation.ui.main_window import MainWindow; print('Qt desktop import OK')"
+      - name: Type check (strict, Windows with Qt)
+        if: runner.os == 'Windows'
+        run: python -m mypy src
       - name: Desktop UI tests (Windows)
         if: runner.os == 'Windows'
         env:

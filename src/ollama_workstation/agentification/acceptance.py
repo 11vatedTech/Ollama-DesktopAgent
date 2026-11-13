@@ -323,6 +323,10 @@ class AcceptanceRunner:
     def scenario_d(self, models: list[str]) -> ScenarioResult:
         """Writer and independent verifier children under the shared execution gate."""
         from ollama_workstation.agentification.gate import clear_for_execution
+        from ollama_workstation.agentification.resources import (
+            AdmissionController,
+            ResourceScheduler,
+        )
         from ollama_workstation.agentification.verifier import VerificationEngine
         from ollama_workstation.agents.orchestration import (
             AgentAssignment,
@@ -344,11 +348,13 @@ class AcceptanceRunner:
         instance.materialize(workspace)
         baseline = snapshot_workspace(workspace)
         clearances: list[dict[str, Any]] = []
+        scheduler = ResourceScheduler(AdmissionController(self.client),
+                                      notify=lambda message: self.notify(f"[scheduler] {message}"))
 
         def gate(model: str, digest: str, definitions: list[dict[str, Any]]) -> RunPolicy:
             clearance = clear_for_execution(
                 self.client, self.store, model_name=model, model_digest=digest,
-                tool_definitions=definitions)
+                tool_definitions=definitions, admission=scheduler)
             clearances.append(clearance.to_dict())
             return RunPolicy(harness_mode=clearance.harness)
 
@@ -379,6 +385,7 @@ class AcceptanceRunner:
         plan.validate()
         result = WorkforceOrchestrator(
             self.client, self.repository, keep_alive=self.keep_alive, execution_gate=gate,
+            resource_scheduler=scheduler,
         ).run(
             plan, workspace,
             {"compute": AgentAssignment("compute", writer_model, profiles[writer_model]),

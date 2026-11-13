@@ -75,6 +75,37 @@ def test_controller_lists_models_and_qualifies(client, repository) -> None:
     assert row.harness == "structured_actions" and row.attempts > 0
 
 
+def test_controller_authors_and_evaluates_skills(client, repository) -> None:
+    controller = FoundryController(client, repository, Settings())
+    controller.admission = _Admit()
+    template = controller.skill_template()
+    template["skill_id"] = "copy-first-line"
+    first = controller.publish_skill(template)
+    second = controller.publish_skill({**template, "name": "Copy the first line"})
+    assert (first.version, second.version) == (1, 2)  # versions are immutable and ordered
+    with pytest.raises(Exception, match="test case"):
+        controller.publish_skill({**template, "test_cases": []})
+    controller.qualify("native-pro:latest", trials=1)
+    evaluation = controller.evaluate_skill("copy-first-line", "native-pro:latest", trials=1)
+    assert evaluation.outcome in {"neutral", "no_evidence", "inconclusive", "improved"}
+    assert evaluation.attempts == 1
+    row = next(item for item in controller.skill_rows() if item["skill_id"] == "copy-first-line")
+    assert row["version"] == 2 and evaluation.outcome in row["evaluation"]
+
+
+def test_controller_creates_web_agents_with_domain_policy(client, repository) -> None:
+    controller = FoundryController(client, repository, Settings())
+    agent = controller.create_agent(name="Web Scout", model="native-pro:latest", web=True,
+                                    web_domains=("docs.python.org",))
+    assert agent.permissions.web and agent.permissions.web_domains == ("docs.python.org",)
+    assert any(item["skill_id"] == "content-is-data" for item in agent.skills)
+    tools = controller.service.build_tools(agent, Path(os.environ.get("TEMP", ".")))
+    names = {item["function"]["name"] for item in tools.definitions()}
+    assert {"web_search", "web_fetch"} <= names
+    plain = controller.create_agent(name="Plain", model="native-pro:latest")
+    assert "web" not in plain.permissions.to_dict()  # digests of non-web agents unchanged
+
+
 def test_foundry_page_full_lifecycle(qt_app, app_context, tmp_path) -> None:
     page = AgentFoundryPage(app_context)
     _STATUS[0] = lambda: f"{page.status.text()} busy={page._busy} active={app_context.pool.activeThreadCount()}/{app_context.pool.maxThreadCount()} agents={page.agents_table.rowCount()} run={page.run_agent.count()}"
@@ -92,8 +123,14 @@ def test_foundry_page_full_lifecycle(qt_app, app_context, tmp_path) -> None:
         page.trials.setValue(1)
         page._qualify()
         _wait(qt_app, lambda: not page._busy, timeout=120)
-        _wait(qt_app, lambda: page.models_table.item(target, 2) is not None
-              and page.models_table.item(target, 2).text() in {"qualified", "provisional"})
+        def row_of(name: str) -> int:
+            return next(row for row in range(page.models_table.rowCount())
+                        if page.models_table.item(row, 0).text() == name)
+
+        _wait(qt_app, lambda: page.models_table.item(row_of("native-pro:latest"), 2).text()
+              in {"qualified", "provisional"})
+        target = row_of("native-pro:latest")
+        assert row_of("native-pro:latest") == 0  # qualified models are listed first
         assert "Failed attempts" in page.model_detail.toHtml() or page.models_table.item(
             target, 4).text() != "-"
 
@@ -101,6 +138,7 @@ def test_foundry_page_full_lifecycle(qt_app, app_context, tmp_path) -> None:
         page.agent_model.setCurrentText("native-pro:latest")
         _wait(qt_app, lambda: not page._busy)
         page._create_agent()
+        _wait(qt_app, lambda: not page._busy)
         _wait(qt_app, lambda: page.agents_table.rowCount() == 1)
         page.agents_table.selectRow(0)
         _wait(qt_app, lambda: not page._busy)

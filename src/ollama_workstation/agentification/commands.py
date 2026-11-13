@@ -25,6 +25,7 @@ from ollama_workstation.agentification.harness import (
     HarnessQualification,
     default_tool_factory,
     shell_tool_factory,
+    web_tool_factory,
 )
 from ollama_workstation.agentification.resources import AdmissionController, ResourceDenied
 from ollama_workstation.agentification.skills import SkillError, SkillEvaluator
@@ -37,6 +38,12 @@ from ollama_workstation.profiling.profiler import ModelProfiler
 COMMANDS = frozenset({"qualify", "agent", "skill", "verify", "accept", "resources"})
 
 
+def _qualification_factory(shell: bool, web: bool) -> Any:
+    if shell and web:
+        raise ValueError("Qualify --shell and --web catalogues separately")
+    return web_tool_factory if web else shell_tool_factory if shell else default_tool_factory
+
+
 def register(commands: Any) -> None:
     qualify = commands.add_parser(
         "qualify", help="Empirically qualify a model's agent harnesses with verified tool tasks")
@@ -44,6 +51,9 @@ def register(commands: Any) -> None:
     qualify.add_argument("--trials", type=int, default=2, help="Trials per task (1-10)")
     qualify.add_argument("--shell", action="store_true",
                          help="Qualify against the tool set that includes run_command")
+    qualify.add_argument("--web", action="store_true",
+                         help="Qualify against the tool set that includes web_search/web_fetch "
+                              "(offline test web; adds web research and web injection tasks)")
     qualify.add_argument("--json", action="store_true")
 
     agent = commands.add_parser("agent", help="Create, inspect, gate and run agents")
@@ -59,6 +69,10 @@ def register(commands: Any) -> None:
     create.add_argument("--allow-command", action="append", default=[],
                         help="Executable the agent may request; use {python} for this interpreter")
     create.add_argument("--read-only", action="store_true")
+    create.add_argument("--web", action="store_true",
+                        help="Grant web_search/web_fetch through the egress policy")
+    create.add_argument("--web-domain", action="append", default=[],
+                        help="Web domain allowed without asking (repeatable)")
     create.add_argument("--memory", action="store_true", help="Enable scoped memory recall")
     create.add_argument("--max-steps", type=int, default=12)
     create.add_argument("--max-seconds", type=float, default=900.0)
@@ -157,7 +171,7 @@ def dispatch(args: argparse.Namespace, paths: Any, settings: Any, client: Any,
             profile = _profile(client, repository, args.model)
             record = HarnessLab(client, keep_alive=settings.keep_alive).qualify(
                 args.model, profile, trials=args.trials, progress=_say,
-                tool_factory=shell_tool_factory if args.shell else default_tool_factory,
+                tool_factory=_qualification_factory(args.shell, args.web),
             )
             store.save_qualification(record.to_dict())
             if args.json:
@@ -205,14 +219,18 @@ def _agent(args: argparse.Namespace, service: AgentService, store: AgentStore, c
     if action == "create":
         profile = _profile(client, repository, args.model)
         commands = tuple(args.allow_command) or (("{python}",) if args.shell else ())
+        skill_ids = list(args.skill)
+        if args.web and "content-is-data" not in skill_ids:
+            skill_ids.append("content-is-data")  # measured mitigation for web-borne injection
         pinned = tuple({"skill_id": item, "version": service.skills.get(item).version}
-                       for item in args.skill)
+                       for item in skill_ids)
         agent = service.create(
             name=args.name, profile=profile, role=args.role,
             allow_unearned_role=args.allow_unearned_role, instructions=args.instructions,
             skills=pinned,
             permissions=Permissions(write=not args.read_only, shell=args.shell,
-                                    allowed_commands=commands),
+                                    allowed_commands=commands, web=args.web,
+                                    web_domains=tuple(args.web_domain)),
             budget=Budget(max_steps=args.max_steps, max_seconds=args.max_seconds,
                           max_tokens=args.max_tokens),
             memory={"enabled": bool(args.memory)}, allow_provisional=args.allow_provisional,

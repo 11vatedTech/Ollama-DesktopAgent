@@ -29,9 +29,11 @@ GROUP_POLL_INTERVAL = 0.02
 
 def _create_job() -> Any | None:
     try:
-        import win32job
+        import win32job as _win32job
     except ImportError:
         return None
+    # The published pywin32 stubs declare CreateJobObject as returning None.
+    win32job: Any = _win32job
     try:
         job = win32job.CreateJobObject(None, "")
         info = win32job.QueryInformationJobObject(
@@ -86,6 +88,8 @@ def _close_job(job: Any | None) -> None:
 
 def _group_alive(pgid: int) -> bool:
     """Probe a POSIX process group; only ESRCH proves it is gone."""
+    if sys.platform == "win32":
+        return False
     try:
         os.killpg(pgid, 0)
     except ProcessLookupError:
@@ -97,7 +101,7 @@ def _group_alive(pgid: int) -> bool:
 
 def _terminate_posix_group(pid: int) -> None:
     """Terminate the server's dedicated process group, including descendants."""
-    if pid <= 0:
+    if pid <= 0 or sys.platform == "win32":
         return
     try:
         os.killpg(pid, signal.SIGTERM)

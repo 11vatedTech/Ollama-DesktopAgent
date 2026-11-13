@@ -274,6 +274,8 @@ class OperationsPage(QWidget):
                 for index, item in enumerate(run.get("trace") or [])
                 if isinstance(item, dict)
             ]
+        if self._current is None:
+            return
         self._current["events"] = events
         self._current["run"] = run
         self._render_current()

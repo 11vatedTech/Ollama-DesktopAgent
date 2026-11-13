@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from ollama_workstation.agents.memory import memory_store_for
+from ollama_workstation.agents.tools import configure_command_sandbox
 from ollama_workstation.config import AppPaths, load_settings, save_settings
 from ollama_workstation.observability import configure_logging, log_event
 from ollama_workstation.ollama.client import OllamaClient
@@ -95,7 +96,7 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         app = QApplication.instance()
-        if app is not None:
+        if isinstance(app, QApplication):
             apply_theme(app)
         self.setWindowTitle("11vatedTech Intelligence — Ollama Workstation")
         self.resize(1480, 940)
@@ -110,6 +111,7 @@ class MainWindow(QMainWindow):
         self.profiler = ModelProfiler(self.client, self.settings.keep_alive)
         self.repository = Repository(self.paths.database_file)
         self.memory_store = memory_store_for(self.repository, self.client, self.settings)
+        configure_command_sandbox(self.settings.command_sandbox)
         self.bus = EventBus()
         self.activity = ActivityRegistry()
         self.context = AppContext(
@@ -323,7 +325,7 @@ class MainWindow(QMainWindow):
         if self._page_effect is not None:
             self._page_effect.setEnabled(False)
         if self._page_effect_target is not None:
-            self._page_effect_target.setGraphicsEffect(None)
+            self._page_effect_target.setGraphicsEffect(None)  # type: ignore[arg-type]
         effect = QGraphicsOpacityEffect(page)
         effect.setOpacity(0.38)
         page.setGraphicsEffect(effect)
@@ -335,7 +337,7 @@ class MainWindow(QMainWindow):
 
         def finish() -> None:
             if page.graphicsEffect() is effect:
-                page.setGraphicsEffect(None)
+                page.setGraphicsEffect(None)  # type: ignore[arg-type]
             if self._page_animation is animation:
                 self._page_animation = None
             if self._page_effect is effect:
@@ -559,7 +561,8 @@ class MainWindow(QMainWindow):
 def run_desktop(*, smoke_test: bool = False) -> int:
     """Start the desktop shell. ``smoke_test`` builds every page, renders one
     frame and exits 0, so an installed package can be proven to launch."""
-    app = QApplication.instance() or QApplication([])
+    instance = QApplication.instance()
+    app = instance if isinstance(instance, QApplication) else QApplication([])
     app.setApplicationName("11vatedTech Intelligence")
     app.setOrganizationName("11vatedTech")
     apply_theme(app)

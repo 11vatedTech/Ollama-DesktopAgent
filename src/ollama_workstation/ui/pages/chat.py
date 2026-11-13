@@ -8,6 +8,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from threading import Event
 from typing import Any
@@ -88,6 +89,10 @@ TEXT_SUFFIXES = {
     ".h", ".cpp", ".hpp", ".ini", ".cfg", ".sh", ".ps1", ".bat",
 }
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+
+
+def _open_local(path: Path) -> None:
+    QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
 
 @dataclass(slots=True)
@@ -251,7 +256,7 @@ class ArtifactPreviewDialog(QDialog):
         bottom.addStretch(1)
         bottom.addWidget(button(
             "Open externally", variant="Ghost",
-            on_click=lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))),
+            on_click=lambda: _open_local(path),
         ))
         close = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         close.rejected.connect(self.reject)
@@ -467,7 +472,7 @@ class ChatPage(QWidget):
         )):
             prompts.addWidget(
                 button(text, variant="Secondary",
-                       on_click=lambda checked=False, value=text: self._use_prompt(value)),
+                       on_click=partial(self._use_prompt, text)),
                 index // 2, index % 2,
             )
         layout.addWidget(prompt_wrap, alignment=Qt.AlignmentFlag.AlignCenter)
@@ -916,8 +921,9 @@ class ChatPage(QWidget):
     def _render_attachments(self) -> None:
         while self.attachment_row.count() > 1:
             item = self.attachment_row.takeAt(0)
-            if item.widget() is not None:
-                item.widget().deleteLater()
+            widget = item.widget() if item is not None else None
+            if widget is not None:
+                widget.deleteLater()
         for attachment in self._attachments:
             chip = QFrame()
             chip.setObjectName("Inset")
@@ -927,7 +933,7 @@ class ChatPage(QWidget):
             icon = "▧" if attachment.is_image else "⌑"
             chip_layout.addWidget(label(f"{icon} {attachment.name}", "Faint"))
             remove = button("×", variant="Ghost",
-                            on_click=lambda checked=False, item=attachment: self._remove_attachment(item))
+                            on_click=partial(self._remove_attachment, attachment))
             remove.setFixedSize(20, 20)
             chip_layout.addWidget(remove)
             self.attachment_row.insertWidget(self.attachment_row.count() - 1, chip)
@@ -1016,7 +1022,7 @@ class ChatPage(QWidget):
             self.context.events.compose_workforce.emit(text)
             self.context.navigate("workforce")
             return
-        if mode == "agent":
+        if mode == "agent" and profile is not None:
             self._start_agent(text, model, profile, attachments)
         elif mode == "routed":
             self._start_routed(user_content, model, attachments)
@@ -1050,6 +1056,7 @@ class ChatPage(QWidget):
         images = [item.binary_base64 for item in attachments if item.is_image]
         cancel = Event()
         self._cancel_event = cancel
+        worker: FunctionWorker
         worker = FunctionWorker(
             self._stream_chat, model, messages, images, cancel,
             lambda content, thinking: worker.signals.stream.emit(content, thinking),
@@ -1104,6 +1111,7 @@ class ChatPage(QWidget):
         self._cancel_event = cancel
         messages = self._history_messages()
         images = [item.binary_base64 for item in attachments if item.is_image]
+        worker: FunctionWorker
         worker = FunctionWorker(
             self._routed_task, messages, images, preferred, cancel,
             lambda content, thinking: worker.signals.stream.emit(content, thinking),
@@ -1200,6 +1208,7 @@ class ChatPage(QWidget):
         workspace = self.context.workspace_path()
         cancel = Event()
         self._cancel_event = cancel
+        worker: FunctionWorker
         worker = FunctionWorker(
             self._agent_task, model, profile, prompt, workspace, cancel,
             lambda event: worker.signals.progress.emit(f"{event.kind}\t{event.message}"),

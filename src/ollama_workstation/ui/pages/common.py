@@ -7,8 +7,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QRectF, QSize, Qt, QThreadPool
-from PySide6.QtGui import QBrush, QColor
+from PySide6.QtCore import QModelIndex, QPersistentModelIndex, QRectF, QSize, Qt, QThreadPool
+from PySide6.QtGui import QBrush, QColor, QPainter
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -104,48 +104,48 @@ class TwoLineDelegate(QStyledItemDelegate):
 
     def paint(
         self,
-        painter: object,
+        painter: QPainter,
         option: QStyleOptionViewItem,
-        index: object,
+        index: QModelIndex | QPersistentModelIndex,
     ) -> None:
         view_option = QStyleOptionViewItem(option)
-        self.initStyleOption(view_option, index)  # type: ignore[arg-type]
+        self.initStyleOption(view_option, index)
         text = view_option.text
         view_option.text = ""
         style = view_option.widget.style() if view_option.widget is not None else QApplication.style()
         style.drawControl(QStyle.ControlElement.CE_ItemViewItem, view_option, painter, view_option.widget)
         lines = text.split("\n", 1)
         selected = bool(view_option.state & QStyle.StateFlag.State_Selected)
-        brush = index.data(Qt.ItemDataRole.ForegroundRole)  # type: ignore[attr-defined]
+        brush = index.data(Qt.ItemDataRole.ForegroundRole)
         first_color = QColor(COLORS["ice"]) if selected else (
             brush.color() if isinstance(brush, QBrush) else QColor(COLORS["text_secondary"])
         )
         second_color = QColor(COLORS["text_secondary"] if selected else COLORS["muted"])
         inner = view_option.rect.adjusted(8, 4, -8, -4)
         line_height = max(18, inner.height() // max(1, len(lines)))
-        painter.save()  # type: ignore[attr-defined]
-        painter.setFont(font(11))  # type: ignore[attr-defined]
-        metrics = painter.fontMetrics()  # type: ignore[attr-defined]
-        painter.setPen(first_color)  # type: ignore[attr-defined]
+        painter.save()
+        painter.setFont(font(11))
+        metrics = painter.fontMetrics()
+        painter.setPen(first_color)
         first = metrics.elidedText(lines[0], Qt.TextElideMode.ElideRight, inner.width())
-        painter.drawText(  # type: ignore[attr-defined]
+        painter.drawText(
             QRectF(inner.left(), inner.top(), inner.width(), line_height),
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
             first,
         )
         if len(lines) > 1:
-            painter.setFont(font(10))  # type: ignore[attr-defined]
-            second_metrics = painter.fontMetrics()  # type: ignore[attr-defined]
-            painter.setPen(second_color)  # type: ignore[attr-defined]
+            painter.setFont(font(10))
+            second_metrics = painter.fontMetrics()
+            painter.setPen(second_color)
             second = second_metrics.elidedText(
                 lines[1], Qt.TextElideMode.ElideRight, inner.width()
             )
-            painter.drawText(  # type: ignore[attr-defined]
+            painter.drawText(
                 QRectF(inner.left(), inner.top() + line_height, inner.width(), line_height),
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                 second,
             )
-        painter.restore()  # type: ignore[attr-defined]
+        painter.restore()
 
 
 def prepare_list(

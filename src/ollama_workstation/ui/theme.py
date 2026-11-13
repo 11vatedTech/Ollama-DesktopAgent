@@ -495,14 +495,14 @@ QCheckBox {
     color: $text_secondary;
     spacing: 9px;
 }
-QCheckBox::indicator {
+QCheckBox::indicator, QListWidget::indicator, QTableWidget::indicator {
     width: 16px;
     height: 16px;
     border-radius: 4px;
     border: 1px solid $border_bright;
     background: $bg1;
 }
-QCheckBox::indicator:checked {
+QCheckBox::indicator:checked, QListWidget::indicator:checked, QTableWidget::indicator:checked {
     background: $cyan;
     border-color: $cyan;
 }
