@@ -32,16 +32,13 @@ scenarios have passed live (D after two fixes; the failed runs are recorded).
 
 ## Next exact action
 
-Owner: push the branch and open a pull request so hosted CI runs on Ubuntu and
-Windows:
-
-    git push -u origin campaign/complete-agent-v1
-
-Then review the Agent Foundry page interactively (G11).
+The branch is pushed and hosted CI is green (Ubuntu and Windows, Python 3.11
+and 3.12; Windows package workflow including the install cycle). Owner: review
+the Agent Foundry page interactively (G11).
 
 ## After that, in dependency order
 
-1. Hosted CI green on the campaign branch; merge PRs #1-#3 and this branch (G1).
+1. Merge PRs #1-#3 and this branch to `main`; reduce mypy debt (G1).
 2. Restricted token / AppContainer for executed code, or a VM runner (G8, R3).
 3. Admission queue with automatic unload; parallel workforce children (G7).
 4. Live skill A/B evaluation and a skill authoring view (G6).

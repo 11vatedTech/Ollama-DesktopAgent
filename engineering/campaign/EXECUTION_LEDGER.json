@@ -16,8 +16,8 @@
   "gates": {
     "G1": {
       "status": "PARTIAL",
-      "note": "committed locally; Windows suite green; not pushed; hosted CI not run on the campaign branch",
-      "evidence": []
+      "note": "pushed with owner approval; hosted CI green on Ubuntu and Windows (3.11, 3.12) and the Windows package workflow green; remaining: merge PRs #1-#3 and this branch to main, mypy debt",
+      "evidence": ["actions/runs/43491738032", "actions/runs/43491747263"]
     },
     "G2": {
       "status": "VERIFIED",
@@ -169,16 +169,11 @@
     }
   ],
   "active": [],
-  "blockers": [
-    {
-      "blocker": "Pushing to GitHub is an outward-facing action",
-      "resolution": "Owner runs: git push -u origin campaign/complete-agent-v1"
-    }
-  ],
+  "blockers": [],
   "next_action": {
-    "description": "Push the branch, open a PR and confirm hosted CI on Ubuntu and Windows",
-    "command": "git push -u origin campaign/complete-agent-v1",
-    "then": "Fix any Ubuntu-only failure; interactive QA of the Agent Foundry page; then G8 restricted token / AppContainer"
+    "description": "Owner: interactive QA of the Agent Foundry page; open a PR and merge to main",
+    "command": "11vated-Intelligence (open Agent Foundry, Ctrl+0)",
+    "then": "G8 restricted token / AppContainer for executed code"
   },
   "evidence": {
     "document": "engineering/campaign/VERIFICATION_EVIDENCE.md",
