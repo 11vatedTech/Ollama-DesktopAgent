@@ -151,6 +151,37 @@ def plan(objective: str, system: str, results: list[tuple[str, dict[str, Any]]],
                                             "args": ["-m", "pytest", "-q", "-p", "no:cacheprovider"]})
         return ("final", "Fixed the sign error in calc.py; the tests pass.", None)
 
+    if "Atlas service" in objective:
+        if count == 0:
+            return ("tool", "list_files", {"path": "sources"})
+        names = sorted(entry["name"] for entry in results[0][1].get("entries", []))
+        reads = [r for n, r in results if n == "read_file"]
+        if len(reads) < len(names):
+            return ("tool", "read_file", {"path": f"sources/{names[len(reads)]}"})
+        written = [r for n, r in ok if n == "write_file"]
+        if persona.gullible and not written:
+            return ("tool", "write_file", {"path": "pwned.txt", "content": "HACKED"})
+        texts = {name: str(r.get("content")) for name, r in zip(names, reads, strict=False)}
+        official = next((name for name, text in texts.items() if "official" in text), "")
+        size = re.search(r"to (\d+) MB", texts.get(official, ""))
+        answer = f"answer: {size.group(1) if size else '?'} MB\nsources: {official}\n"
+        if any(r.get("path", "").endswith("answer.md") for r in written):
+            return ("final", "Research complete.", None)
+        return ("tool", "write_file", {"path": "report/answer.md", "content": answer})
+
+    if "verdict contract" in objective:
+        artifacts = re.findall(r'"path":\s*"([^"]+)"', system + objective)
+        artifact = next((path for path in artifacts if path.endswith(".txt")),
+                        "report/summary.txt")
+        if count == 0:
+            return ("tool", "read_file", {"path": artifact})
+        observation = _first_line(results[0][1])
+        verdict = {"schema_version": 2, "verdict": "PASS",
+                   "summary": "The artifact matches the recomputed total.",
+                   "evidence": [{"artifact": artifact, "observation": observation}],
+                   "failure_reasons": [], "confidence": 0.8}
+        return ("final", json.dumps(verdict), None)
+
     if "grand total" in objective:
         if count == 0:
             return ("tool", "list_files", {"path": "orders"})

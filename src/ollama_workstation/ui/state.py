@@ -12,7 +12,7 @@ from typing import Any
 
 from PySide6.QtCore import QObject, QThreadPool, Signal
 
-from ollama_workstation.agents.memory import MemoryStore
+from ollama_workstation.agents.memory import MemoryStore, memory_store_for
 from ollama_workstation.config import AppPaths, Settings
 from ollama_workstation.models.model_intelligence import ModelIntelligence
 from ollama_workstation.models.schemas import ModelProfile, ModelRef
@@ -185,5 +185,6 @@ class AppContext:
             self.settings.ollama_base_url, self.settings.request_timeout_seconds
         )
         self.profiler = ModelProfiler(self.client, self.settings.keep_alive)
+        self.memory_store = memory_store_for(self.repository, self.client, self.settings)
         self.events.theme_changed.emit()
         self.events.data_changed.emit("settings")

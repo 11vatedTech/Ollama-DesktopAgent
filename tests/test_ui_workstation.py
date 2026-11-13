@@ -39,6 +39,7 @@ from ollama_workstation.ui.intelligence_core import (  # noqa: E402
     coerce_state,
     validate_transition,
 )
+from ollama_workstation.ui.pages.agents import AgentFoundryPage  # noqa: E402
 from ollama_workstation.ui.pages.chat import ChatPage  # noqa: E402
 from ollama_workstation.ui.pages.command_center import CommandCenterPage  # noqa: E402
 from ollama_workstation.ui.pages.history import HistoryPage  # noqa: E402
@@ -167,8 +168,8 @@ def test_history_disables_resume_for_a_foreign_workspace_admission(
 
 
 def test_every_workspace_constructs_with_empty_local_state(qt_app: QApplication, context: AppContext) -> None:
-    pages = [CommandCenterPage, ChatPage, ModelCenterPage, WorkforcePage, OperationsPage,
-             IntegrationHubPage, LaboratoryPage, HistoryPage, SettingsPage]
+    pages = [CommandCenterPage, ChatPage, ModelCenterPage, AgentFoundryPage, WorkforcePage,
+             OperationsPage, IntegrationHubPage, LaboratoryPage, HistoryPage, SettingsPage]
     for page_type in pages:
         page = page_type(context)
         assert isinstance(page, QWidget)

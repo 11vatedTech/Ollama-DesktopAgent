@@ -403,6 +403,10 @@ class HarnessLab:
         )
         if result.status != "completed":
             detail = f"run {result.status}: {result.final_message[:300]} | {detail}"
+        elif not report.passed:
+            # Keep what the model actually said so a failure can be diagnosed
+            # from the evidence alone (task fault vs. model fault).
+            detail = f"{detail} | final message: {result.final_message[:300]!r}"
         return AttemptRecord(
             task_id=spec.task_id, category=spec.category, harness=harness, trial=trial, seed=seed,
             passed=report.passed, run_status=result.status, steps=result.steps,

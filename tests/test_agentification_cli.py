@@ -86,8 +86,8 @@ def test_skill_and_acceptance_commands(cli, tmp_path: Path, capsys) -> None:
     report = tmp_path / "acceptance.json"
     code = cli("accept", "--models", "native-pro:latest", "careless:latest", "--scenarios",
                "C,F,A,B", "--trials", "1", "--output", report)
-    assert code == 1  # A is blocked without consent and B is not implemented
+    assert code == 1  # A is blocked without consent to execute model-written code
     statuses = {item["scenario"]: item["status"]
                 for item in json.loads(report.read_text(encoding="utf-8"))["results"]}
-    assert statuses == {"C": "passed", "F": "inconclusive", "A": "blocked", "B": "blocked"}
+    assert statuses == {"C": "passed", "F": "inconclusive", "A": "blocked", "B": "passed"}
     assert cli("accept", "--models", "native-pro:latest", "--scenarios", "Z") == 2

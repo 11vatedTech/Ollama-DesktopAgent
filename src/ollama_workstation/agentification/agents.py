@@ -31,7 +31,7 @@ from ollama_workstation.agentification.verifier import (
     VerificationReport,
     snapshot_workspace,
 )
-from ollama_workstation.agents.memory import MemoryStore
+from ollama_workstation.agents.memory import memory_store_for
 from ollama_workstation.agents.runtime import (
     HARNESS_MODES,
     AgentEvent,
@@ -71,12 +71,17 @@ class Permissions:
     # "ask" defers to the host approval callback; "deny" refuses without asking.
     overwrite: str = "ask"
     command: str = "ask"
+    # Read-only git inspection tools (git_status, git_diff, git_log).
+    git: bool = False
 
     def to_dict(self) -> dict[str, Any]:
-        return {"write": self.write, "shell": self.shell,
-                "allowed_commands": list(self.allowed_commands),
-                "sensitive_files": self.sensitive_files,
-                "overwrite": self.overwrite, "command": self.command}
+        payload = {"write": self.write, "shell": self.shell,
+                   "allowed_commands": list(self.allowed_commands),
+                   "sensitive_files": self.sensitive_files,
+                   "overwrite": self.overwrite, "command": self.command}
+        if self.git:  # omitted when off so existing agent digests are unchanged
+            payload["git"] = True
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +161,7 @@ class AgentDefinition:
                     sensitive_files=bool(permissions.get("sensitive_files", False)),
                     overwrite=str(permissions.get("overwrite", "ask")),
                     command=str(permissions.get("command", "ask")),
+                    git=bool(permissions.get("git", False)),
                 ),
                 budget=Budget(
                     max_steps=int(budget.get("max_steps", 12)),
@@ -377,6 +383,7 @@ class AgentService:
             workspace, allow_shell=permissions.shell, allowed_commands=commands,
             approval=decide, cancel_event=cancel_event,
             allow_sensitive_files=permissions.sensitive_files,
+            allow_git=permissions.git,
         )
         if permissions.shell and "{python}" in permissions.allowed_commands:
             inner.allowed_command_paths["python"] = Path(sys.executable).resolve()
@@ -532,7 +539,7 @@ class AgentService:
         runtime = AgentRuntime(
             self.client, max_steps=agent.budget.max_steps, keep_alive=self.keep_alive,
             repository=self.repository,
-            memory_store=(MemoryStore(self.repository)
+            memory_store=(memory_store_for(self.repository, self.client)
                           if agent.memory.get("enabled") and self.repository is not None else None),
         )
         result = runtime.run(

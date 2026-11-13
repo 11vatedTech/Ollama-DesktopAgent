@@ -19,6 +19,12 @@ class Settings:
     enable_remote_model_research: bool = False
     max_agent_steps: int = 12
     allow_shell_tools: bool = False
+    # Operator override: run models that have no harness qualification. Off by
+    # default so no entry point loads an unqualified model as an agent.
+    allow_unqualified_models: bool = False
+    # Local embedding model for semantic memory: "auto" picks an installed
+    # embedding model, "" disables embeddings (keyword-only retrieval).
+    memory_embedding_model: str = "auto"
     allowed_commands: tuple[str, ...] = ("git", "python", "pytest", "ruff")
     workspace_root: str = ""
     keep_alive: str = "5m"

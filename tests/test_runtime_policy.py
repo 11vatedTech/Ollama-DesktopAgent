@@ -121,3 +121,25 @@ def test_guided_action_after_thinking_aloud_is_decoded_and_still_validated() -> 
 def test_invalid_policies_are_rejected(options: dict) -> None:
     with pytest.raises(ValueError):
         RunPolicy(**options)
+
+
+def test_native_fenced_json_tool_call_is_repaired_not_accepted_as_final(tmp_path: Path) -> None:
+    """Live finding (qwen2.5-coder:14b): native-harness tool calls written as fenced JSON."""
+    fenced = '```json\n{"name": "list_files", "arguments": {"path": "."}}\n```'
+    native_call = {"message": {"role": "assistant", "content": "", "tool_calls": [
+        {"function": {"name": "list_files", "arguments": {"path": "."}}}]}}
+    client = Client([_message(fenced), native_call, _message("Listed the files.")])
+    result = AgentRuntime(client).run(
+        "m:1", _profile("native_tools"), "task", WorkspaceTools(tmp_path),
+        policy=RunPolicy(harness_mode="native_tools", repair_attempts=1))
+    assert result.status == "completed" and result.final_message == "Listed the files."
+    assert result.usage["repairs"] == 1 and result.usage["tool_calls"] == 1
+
+
+def test_native_fenced_json_that_is_not_a_tool_call_is_a_valid_answer(tmp_path: Path) -> None:
+    answer = '```json\n{"name": "Ada", "role": "engineer"}\n```'
+    client = Client([_message(answer)])
+    result = AgentRuntime(client).run(
+        "m:1", _profile("native_tools"), "task", WorkspaceTools(tmp_path),
+        policy=RunPolicy(harness_mode="native_tools", repair_attempts=1))
+    assert result.status == "completed" and result.usage["repairs"] == 0

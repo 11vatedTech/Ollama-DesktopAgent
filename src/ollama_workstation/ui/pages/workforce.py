@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ollama_workstation.agentification.gate import clear_repository_run
 from ollama_workstation.agents.orchestration import (
     AgentAssignment,
     WorkforceOrchestrator,
@@ -36,6 +37,7 @@ from ollama_workstation.agents.orchestration import (
     WorkforcePlanner,
 )
 from ollama_workstation.agents.process_identity import current_process_identity
+from ollama_workstation.agents.runtime import AgentEvent
 from ollama_workstation.agents.workforce import WorkforceMatcher
 from ollama_workstation.config import save_settings
 from ollama_workstation.models.identity import ROLE_DEFINITIONS
@@ -725,9 +727,21 @@ class WorkforcePage(QWidget):
         ):
             raise ValueError("Another workstation process already owns this workforce lease.")
         try:
+            context = self.context
+
+            def gate(model: str, digest: str, definitions: list[dict[str, Any]]) -> Any:
+                clearance, policy = clear_repository_run(
+                    context.client, context.repository, model_name=model,
+                    model_digest=digest, tool_definitions=definitions,
+                    allow_unqualified=context.settings.allow_unqualified_models,
+                )
+                progress(AgentEvent("execution_cleared", clearance.summary(),
+                                    clearance.to_dict()))
+                return policy
+
             return WorkforceOrchestrator(
                 self.context.client, self.context.repository,
-                keep_alive=self.context.settings.keep_alive,
+                keep_alive=self.context.settings.keep_alive, execution_gate=gate,
             ).run(
                 plan, workspace, assignments, run_id=run_id, owner_id=owner,
                 cancel_event=cancel, approval=lambda _message: True,

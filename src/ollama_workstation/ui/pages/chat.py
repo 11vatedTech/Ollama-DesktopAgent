@@ -42,6 +42,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ollama_workstation.agentification.gate import clear_repository_run
 from ollama_workstation.agents.binding import validate_installed_model_binding
 from ollama_workstation.agents.mcp_gateway import CompositeToolRegistry, MCPToolGateway
 from ollama_workstation.agents.runtime import AgentEvent, AgentRuntime
@@ -1246,9 +1247,16 @@ class ChatPage(QWidget):
             )
             if gateway.routes:
                 progress(AgentEvent("mcp_ready", f"{len(gateway.routes)} approved tool(s) active."))
+            # Qualification + RAM/VRAM admission; raises with every blocking reason.
+            clearance, policy = clear_repository_run(
+                self.context.client, self.context.repository, model_name=model,
+                model_digest=profile.digest, tool_definitions=composite.definitions(),
+                allow_unqualified=self.context.settings.allow_unqualified_models,
+            )
+            progress(AgentEvent("execution_cleared", clearance.summary(), clearance.to_dict()))
             return runtime.run(
                 model, profile, prompt, composite,
-                event=progress, cancel_event=cancel,
+                event=progress, cancel_event=cancel, policy=policy,
             )
 
     def _on_agent_event(self, payload: str) -> None:

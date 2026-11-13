@@ -3,58 +3,48 @@
 **Product:** 11VATED INTELLIGENCE - Ollama Desktop Agent
 **Branch:** `campaign/complete-agent-v1` (created from `feat/execution-integrity-v1-1`)
 **Baseline commit:** `974517c0cf4f293192a289cb419f21654671c39b`
-**Last updated:** 2026-11-13
-**Overall status:** IN PROGRESS. 0 of 15 gates are certified. See IMPLEMENTATION_MATRIX.md.
+**Last updated:** 2026-11-13 (session 3)
+**Overall status:** IN PROGRESS. 7 of 15 gates VERIFIED, 7 PARTIAL, 1 OPEN. See IMPLEMENTATION_MATRIX.md.
 
 ## Where the campaign stands
 
-Increment 1 (commit `423c296`) delivered the central missing subsystem: the path
-from an installed model to a qualified, versioned, verified agent. It is
-implemented and covered by 90 new automated tests that run over real HTTP and
-real process boundaries against scripted models.
+The product works end to end on the reference workstation against real local
+models: a model is profiled, qualified on verified tasks, bound into a versioned
+agent, admitted against measured RAM/VRAM, run through the measured harness,
+independently verified, and recovered after a hard kill. All six acceptance
+scenarios have passed live (D after two fixes; the failed runs are recorded).
 
-**It has not yet been run against a real Ollama model.** The engineering
-environment for increment 1 had no Ollama, no GPU, no Windows and no PySide6.
-Every claim about real-model behaviour is therefore unverified until the live
-run below is executed on the workstation.
+## Session 3 (2026-11-13) - first session on the workstation
 
-## Session 2 (2026-11-13)
-
-Recovered from this ledger after an interruption (full suite re-run: green).
-Increment 2 (commit `0c2c935`) added RAM/VRAM admission control in front of
-every agent run, the `11vated resources` command, and a time budget that
-survives resume (closes R6). 296 passed, 4 skipped; ruff clean.
-
-Increments 1 and 2 were written into the workstation folder as working-tree
-files. The local checkout there is still on `feat/execution-integrity-v1-1`;
-the files are uncommitted on that machine. To adopt the campaign history
-instead, fetch `campaign-complete-agent-v1.bundle` (see RECOVERY_PROTOCOL.md).
-
-The live run could not be started remotely in this session (no shell on the
-workstation; terminals cannot be typed into through desktop control).
+1. Ran the suite on Windows (green) and live Ollama tests (green).
+2. Qualified qwen2.5-coder:7b, qwen2.5-coder:14b and deepseek-r1:7b live.
+3. Built and wired the shared execution gate into every legacy run path.
+4. Added Windows Job Object containment for commands, with OS-level tests.
+5. Added hybrid embedding memory with conflict and poisoning defences.
+6. Added the Agent Foundry desktop page and the related settings.
+7. Implemented acceptance scenarios B (offline research) and D (workforce).
+8. Added read-only, hostile-config-safe git tools.
+9. Fixed defects found only by live runs: fenced-JSON native tool calls,
+   cp1252 console crashes, missing diagnostics in failed attempts, UI worker
+   lifetime, verifier path guidance and supporting-evidence citations.
+10. Built a release with SBOM and licence audit, and exercised install,
+    upgrade, tamper refusal and uninstall on the workstation.
 
 ## Next exact action
 
-On the Windows workstation, from the repository root, with Ollama running:
+Owner: push the branch and open a pull request so hosted CI runs on Ubuntu and
+Windows:
 
-    powershell -ExecutionPolicy Bypass -File scripts\live_acceptance.ps1 -Models qwen2.5-coder:7b,deepseek-r1:7b -AllowCodeExecution
+    git push -u origin campaign/complete-agent-v1
 
-Then record the resulting `.artifacts\campaign\acceptance-*.json` in
-VERIFICATION_EVIDENCE.md under "Live evidence" and update gates G3, G4, G12 and
-G13 in IMPLEMENTATION_MATRIX.md from the measured results, including failures.
-
-If the suite step fails on Windows, fix that first: the new tests have only been
-executed on Linux / Python 3.13 (see KNOWN_RISKS.md R2).
+Then review the Agent Foundry page interactively (G11).
 
 ## After that, in dependency order
 
-1. Agent Management and Skill Studio pages in the desktop UI, wired to
-   `AgentService` (G11). Nothing in the UI reaches the new subsystem yet.
-2. Route `11vated run`, chat agent mode and workforce child runs through
-   `AgentService.run` so no execution path bypasses the readiness gate (G3, G7).
-3. Windows Job Object containment for `run_command` and command checks (G8).
-4. Embedding-backed hybrid memory with provenance and contradiction handling (G5).
-5. Admission queue and unload-before-load using the admission decision; call
-   admission from workforce child runs and chat (G7, G15).
-6. Scenarios B (research) and D (workforce) in the acceptance harness (G13).
-7. Installer, SBOM, licence audit, clean-VM install test (G14).
+1. Hosted CI green on the campaign branch; merge PRs #1-#3 and this branch (G1).
+2. Restricted token / AppContainer for executed code, or a VM runner (G8, R3).
+3. Admission queue with automatic unload; parallel workforce children (G7).
+4. Live skill A/B evaluation and a skill authoring view (G6).
+5. Code-signing certificate and a clean-VM install test (G14, R17).
+6. Egress policy, then web research / browser tools (G9, R18).
+7. Release certification (G15).

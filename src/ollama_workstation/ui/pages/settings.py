@@ -117,9 +117,21 @@ class SettingsPage(QWidget):
             "Enable opt-in Hugging Face model-card research (network access)"
         )
         card.body.addWidget(self.remote_research)
+        self.allow_unqualified = QCheckBox(
+            "Operator override: run models that have no harness qualification (not recommended)"
+        )
+        card.body.addWidget(self.allow_unqualified)
+        embedding_row = QHBoxLayout()
+        embedding_row.addWidget(label("Memory embedding model", "Muted"))
+        self.embedding_model = QLineEdit()
+        self.embedding_model.setPlaceholderText('"auto", a model name, or empty for keyword-only')
+        embedding_row.addWidget(self.embedding_model, 1)
+        card.body.addLayout(embedding_row)
         self.shell_note = label(
-            "Desktop command execution is disabled in this build. Workspace tools are "
-            "path-contained and MCP grants are exact-name only.",
+            "Chat and workforce agents never run commands. Agents created in the Agent "
+            "Foundry may run Python only inside a Windows Job Object (process, memory and "
+            "lifetime limits); that is not a filesystem or network sandbox. Workspace tools "
+            "are path-contained and MCP grants are exact-name only.",
             "Muted", wrap=True,
         )
         card.body.addWidget(self.shell_note)
@@ -201,6 +213,8 @@ class SettingsPage(QWidget):
             settings.workspace_root.strip() or str(self.context.workspace_path())
         )
         self.remote_research.setChecked(settings.enable_remote_model_research)
+        self.allow_unqualified.setChecked(settings.allow_unqualified_models)
+        self.embedding_model.setText(settings.memory_embedding_model)
         self.reduced_motion.setChecked(settings.reduced_motion)
         self.intensity.setValue(int(settings.animation_intensity * 100))
         self.mcp_config.setPlainText(json.dumps(settings.mcp_servers, indent=2, ensure_ascii=False))
@@ -257,6 +271,8 @@ class SettingsPage(QWidget):
         settings.keep_alive = self.keep_alive.text().strip() or "5m"
         settings.workspace_root = workspace
         settings.enable_remote_model_research = self.remote_research.isChecked()
+        settings.allow_unqualified_models = self.allow_unqualified.isChecked()
+        settings.memory_embedding_model = self.embedding_model.text().strip()
         settings.reduced_motion = self.reduced_motion.isChecked()
         settings.animation_intensity = self.intensity.value() / 100.0
         settings.mcp_servers = raw_servers

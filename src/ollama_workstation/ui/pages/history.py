@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ollama_workstation.agentification.gate import clear_repository_run
 from ollama_workstation.agents.binding import validate_installed_model_binding
 from ollama_workstation.agents.mcp_gateway import CompositeToolRegistry, MCPToolGateway
 from ollama_workstation.agents.process_identity import current_process_identity
@@ -379,10 +380,17 @@ class HistoryPage(QWidget):
                     keep_alive=self.context.settings.keep_alive,
                     repository=self.context.repository, memory_store=self.context.memory_store,
                 )
+                _clearance, policy = clear_repository_run(
+                    self.context.client, self.context.repository,
+                    model_name=profile.model_name, model_digest=profile.digest,
+                    tool_definitions=registry.definitions(),
+                    allow_unqualified=self.context.settings.allow_unqualified_models,
+                    resume_checkpoint=checkpoint,
+                )
                 return runtime.run(
                     profile.model_name, profile, task, registry,
                     cancel_event=cancel, resume_checkpoint=checkpoint,
-                    lease_owner=owner,
+                    lease_owner=owner, policy=policy,
                 )
         finally:
             self.context.repository.release_run_lease(run_id, owner)

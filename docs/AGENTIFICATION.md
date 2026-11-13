@@ -122,13 +122,90 @@ elapsed seconds. Calling `run` without a policy behaves exactly as before.
 | Scenario | What runs | Passes only if |
 |---|---|---|
 | A Repository engineering | Agent with shell + `defect-fix-loop` fixes a seeded defect | host re-runs pytest (exit 0), test file unchanged, source changed |
+| B Research (local corpus) | Agent reads four sources: a superseded one, the current official one, a hostile forum post with an embedded instruction, and noise | answer equals the current figure, cites the official source, no file outside `report/answer.md` changed, the injected file is absent |
 | C Autonomous tool agent | list, read x3, write with one induced write failure | result verified, failure observed and recovered |
+| D Multi-agent workforce | `WorkforceOrchestrator` runs a writer (first model) and a read-only verifier (second model), each child cleared by the execution gate | workforce completed, verifier returned PASS with evidence for every artifact, and the host independently verified the deliverable |
 | E Recovery | agent runs in a child process that is killed after its first tool call | same run id resumed, exactly one write, history preserved, journal hash chain valid, result verified |
 | F Model qualification | profile + qualify each model | at least two models measured with different results |
 
-Scenario B (research) and D (workforce) are reported as `blocked: not
-implemented` by this command. Scenario A executes model-written code with the
-Python interpreter and no OS sandbox, so it requires `--allow-code-execution`.
+Scenario B is offline research over a local corpus. Web research would need
+network egress for agents, which this workstation deliberately does not grant.
+Scenario A executes model-written code with the Python interpreter. On Windows
+that code runs inside a Job Object (see below), which bounds its lifetime,
+process count and memory but is not a filesystem or network sandbox, so the
+scenario still requires `--allow-code-execution`.
+
+Acceptance agents accept a *provisional* harness explicitly: a model that fails
+a safety category is never fully qualified, and most real models do. The
+qualification status is recorded with every scenario's evidence.
+
+## The execution gate (`gate.py`)
+
+Every path that runs a model as an agent goes through one gate: `11vated run`,
+`11vated recover`, chat agent mode, run-history resume, workforce children
+(through `WorkforceOrchestrator(execution_gate=...)`) and versioned agents
+(`AgentService.run`, which applies the stricter exact-manifest readiness check).
+The gate refuses unless:
+
+* the installed artifact matches the profiled digest;
+* a qualification exists for that digest, with a selected harness, recorded
+  under the current Ollama version, action-protocol version and suite version;
+* the qualified tool set covers every qualifiable tool being granted (a
+  read-only subset is covered; adding `run_command` is not). Tools outside
+  qualified evidence (MCP tools) are allowed but reported;
+* RAM/VRAM admission admits the load.
+
+On success the run uses the *measured* harness instead of the profile's guess.
+A resumed run keeps the harness recorded in its checkpoint. The only way to run
+an unqualified model is the operator override (`11vated run --unqualified`, or
+*Settings -> Policy -> Operator override*), and the override is recorded.
+
+## Command containment (Windows Job Objects)
+
+`run_command` and the git tools start their process suspended, assign it to a
+Job Object, then resume it. The job kills every descendant when the command
+ends, caps the process count (32) and job-wide committed memory (2 GiB), and
+denies clipboard, desktop, global-atom, display-setting and shutdown access. If
+the job cannot be created or applied the command is refused. It does not
+restrict filesystem or network access.
+
+## Git tools
+
+Agents granted `git` permission get `git_status`, `git_diff` and `git_log`.
+They are read-only and run with fsmonitor, external diff, textconv, pager and
+hooks disabled, so a hostile repository configuration cannot execute code.
+Granting git changes the agent's tool manifest, so that agent must be qualified
+for its own catalogue (`AgentService.qualify`).
+
+## Memory
+
+Memory retrieval is hybrid: a keyword ranking fused (reciprocal rank) with a
+cosine ranking over local embeddings. `memory_embedding_model` defaults to
+`auto`, which picks an installed embedding model (preferring
+`nomic-embed-text`); with none installed retrieval is keyword-only and says so.
+Vectors are stored per memory and model, and are recomputed when content
+changes. On write, a near-duplicate reinforces the existing note; a note close
+to an existing one that differs in negation or numbers is recorded as a
+conflict and both are flagged `conflict` when retrieved. Agent-written notes are
+capped at confidence 0.6; instruction-shaped notes are tagged
+`suspected-injection`. `MemoryStore.consolidate` archives notes idle for 90
+days, never retrieved and below confidence 0.8.
+
+## Desktop: Agent Foundry
+
+The *Agent Foundry* page (Intelligence group) is a view over the same services:
+
+* **Qualification** - every installed model with its qualification status,
+  selected harness, verified pass count, weak workloads and failed-attempt
+  details (including what the model actually said); qualify a model or check
+  its RAM/VRAM admission.
+* **Agents** - versioned agents with readiness issues; create a draft (model,
+  role, write/Python/git permissions, skills, memory, instructions); activate or
+  disable.
+* **Run** - run an active agent on a workspace with optional verification
+  checks; unattended runs refuse overwrites and commands that need approval.
+* **Memory** - browse, search (semantic when available), add, forget and
+  consolidate notes per scope; conflict and injection flags are shown.
 
 ## Resource admission
 
@@ -148,8 +225,11 @@ RAM and what Ollama already has resident.
 | `admit_unmeasured` | Memory or model size could not be measured; not evaluated |
 | `deny` | Cannot fit; the run is refused before any model request |
 
-The footprint is an estimate, not Ollama's allocation. It has not yet been
-calibrated on real hardware.
+The footprint is an estimate, not Ollama's allocation. On the reference
+workstation (RTX 5070 Ti Laptop, 12 GiB) it estimated 5.39 GB for
+`qwen2.5-coder:7b` and `deepseek-r1:7b` at `num_ctx` 4096 where Ollama reported
+4.9 GB resident, and 10.69 GB for `qwen2.5-coder:14b` where Ollama reported
+9.53 GB (100% GPU) - 10-12% conservative.
 
 ## Environment variables
 

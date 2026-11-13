@@ -545,7 +545,26 @@ def test_cli_resumes_verified_run_end_to_end(
         lambda: (None, Settings(), fake_client, repository),
     )
     monkeypatch.setattr(cli_module, "ModelProfiler", StubProfiler)
+    # The scripted model cannot be verified or qualified: the shared gate refuses
+    # the resume before any provider call (exit 3), and the checkpoint survives.
+    assert cli_module.main(["recover", run_id]) == 3
+    assert "not cleared to run as an agent" in capsys.readouterr().err
+    assert repository.get_run_checkpoint(run_id) is not None
+    assert fake_client.calls == 0, "a refused resume must not reach the model"
+
+    gated: list[dict[str, object]] = []
+
+    def cleared(client, repo, **kwargs):
+        from ollama_workstation.agentification.gate import ExecutionClearance
+        from ollama_workstation.agents.runtime import RunPolicy
+        gated.append(kwargs)
+        checkpoint = kwargs.get("resume_checkpoint") or {}
+        return (ExecutionClearance(MODEL, DIGEST, "native_tools", "q-test", "qualified", False),
+                RunPolicy(harness_mode=checkpoint.get("harness_mode")))
+
+    monkeypatch.setattr(cli_module, "clear_repository_run", cleared)
     assert cli_module.main(["recover", run_id]) == 0
+    assert gated and gated[0]["resume_checkpoint"] is not None
     captured = capsys.readouterr()
     assert "CLI resume complete." in captured.out
     assert repository.list_runs()[0]["status"] == "completed"

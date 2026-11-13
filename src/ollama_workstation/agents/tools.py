@@ -17,6 +17,13 @@ from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import Any, TextIO
 
+from ollama_workstation.agents.containment import (
+    ContainmentError,
+    JobLimits,
+    WindowsJob,
+    create_containment,
+)
+
 
 class ToolError(RuntimeError):
     """Raised for invalid, unauthorized or failed tool operations."""
@@ -85,13 +92,20 @@ class WorkspaceTools:
                  allowed_commands: tuple[str, ...] = (),
                  approval: Callable[[str], bool] | None = None,
                  cancel_event: Event | None = None,
-                 allow_sensitive_files: bool = False) -> None:
+                 allow_sensitive_files: bool = False,
+                 allow_git: bool = False) -> None:
         self.workspace = workspace.expanduser().resolve()
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.allow_shell = allow_shell
         self.approval = approval or (lambda _description: False)
         self.cancel_event = cancel_event
         self.allow_sensitive_files = allow_sensitive_files
+        # Job Object limits for commands this registry runs (Windows).
+        self.containment_limits = JobLimits()
+        # Read-only git inspection; off unless the agent is granted it.
+        self.allow_git = allow_git
+        located = shutil.which("git") if allow_git else None
+        self.git_executable: Path | None = Path(located).resolve() if located else None
         self.allowed_command_paths: dict[str, Path] = {}
         for configured in allowed_commands:
             configured_path = Path(configured).expanduser()
@@ -212,12 +226,34 @@ class WorkspaceTools:
     def read_file(self, path: str) -> dict[str, Any]:
         target = self._path(path)
         if not target.is_file():
-            raise ToolError("File does not exist")
+            # Live finding: small models read a wrong relative path, get "does not
+            # exist" and conclude the artifact is missing. Point them at files with
+            # the same name instead (bounded scan; never reveals denied paths).
+            suggestions = self._same_name_files(target.name)
+            raise ToolError("File does not exist" + (
+                f". Files with that name in the workspace: {', '.join(suggestions)}"
+                if suggestions else ""))
         if target.stat().st_size > self.MAX_READ_BYTES:
             raise ToolError(f"File exceeds {self.MAX_READ_BYTES} byte read limit")
         content = target.read_text(encoding="utf-8", errors="replace")
         safe_content, count = self.redact_sensitive_text(content)
         return {"path": path, "content": safe_content, "secrets_redacted": count}
+
+    def _same_name_files(self, name: str, *, limit: int = 3, scan_limit: int = 5_000) -> list[str]:
+        if not name:
+            return []
+        found: list[str] = []
+        for scanned, candidate in enumerate(self.workspace.rglob(name)):
+            if scanned >= scan_limit or len(found) >= limit:
+                break
+            try:
+                relative = candidate.relative_to(self.workspace).as_posix()
+                self._path(relative)  # applies containment and the sensitive-path policy
+            except (ToolError, ValueError, OSError):
+                continue
+            if candidate.is_file():
+                found.append(relative)
+        return found
 
     def write_file(self, path: str, content: str) -> dict[str, Any]:
         target = self._path(path)
@@ -296,8 +332,16 @@ class WorkspaceTools:
                     environment[key] = value
         return environment
 
-    def _terminate_process_tree(self, process: subprocess.Popen[str]) -> None:
-        """Best-effort process-tree termination for the dedicated command process group."""
+    def _terminate_process_tree(self, process: subprocess.Popen[str],
+                                job: WindowsJob | None = None) -> None:
+        """Terminate the command tree: the whole Job Object when contained, else best effort."""
+        if job is not None:
+            job.terminate(1)
+            try:
+                process.wait(timeout=self.COMMAND_TERMINATION_GRACE_SECONDS)
+            except subprocess.TimeoutExpired:
+                process.kill()
+            return
         if os.name == "nt":
             if process.poll() is not None:
                 return
@@ -366,16 +410,35 @@ class WorkspaceTools:
             "shell": False,
             "env": self._command_environment(executable),
         }
-        if os.name == "nt":
-            process_options["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        # Windows: the command runs in a Job Object (see agents/containment.py).
+        # Containment is mandatory there; if the OS refuses it, nothing runs.
+        try:
+            job = create_containment(self.containment_limits)
+        except ContainmentError as exc:
+            raise ToolError(f"Command containment could not be established: {exc}") from exc
+        if job is not None:
+            process_options["creationflags"] = job.creationflags()
         else:
             process_options["start_new_session"] = True
         try:
-            process = subprocess.Popen(argv, **process_options)
-        except OSError as exc:
-            raise ToolError(f"Unable to launch approved executable: {exc}") from exc
+            try:
+                process = subprocess.Popen(argv, **process_options)
+            except OSError as exc:
+                raise ToolError(f"Unable to launch approved executable: {exc}") from exc
+            if job is not None:
+                try:
+                    job.adopt(process)
+                except ContainmentError as exc:
+                    raise ToolError(f"Command containment could not be applied: {exc}") from exc
+            return self._supervise_command(process, safe_argv, job)
+        finally:
+            if job is not None:
+                job.close()  # KILL_ON_JOB_CLOSE: no descendant outlives the command
+
+    def _supervise_command(self, process: subprocess.Popen[str], safe_argv: list[str],
+                           job: WindowsJob | None) -> dict[str, Any]:
         if process.stdout is None or process.stderr is None:
-            self._terminate_process_tree(process)
+            self._terminate_process_tree(process, job)
             raise ToolError("Command output capture could not be initialized")
 
         stdout_capture = _BoundedPipeCapture(self.MAX_COMMAND_CAPTURE_CHARS)
@@ -393,14 +456,19 @@ class WorkspaceTools:
         while True:
             if self.cancel_event is not None and self.cancel_event.is_set():
                 cancelled = True
-                self._terminate_process_tree(process)
+                self._terminate_process_tree(process, job)
                 break
             if time.monotonic() >= deadline:
                 timed_out = True
-                self._terminate_process_tree(process)
+                self._terminate_process_tree(process, job)
                 break
-            if process.poll() is not None and not any(reader.is_alive() for reader in readers):
-                break
+            if process.poll() is not None:
+                if job is not None:
+                    # Descendants left running would hold the output pipes open;
+                    # the command is over, so its whole job ends with it.
+                    job.terminate(0)
+                if not any(reader.is_alive() for reader in readers):
+                    break
             time.sleep(0.05)
 
         for reader in readers:
@@ -426,6 +494,75 @@ class WorkspaceTools:
             "output_truncated": output_truncated,
         }
 
+    # -- read-only git -------------------------------------------------------------
+    GIT_TIMEOUT_SECONDS = 30.0
+    # Every option that could make a read-only git command execute repository-
+    # controlled code is disabled: fsmonitor hooks, external diff drivers,
+    # textconv filters and pagers.
+    _GIT_SAFE_OPTIONS = ("-c", "core.fsmonitor=false", "-c", "core.pager=",
+                         "-c", "diff.external=", "-c", "core.hooksPath=" + os.devnull,
+                         "--no-pager")
+
+    def _git(self, args: list[str]) -> dict[str, Any]:
+        if not self.allow_git or self.git_executable is None:
+            raise ToolError("Git tools are not enabled for this agent")
+        if self.cancel_event is not None and self.cancel_event.is_set():
+            raise ToolError("Git command was cancelled before launch")
+        argv = [str(self.git_executable), *self._GIT_SAFE_OPTIONS, *args]
+        environment = self._command_environment(self.git_executable)
+        environment.update({"GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0",
+                            "GIT_CONFIG_NOSYSTEM": "1"})
+        try:
+            job = create_containment(self.containment_limits)
+        except ContainmentError as exc:
+            raise ToolError(f"Git containment could not be established: {exc}") from exc
+        options: dict[str, Any] = {
+            "cwd": self.workspace, "stdout": subprocess.PIPE, "stderr": subprocess.PIPE,
+            "stdin": subprocess.DEVNULL, "text": True, "encoding": "utf-8",
+            "errors": "replace", "shell": False, "env": environment,
+        }
+        if job is not None:
+            options["creationflags"] = job.creationflags()
+        try:
+            try:
+                process = subprocess.Popen(argv, **options)
+            except OSError as exc:
+                raise ToolError(f"Unable to launch git: {exc}") from exc
+            if job is not None:
+                job.adopt(process)
+            try:
+                stdout, stderr = process.communicate(timeout=self.GIT_TIMEOUT_SECONDS)
+            except subprocess.TimeoutExpired as exc:
+                self._terminate_process_tree(process, job)
+                raise ToolError("Git command exceeded its time limit") from exc
+        finally:
+            if job is not None:
+                job.close()
+        if process.returncode != 0:
+            message = (stderr or stdout).strip().splitlines()
+            raise ToolError("git failed: " + (message[0][:300] if message else
+                                               f"exit {process.returncode}"))
+        safe, redactions = self.redact_sensitive_text(stdout[-12_000:])
+        return {"output": safe, "truncated": len(stdout) > 12_000,
+                "secrets_redacted": redactions}
+
+    def git_status(self) -> dict[str, Any]:
+        return self._git(["status", "--porcelain=v1", "--branch", "--untracked-files=normal"])
+
+    def git_diff(self, path: str = "", staged: bool = False) -> dict[str, Any]:
+        args = ["diff", "--no-ext-diff", "--no-textconv", "--no-color", "--stat", "--patch"]
+        if staged:
+            args.append("--cached")
+        if path:
+            target = self._path(path)
+            args += ["--", str(target.relative_to(self.workspace)) or "."]
+        return self._git(args)
+
+    def git_log(self, limit: int = 10) -> dict[str, Any]:
+        count = max(1, min(int(limit), 50))
+        return self._git(["log", f"-{count}", "--no-color", "--date=iso-strict",
+                          "--pretty=format:%h %ad %an%n    %s"])
+
     def definitions(self) -> list[dict[str, Any]]:
         definitions = [
             self._function("list_files", "List files and directories in the assigned workspace.",
@@ -443,6 +580,17 @@ class WorkspaceTools:
                 {"command": {"type": "string"}, "args": {"type": "array", "items": {"type": "string"}},
                  "cwd": {"type": "string", "default": "."}}, ["command"],
             ))
+        if self.allow_git and self.git_executable is not None:
+            definitions += [
+                self._function("git_status", "Read-only: branch and changed files of the "
+                               "workspace git repository.", {}, []),
+                self._function("git_diff", "Read-only: unified diff of uncommitted changes, "
+                               "optionally for one path or the staged index.",
+                               {"path": {"type": "string", "default": ""},
+                                "staged": {"type": "boolean", "default": False}}, []),
+                self._function("git_log", "Read-only: recent commits (hash, date, author, "
+                               "subject).", {"limit": {"type": "integer", "default": 10}}, []),
+            ]
         return definitions
 
     @staticmethod
@@ -501,6 +649,10 @@ class WorkspaceTools:
             "read_file": lambda: self.read_file(str(arguments["path"])),
             "write_file": lambda: self.write_file(str(arguments["path"]), str(arguments["content"])),
             "search_text": lambda: self.search_text(str(arguments["pattern"]), str(arguments.get("path", "."))),
+            "git_status": lambda: self.git_status(),
+            "git_diff": lambda: self.git_diff(str(arguments.get("path", "")),
+                                              bool(arguments.get("staged", False))),
+            "git_log": lambda: self.git_log(int(arguments.get("limit", 10))),
             "run_command": lambda: self.run_command(str(arguments["command"]),
                                                       list(arguments.get("args") or []),
                                                       str(arguments.get("cwd", "."))),

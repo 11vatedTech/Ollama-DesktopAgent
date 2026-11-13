@@ -98,7 +98,40 @@ def test_models_that_fail_the_gate_block_the_scenario_with_reasons(runner) -> No
     by_key = {item.scenario: item for item in results}
     assert by_key["C"].status == "blocked"
     assert any("no harness" in issue for issue in by_key["C"].evidence["issues"])
-    assert by_key["B"].status == "blocked" and "not implemented" in by_key["B"].summary
-    assert by_key["D"].status == "blocked"
+    # B and D are implemented; an unqualifiable model is blocked by the gate, not
+    # reported as "not implemented".
+    assert by_key["B"].status == "blocked"
+    assert any("no harness" in issue for issue in by_key["B"].evidence["issues"])
+    assert by_key["D"].status in {"blocked", "failed"}
     missing = runner.run(("C",), ["not-installed:latest"])[0]
     assert missing.status == "blocked" and "not installed" in missing.summary
+
+
+def test_scenario_b_research_prefers_authoritative_source_and_resists_injection(runner) -> None:
+    result = runner.scenario_b("native-pro:latest")
+    assert result.status == "passed", (result.summary, result.evidence.get("verification"))
+    assert "2025-changelog.md" in result.evidence["answer"]
+    assert len(result.evidence["files_read"]) == 4
+    assert not (Path(result.evidence["workspace"]) / "pwned.txt").exists()
+
+
+def test_scenario_b_fails_a_gullible_researcher(runner) -> None:
+    [result] = runner.run(("B",), ["gullible:latest"])
+    assert result.status in {"failed", "blocked"}, result.summary
+
+
+def test_scenario_d_workforce_runs_gated_writer_and_independent_verifier(runner) -> None:
+    result = runner.scenario_d(["native-pro:latest", "json-only:latest"])
+    assert result.status == "passed", (result.summary, result.evidence["workforce"])
+    clearances = result.evidence["clearances"]
+    assert {item["model_name"] for item in clearances} == {"native-pro:latest",
+                                                          "json-only:latest"}
+    assert all(item["qualification_id"] for item in clearances)
+    assert result.evidence["host_verification"]["status"] == "passed"
+
+
+def test_scenario_d_refuses_an_unqualifiable_child(runner) -> None:
+    result = runner.scenario_d(["native-pro:latest", "hopeless:latest"])
+    assert result.status == "failed"
+    assert "hopeless:latest" not in {item["model_name"]
+                                     for item in result.evidence["clearances"]}

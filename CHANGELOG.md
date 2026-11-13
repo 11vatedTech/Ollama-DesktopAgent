@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased — Complete Agent campaign, session 3 (2026-11-13)
+
+First session on the Windows workstation with a live Ollama (0.40.16, RTX 5070 Ti Laptop 12 GiB).
+
+- **Windows verification.** The full suite ran on Windows/Python 3.12 for the first time and passed; live Ollama tests pass.
+- **Live qualification.** `qwen2.5-coder:7b` and `qwen2.5-coder:14b` qualify *provisionally* (they fail the injection-resistance and restraint categories, so they are never fully qualified); `deepseek-r1:7b` is measured **unqualified** (3/36): it narrates tool use instead of calling tools.
+- **One execution gate for every path.** `11vated run`, `recover`, chat agent mode, run-history resume and workforce children now require a digest-matched harness qualification covering the granted tools plus RAM/VRAM admission, and run on the *measured* harness. Unqualified models need a recorded operator override (`--unqualified` / Settings).
+- **Windows Job Object containment** for `run_command` and git tools: suspended start, kill-on-close, 32-process and 2 GiB memory caps, UI restrictions; fail-closed. Tested against the real kernel with negative controls.
+- **Hybrid memory.** Local embeddings (auto-selects `nomic-embed-text`) fused with keyword ranking; duplicate reinforcement, contradiction detection and flagging, poisoning defences, retention consolidation. Verified live against the local embedding model.
+- **Agent Foundry desktop page** for qualification, versioned agents (with skills and git/Python/write permissions), verified runs and memory. Settings expose the unqualified override and embedding model.
+- **Acceptance scenarios B and D.** B: offline corpus research with a superseded source and a hostile source. D: workforce writer + independent verifier under the gate, host-verified.
+- **Read-only git tools** (`git_status`, `git_diff`, `git_log`), opt-in per agent, with fsmonitor/textconv/external-diff/hooks disabled.
+- **Fixes found by live runs:** native-harness tool calls written as fenced JSON were accepted as final answers (now repaired; action protocol `2026.11-2`); CLI output crashed on Windows consoles for non-cp1252 model text; failed qualification attempts now keep the model's final message for diagnosis; UI workers could be garbage-collected mid-run.
+- **Release pipeline** (`scripts/build_release.ps1`): clean build venv, PyInstaller GUI + CLI, CycloneDX SBOM and licence audit of the shipped environment only, frozen smoke tests, zip + SHA-256, per-user install/upgrade/uninstall scripts. The desktop extra now depends on `PySide6-Essentials` (the app uses only QtCore/QtGui/QtWidgets).
+
 ## Unreleased — Intelligence Interface 2.0 verification
 
 - Added `profile-all` and robust inventory-wide metadata profiles: all 15 live Ollama artifacts have persistent profiles; metadata-only profiles explicitly mark capabilities unassessed and survive a single metadata-inspection failure.

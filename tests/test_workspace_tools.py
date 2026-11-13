@@ -209,3 +209,22 @@ def test_command_output_capture_reports_truncation_and_bounds_returned_text(tmp_
     assert result["return_code"] == 0
     assert result["output_truncated"] is True
     assert len(result["stdout"]) <= 64
+
+
+def test_missing_file_error_suggests_same_named_files(tmp_path) -> None:
+    from ollama_workstation.agents.tools import ToolError, WorkspaceTools
+    (tmp_path / "report").mkdir()
+    (tmp_path / "report" / "summary.txt").write_text("grand total: 1\n", encoding="utf-8")
+    (tmp_path / ".ssh").mkdir()
+    (tmp_path / ".ssh" / "id_rsa").write_text("secret", encoding="utf-8")
+    tools = WorkspaceTools(tmp_path)
+    try:
+        tools.read_file("summary.txt")
+    except ToolError as exc:
+        assert "report/summary.txt" in str(exc)
+    else:
+        raise AssertionError("expected ToolError")
+    try:
+        tools.read_file("id_rsa")
+    except ToolError as exc:
+        assert ".ssh" not in str(exc)  # denied locations are never suggested

@@ -1,29 +1,28 @@
 # Implementation matrix
 
-Status vocabulary: **OPEN** (not done), **PARTIAL** (implemented in part or not
-yet verified live), **VERIFIED** (implemented with evidence that satisfies the
-gate). No gate is VERIFIED yet.
+Status vocabulary: **OPEN** (not done), **PARTIAL** (implemented in part, or a
+required element is missing), **VERIFIED** (implemented with live evidence that
+satisfies the gate on the reference workstation). Evidence references are to
+VERIFICATION_EVIDENCE.md.
 
 | Gate | Outcome required | Status | Implemented | Evidence | Missing before the gate can close |
 |---|---|---|---|---|---|
-| G1 | Repository integrity, consolidation | PARTIAL | Baseline mapped; campaign branch on the integration tip; ruff clean | VERIFICATION_EVIDENCE "Baseline" | PRs #1-#3 not merged to `main`; 177 pre-existing mypy errors (mostly missing PySide6/jsonschema stubs); hosted CI not run on this branch |
-| G2 | Model intelligence, empirical qualification | PARTIAL | Pre-existing profiler, benchmarks, routing, model-card research; new verified agent-task suite | tests/test_harness_qualification.py | No long-context, research, vision or memory suites; no live run of the new suite |
-| G3 | Universal agentification, harness selection | PARTIAL | `harness.py`, `agents.py`, `store.py`; CLI `qualify`, `agent` | 33 tests (harness + agent service) on scripted models | Live qualification of real models; legacy `run`/chat/workforce paths still bypass the gate; no UI |
-| G4 | Functional autonomous execution | PARTIAL | Pre-existing bounded loop, checkpoints, leases; new `RunPolicy` budgets (time budget persists across resume), usage accounting, protocol repair | tests/test_runtime_policy.py; scenario C on scripted models | Live scenario C; explicit plan/task-state structure |
-| G5 | Persistent, secure memory | OPEN | Pre-existing keyword memory with scopes and redaction (unchanged) | pre-existing tests | Embeddings, hybrid retrieval, contradiction detection, consolidation, retention, poisoning defences |
-| G6 | Reusable skills, capability engineering | PARTIAL | `skills.py`: contracts, versions, dependencies, 4 built-ins, with/without evaluation; CLI `skill` | tests/test_skill_system.py (15) | Live evaluation on real models; skill authoring UI; regression scheduling |
-| G7 | Workforce orchestration, resource scheduling | PARTIAL | Pre-existing orchestrator and selector (unchanged); new `resources.py` admission control (footprint estimate from model geometry; admit / after-unload / degraded / unmeasured / deny) enforced in `AgentService.run`; CLI `resources` | tests/test_resource_admission.py (14) on synthetic measurements | Never run on the real GPU; estimate not calibrated against Ollama's actual allocation; no queue, no automatic unload; workforce children and chat do not call admission; no parallel execution |
-| G8 | Security and isolation | OPEN | Pre-existing path containment, allow-list, redaction; new host permission layer (`GrantedTools`), consent gates for code execution | permission and consent tests | **No OS-enforced isolation.** No Job Objects, restricted tokens or AppContainer; no egress control. Path checks and allow-lists are not a sandbox |
-| G9 | Tool and integration ecosystem | OPEN | Pre-existing workspace tools and MCP gateway (unchanged) | pre-existing tests | Git, code-analysis, browser and computer-use tools; MCP tools are not part of agent definitions |
-| G10 | Independent verification | PARTIAL | `verifier.py`: 13 check kinds, 5 outcomes, typed failure reasons, artifact digests; pre-existing workforce verifier | tests/test_verifier_engine.py (22) | Reviewer-agent evidence is not yet attached to engine reports; build verification is only via `command` checks |
-| G11 | Complete desktop experience | OPEN | Pre-existing nine-workspace PySide6 shell (unchanged) | UI tests could not run here (PySide6 unavailable) | Agent Management, Skill Studio, Memory, Security pages; qualification in Model Intelligence; VRAM telemetry review |
-| G12 | End-to-end recovery | PARTIAL | Pre-existing checkpoints, leases, dead-owner reclamation; scenario E kills and resumes a real process | tests/test_acceptance_scenarios.py::test_scenario_e_* | Live scenario E; Ollama-disconnect, model-removal, database-error and verifier-crash drills |
-| G13 | Real-world acceptance scenarios | PARTIAL | A, C, E, F implemented in `acceptance.py`; CLI `accept` | 6 scenario tests on scripted models | **All four must be run on real models.** B (research) and D (workforce) are not implemented in the harness |
-| G14 | Clean Windows packaging and install | OPEN | Pre-existing PyInstaller workflow (unchanged) | none from this campaign | Installer, upgrade/uninstall, SBOM, licence audit, clean-VM test |
-| G15 | Final release certification | OPEN | - | - | Everything above |
+| G1 | Repository integrity, consolidation | PARTIAL | Campaign committed on `campaign/complete-agent-v1`; ruff and compileall clean; Windows suite green | "Final suite" | Push; hosted CI (Ubuntu + Windows); merge PRs #1-#3 to `main`; mypy debt |
+| G2 | Model intelligence, empirical qualification | VERIFIED | Profiler, benchmarks, routing; verified agent-task suite run live on three models, with stored final messages for every failed attempt | "Harness qualification on real models" | (Improvement, not a gate blocker: more tasks/trials, long-context and vision suites — R7) |
+| G3 | Universal agentification, harness selection | VERIFIED | Measured harness selection; versioned digest-bound agents; one execution gate for every path; Agent Foundry UI | Live qualification; gate tests; scenarios A-E ran on gated agents | - |
+| G4 | Functional autonomous execution | VERIFIED | Bounded loop, budgets, protocol repair (fenced-JSON fix), tool-error guidance | Live scenarios A, B, C | - |
+| G5 | Persistent, secure memory | VERIFIED | Hybrid keyword + local-embedding recall, duplicate reinforcement, contradiction flags, poisoning defences, retention, UI | Live semantic recall through nomic-embed-text; 10 memory tests | (Improvement: memory not yet written automatically by agents) |
+| G6 | Reusable skills, capability engineering | PARTIAL | Versioned skills with contracts, dependencies, with/without evaluation; pinning in the Foundry UI | 15 skill tests; scenario A used `defect-fix-loop` live | Live skill A/B evaluation on a real model; skill authoring UI |
+| G7 | Workforce orchestration, resource scheduling | PARTIAL | Orchestrator with gated children; admission calibrated live (10-12% conservative) | Live scenario D pass; calibration table | Admission queue / automatic unload; parallel children |
+| G8 | Security and isolation | PARTIAL | Job Object containment (kill-on-close, process/memory caps, UI limits, fail-closed); gate; git hardening; memory poisoning defences | Containment tests with negative controls; git hostile-config control | Filesystem/network sandbox (restricted token / AppContainer / VM) — R3 |
+| G9 | Tool and integration ecosystem | PARTIAL | Workspace tools, MCP gateway, read-only git tools | git tool tests | Web research, browser and computer-use tools (deliberately withheld without an egress policy — R18) |
+| G10 | Independent verification | VERIFIED | Host verification engine; workforce verifier contract with fabricated-citation rejection and supporting-evidence rule | Live scenario D (PASS) and the recorded failed verifier runs | - |
+| G11 | Complete desktop experience | PARTIAL | Ten-page shell including Agent Foundry (qualification, agents, runs, memory); settings for override and embeddings | UI tests; frozen GUI smoke test renders all pages | Interactive QA pass by the owner; visual review of the new page |
+| G12 | End-to-end recovery | VERIFIED | Checkpoints, leases, dead-owner reclamation, frozen-safe recovery child | Live scenario E | (Further drills: Ollama restart mid-run, model removal, DB error) |
+| G13 | Real-world acceptance scenarios | VERIFIED | A-F implemented and run on real models | Acceptance run 20261113-110646 and D re-runs | - |
+| G14 | Clean Windows packaging and install | PARTIAL | Clean-venv build, GUI + CLI, SBOM, licence audit, smoke tests, checksums, install/upgrade/uninstall scripts | Release build and install cycle on the workstation | Code signing; clean-VM install test (R17) |
+| G15 | Final release certification | OPEN | - | - | G1, G6-G9, G11, G14 |
 
-## Directive requirements deliberately not attempted in increments 1-2
-
-Desktop pages, OS sandboxing, memory intelligence, scheduling queue, browser
-and computer-use tools, scenarios B and D, installer and release artefacts.
-None of these is claimed anywhere as done.
+Summary: 7 of 15 gates VERIFIED (G2, G3, G4, G5, G10, G12, G13), 7 PARTIAL,
+1 OPEN. The product is usable end to end on the reference workstation; it is
+not release-certified.

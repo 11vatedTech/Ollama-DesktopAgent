@@ -25,7 +25,7 @@ from ollama_workstation.agents.execution_lease import (
     WorkspaceBusy,
     new_owner_id,
 )
-from ollama_workstation.agents.memory import MemoryStore
+from ollama_workstation.agents.memory import memory_store_for
 from ollama_workstation.agents.runtime import AgentEvent, AgentResult, AgentRuntime
 from ollama_workstation.agents.tools import ToolError, WorkspaceTools
 from ollama_workstation.agents.verification import (
@@ -425,8 +425,14 @@ class WorkforceOrchestrator:
         *,
         keep_alive: str = "5m",
         tool_factory: Callable[[Path, bool], WorkspaceTools] | None = None,
+        execution_gate: Callable[[str, str, list[dict[str, Any]]], Any] | None = None,
     ) -> None:
         self.client = client
+        # Production callers pass the shared execution gate
+        # (agentification.gate.clear_repository_run): it refuses a child whose
+        # model is unqualified or does not fit in RAM/VRAM, and returns the
+        # RunPolicy carrying the qualified harness. A refusal fails the task.
+        self.execution_gate = execution_gate
         self.repository = repository
         self.keep_alive = keep_alive
         self.tool_factory = tool_factory or self._default_tool_factory
@@ -823,10 +829,18 @@ class WorkforceOrchestrator:
                 tool_registry: WorkspaceTools = tools,
             ) -> None:
                 try:
+                    child_policy = (
+                        None if self.execution_gate is None
+                        else self.execution_gate(
+                            assignment.model_name, assignment.profile.digest,
+                            tool_registry.definitions(),
+                        )
+                    )
                     box["result"] = AgentRuntime(
                         self.client, max_steps=max_steps, keep_alive=self.keep_alive,
                         repository=self.repository,
-                        memory_store=MemoryStore(self.repository) if self.repository else None,
+                        memory_store=(memory_store_for(self.repository, self.client)
+                                      if self.repository else None),
                     ).run(
                         assignment.model_name, assignment.profile,
                         self._task_prompt(
@@ -834,7 +848,7 @@ class WorkforceOrchestrator:
                             manifest, acceptance,
                         ), tool_registry,
                         event=child_event, cancel_event=local_cancel,
-                        admit_workspace=False,
+                        admit_workspace=False, policy=child_policy,
                     )
                 except BaseException as exc:  # child failure must not kill the supervisor
                     box["error"] = exc
@@ -977,7 +991,7 @@ class WorkforceOrchestrator:
                     + str(normalized_exc),
                     "tampered": list(tamper),
                 }]
-        evidence_errors = list(validate_verdict_evidence(parsed, manifest))
+        evidence_errors = list(validate_verdict_evidence(parsed, manifest, workspace))
         contradictions = self._contradicted_claims(parsed, manifest)
         host_acceptance = self._host_acceptance(acceptance, workspace)
         host_checks_passed = bool(host_acceptance) and all(

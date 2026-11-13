@@ -14,11 +14,13 @@ from typing import Any
 
 from ollama_workstation import __version__
 from ollama_workstation.agentification import commands as agentification_commands
+from ollama_workstation.agentification.gate import ExecutionRefused, clear_repository_run
+from ollama_workstation.agentification.resources import ResourceDenied
 from ollama_workstation.agents.binding import validate_installed_model_binding
 from ollama_workstation.agents.execution_lease import LeaseError
 from ollama_workstation.agents.identity_package import export_identity_package
 from ollama_workstation.agents.mcp_gateway import CompositeToolRegistry, MCPToolGateway
-from ollama_workstation.agents.memory import MemoryStore
+from ollama_workstation.agents.memory import memory_store_for
 from ollama_workstation.agents.orchestration import (
     AgentAssignment,
     WorkforceOrchestrator,
@@ -66,8 +68,13 @@ def _execute_agent(
     resume_checkpoint: dict[str, Any] | None,
     event: Callable[[AgentEvent], None],
     lease_owner: str | None = None,
+    allow_unqualified: bool = False,
 ) -> AgentResult:
-    """Run or resume one bounded agent with the same host-tool policy."""
+    """Run or resume one bounded agent with the same host-tool policy.
+
+    Every run passes the shared execution gate (qualification + RAM/VRAM
+    admission) before the model is loaded.
+    """
     def approve(description: str) -> bool:
         return input(f"APPROVAL REQUIRED: {description}\nAllow? [y/N] ").strip().lower() == "y"
 
@@ -82,14 +89,22 @@ def _execute_agent(
                 f"[mcp] Connected {len(mcp_gateway.routes)} explicitly approved tool(s).",
                 file=sys.stderr,
             )
+        clearance, policy = clear_repository_run(
+            client, repository, model_name=model, model_digest=profile.digest,
+            tool_definitions=tools.definitions(),
+            allow_unqualified=allow_unqualified or settings.allow_unqualified_models,
+            resume_checkpoint=resume_checkpoint,
+        )
+        print(f"[gate] {clearance.summary()}", file=sys.stderr)
         return AgentRuntime(
             client, max_steps=max_steps, keep_alive=settings.keep_alive,
-            repository=repository, memory_store=MemoryStore(repository),
+            repository=repository, memory_store=memory_store_for(repository, client, settings),
         ).run(
             model, profile, task, tools,
             event=event,
             resume_checkpoint=resume_checkpoint,
             lease_owner=lease_owner,
+            policy=policy,
         )
 
 
@@ -181,6 +196,18 @@ def _recover(args: argparse.Namespace, settings: Any, client: Any,
         )
         return 2
     return 0 if result.status == "completed" else 1
+
+
+def _workforce_gate(client: Any, repository: Repository, settings: Any) -> Callable[..., Any]:
+    """Execution gate for workforce child runs (qualification + admission)."""
+    def gate(model: str, digest: str, definitions: list[dict[str, Any]]) -> Any:
+        clearance, policy = clear_repository_run(
+            client, repository, model_name=model, model_digest=digest,
+            tool_definitions=definitions, allow_unqualified=settings.allow_unqualified_models,
+        )
+        print(f"[gate] {clearance.summary()}", file=sys.stderr)
+        return policy
+    return gate
 
 
 def _ensure_profile(client: Any, repository: Repository, model: str, *,
@@ -296,7 +323,8 @@ def _workforce(args: argparse.Namespace, settings: Any, client: Any,
         return 2
     try:
         result = WorkforceOrchestrator(
-            client, repository, keep_alive=settings.keep_alive
+            client, repository, keep_alive=settings.keep_alive,
+            execution_gate=_workforce_gate(client, repository, settings),
         ).run(
             plan, args.workspace, assignments, run_id=run_id,
             approval=approve, installed_models=installed, owner_id=owner_id,
@@ -430,6 +458,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("workspace", type=Path)
     run.add_argument("task")
     run.add_argument("--max-steps", type=int, default=12)
+    run.add_argument("--unqualified", action="store_true",
+                     help="Operator override: run even though the model has no harness qualification")
     recover = commands.add_parser(
         "recover", help="List, resume or discard durable agent run checkpoints"
     )
@@ -475,7 +505,21 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _utf8_console() -> None:
+    """Model output contains arbitrary Unicode. On Windows the console codec is often
+    cp1252, so printing a single unmappable character would crash a finished command."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        encoding = str(getattr(stream, "encoding", "") or "").lower().replace("-", "")
+        if reconfigure is not None and encoding != "utf8":
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):
+                pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _utf8_console()
     args = build_parser().parse_args(argv)
     paths, settings, client, repository = _services()
     log_event("cli_command", "CLI command started.", command=args.command)
@@ -633,6 +677,7 @@ def main(argv: list[str] | None = None) -> int:
                 model=args.model, profile=profile, task=args.task, workspace=args.workspace,
                 max_steps=args.max_steps, resume_checkpoint=None,
                 event=lambda item: print(f"[{item.kind}] {item.message}", file=sys.stderr),
+                allow_unqualified=args.unqualified,
             )
             safe_message, redacted_count = WorkspaceTools.redact_sensitive_text(result.final_message)
             if redacted_count:
@@ -641,6 +686,14 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if result.status == "completed" else 1
         if args.command == "recover":
             return _recover(args, settings, client, repository)
+    except ExecutionRefused as exc:
+        lines = ["Refused: the model is not cleared to run as an agent:",
+                 *(f"  - {issue}" for issue in exc.issues)]
+        print("\n".join(lines), file=sys.stderr)
+        return 3
+    except ResourceDenied as exc:
+        print(f"Refused by resource admission: {exc}", file=sys.stderr)
+        return 3
     except (OllamaError, OSError, RuntimeError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

@@ -139,6 +139,17 @@ class AgentStore:
             row = db.execute(query + " ORDER BY created_at DESC LIMIT 1", values).fetchone()
         return None if row is None else self._load(row[0], row[1], "qualification")
 
+    def qualifications_for(self, model_name: str, model_digest: str,
+                           limit: int = 20) -> list[dict[str, Any]]:
+        """Full, integrity-checked records for one model artifact, newest first."""
+        with self._connection() as db:
+            rows = db.execute(
+                "SELECT record_json, record_sha256 FROM harness_qualifications "
+                "WHERE model_name=? AND model_digest=? ORDER BY created_at DESC LIMIT ?",
+                (model_name, model_digest, max(1, min(limit, 200))),
+            ).fetchall()
+        return [self._load(row[0], row[1], "qualification") for row in rows]
+
     def list_qualifications(self, limit: int = 100) -> list[dict[str, Any]]:
         with self._connection() as db:
             rows = db.execute(

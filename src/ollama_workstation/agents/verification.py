@@ -349,18 +349,48 @@ def _extract_json_object(text: str) -> dict[str, Any]:
     )
 
 
+def _supporting_file_error(workspace: Path, artifact: str, sha256: str | None) -> str | None:
+    """Why a non-manifest citation is not a real, readable workspace file, or None."""
+    from ollama_workstation.agents.tools import ToolError, WorkspaceTools
+
+    try:
+        relative = canonical_artifact_path(artifact)
+        target = WorkspaceTools(workspace)._path(relative)  # noqa: SLF001 - same policy
+    except (VerificationProtocolError, ToolError):
+        return f"{artifact}: not present in the host artifact manifest"
+    if not target.is_file():
+        return f"{artifact}: not in the host artifact manifest and not a file in the workspace"
+    if sha256 and sha256 != _sha256_file(target):
+        return f"{relative}: verifier sha256 does not match the workspace file"
+    return None
+
+
 def validate_verdict_evidence(
     verdict: StructuredVerdict,
     manifest: ArtifactManifest,
+    workspace: Path | None = None,
 ) -> tuple[str, ...]:
-    """Validate every model claim against the host snapshot."""
+    """Validate every model claim against the host snapshot.
+
+    Citations of deliverables must match the manifest. When ``workspace`` is
+    given, a verifier may also cite *supporting* files it inspected (for example
+    the inputs it recomputed from): such a citation is accepted only if it is a
+    real, contained, non-sensitive workspace file whose digest matches when one
+    is given. Supporting citations never count toward manifest coverage, and a
+    fabricated path is still an error.
+    """
     errors: list[str] = []
     manifest_paths = set(manifest.paths)
     cited: set[str] = set()
     for item in verdict.evidence:
         record = manifest.record_for(item.artifact)
         if record is None:
-            errors.append(f"{item.artifact}: not present in the host artifact manifest")
+            if workspace is None:
+                errors.append(f"{item.artifact}: not present in the host artifact manifest")
+            else:
+                problem = _supporting_file_error(workspace, item.artifact, item.sha256)
+                if problem:
+                    errors.append(problem)
             continue
         cited.add(record.path)
         if item.sha256 and item.sha256 != record.sha256:

@@ -116,3 +116,35 @@ def test_evidence_sha_must_match_manifest(tmp_path: Path) -> None:
     }]))
     errors = validate_verdict_evidence(parsed, manifest)
     assert any("sha256" in error for error in errors)
+
+
+def test_supporting_citations_must_be_real_workspace_files(tmp_path: Path) -> None:
+    """Live finding: an honest verifier cites the inputs it recomputed from."""
+    workspace = tmp_path / "workspace"
+    (workspace / "report").mkdir(parents=True)
+    (workspace / "orders").mkdir()
+    (workspace / "report" / "summary.txt").write_text("grand total: 3", encoding="utf-8")
+    (workspace / "orders" / "a.txt").write_text("total: 3", encoding="utf-8")
+    (workspace / ".env").write_text("TOKEN=x", encoding="utf-8")
+    manifest = ArtifactManifest.build(workspace, ["report/summary.txt"])
+    honest = StructuredVerdict.parse(_verdict([
+        {"artifact": "report/summary.txt", "observation": "grand total: 3"},
+        {"artifact": "orders/a.txt", "observation": "total: 3"},
+    ]))
+    assert validate_verdict_evidence(honest, manifest, workspace) == ()
+    # Without the workspace the strict manifest-only rule still applies.
+    assert validate_verdict_evidence(honest, manifest)
+    with pytest.raises(VerificationProtocolError):  # escapes are refused at parse time
+        StructuredVerdict.parse(_verdict([{"artifact": "../outside.txt", "observation": "x"}]))
+    for bad in ("orders/missing.txt", ".env"):
+        fabricated = StructuredVerdict.parse(_verdict([
+            {"artifact": "report/summary.txt", "observation": "grand total: 3"},
+            {"artifact": bad, "observation": "x"},
+        ]))
+        assert validate_verdict_evidence(fabricated, manifest, workspace), bad
+    # Supporting citations never satisfy manifest coverage.
+    inputs_only = StructuredVerdict.parse(_verdict([
+        {"artifact": "orders/a.txt", "observation": "total: 3"},
+    ]))
+    errors = validate_verdict_evidence(inputs_only, manifest, workspace)
+    assert any("did not cite" in error for error in errors)

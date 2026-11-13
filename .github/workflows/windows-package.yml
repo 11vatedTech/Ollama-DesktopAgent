@@ -12,15 +12,26 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install package and PyInstaller
+      - name: Build release (clean venv, SBOM, licence audit, frozen smoke tests)
+        shell: powershell
+        run: .\scripts\build_release.ps1 -Python python -PythonVersion ""
+      - name: Install / upgrade / uninstall cycle
+        shell: powershell
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[desktop,dev]" pyinstaller
-      - name: Build executable
-        run: pyinstaller --noconfirm --clean --windowed --name 11vated-Intelligence --paths src --collect-all PySide6 --collect-all shiboken6 src/ollama_workstation/__main__.py
-      - name: Upload package
+          $release = Get-ChildItem dist\release -Directory | Select-Object -First 1
+          $zip = Get-ChildItem $release.FullName -Filter *.zip | Select-Object -First 1
+          $root = Join-Path $env:RUNNER_TEMP "11vt\app"
+          $env:OLLAMA_WORKSTATION_HOME = Join-Path $env:RUNNER_TEMP "11vt\home"
+          & "$($release.FullName)\install.ps1" -Source $zip.FullName -InstallRoot $root -NoShortcut
+          & "$root\11vated.exe" --version
+          $gui = Start-Process "$root\11vated-Intelligence.exe" -ArgumentList "--smoke-test" -Wait -PassThru -NoNewWindow
+          if ($gui.ExitCode -ne 0) { throw "Installed GUI smoke test failed" }
+          & "$($release.FullName)\install.ps1" -Source $zip.FullName -InstallRoot $root -NoShortcut
+          & "$root\uninstall.ps1" -InstallRoot $root
+          if (Test-Path $root) { throw "Uninstall left files behind" }
+      - name: Upload release
         uses: actions/upload-artifact@v4
         with:
           name: 11vated-Intelligence-Windows
-          path: dist/11vated-Intelligence/
+          path: dist/release/
           if-no-files-found: error

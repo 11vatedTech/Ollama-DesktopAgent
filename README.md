@@ -47,18 +47,22 @@ The interface is documented with its validation matrix, screenshot gallery and k
 | Agent Identity Package export | Implemented |
 | Native tool-call loop | Implemented |
 | Structured/guided tool catalogue and action contracts | Implemented; host validation required before execution |
-| Streaming cancellation and command cleanup | Desktop closes active Ollama streams; commands use best-effort process-group/taskkill cleanup, not OS isolation |
+| Streaming cancellation and command containment | Desktop closes active Ollama streams; on Windows commands run in a Job Object (suspended start, kill-on-close, process and memory caps, UI restrictions); not a filesystem or network sandbox |
 | Agent execution budgets | Max 8 tool calls per step, 64 per run, reject batches over 32, serialized-context accounting, and 256 KB bounded stdout/stderr capture |
 | Durable run journal and Run History UI | Ordered SQLite events are written during execution; desktop history shows completed and crash-interrupted runs |
 | Structured JSON action fallback and guided text action fallback | Implemented |
 | Workspace-scoped file tools | Implemented with containment, size limits, host schemas, credential-path denial and heuristic secret-value redaction before model context |
 | Optional allow-listed command tool | Implemented but disabled by default; configured executable resolution and human approval required; not a sandbox |
-| SQLite profile, conversation, run, checkpoint and scoped-memory persistence | Implemented; explicit scoped notes, lexical recall/archive, per-event durable run journal and Run History UI. Embeddings remain open |
+| SQLite profile, conversation, run, checkpoint and scoped-memory persistence | Implemented; hybrid keyword + local-embedding recall, duplicate reinforcement, contradiction flags, poisoning defences and retention consolidation |
+| Universal agentification | Implemented: empirical harness qualification on verified tasks, versioned digest-bound agents, skills, independent verifier, RAM/VRAM admission, and one execution gate for every agent path; Agent Foundry desktop page |
+| Live acceptance scenarios A-F | Implemented and run against real models on the reference workstation (see `engineering/campaign/VERIFICATION_EVIDENCE.md`) |
 | Durable run recovery | Implemented: integrity-hashed safe-boundary checkpoints, exact model-digest/workspace/harness/tool-manifest binding, AES-256-GCM checkpoint payloads with a separate local key, desktop and CLI recovery, fail-closed review for interrupted tools, and runtime-owned atomic run/workspace admission leases with heartbeat, dead-owner reclamation, active-lease recovery blocking and lease-loss shutdown |
 | PySide6 desktop shell and headless CLI | Implemented with the nine-workspace intelligence interface, shared design system, live inventory/profile/telemetry, streamed chat and stop, local conversations, workforce approvals, diagnostics, history/recovery and settings; Windows UI tests and import are configured in CI; full interactive QA on supported hardware remains |
 | Workforce orchestration | Implemented: evidence-backed role selection, validated DAG plans, sequential delegation, shared workspace, budgets, timeouts/cancellation, retry-safe failure handling, approvals, independent verdict/artifact checks, durable hash-chained events and desktop/CLI controls. Qualification remains explicit |
 | MCP client transport certification | Implemented for the official SDK v2 over stdio and Streamable HTTP: real subprocess/uvicorn integration tests cover discovery, invocation, timeout, cancellation, crash detection, reconnection, schema-drift refusal, process/session cleanup and concurrent clients |
-| Full MCP server, ACP, browser/computer-use adapters, parallel/distributed scheduling, specialist benchmark adapters, OS sandbox and role/agent certification | Roadmap |
+| Read-only git tools | Implemented, opt-in per agent, hostile-config safe |
+| Windows release pipeline | Implemented: clean-venv PyInstaller GUI + CLI, CycloneDX SBOM, licence audit, frozen smoke tests, per-user install/upgrade/uninstall; installer is unsigned |
+| Full MCP server, ACP, browser/computer-use adapters, web research, parallel scheduling, filesystem/network sandbox (AppContainer/VM), signed installer | Roadmap |
 
 ## Requirements
 
@@ -90,6 +94,31 @@ Launch:
 ```powershell
 python -m ollama_workstation
 ```
+
+### Install a release build (no Python needed)
+
+```powershell
+.\scripts\build_release.ps1          # or download a release folder
+powershell -ExecutionPolicy Bypass -File dist\release\<version>\install.ps1 -Source dist\release\<version>\11vated-Intelligence-<version>-win64.zip
+```
+
+This installs per user to `%LOCALAPPDATA%\Programs\11vated-Intelligence` with a
+Start Menu shortcut and the `11vated.exe` CLI. Running it again with a newer zip
+upgrades in place (with rollback on failure). Uninstall from *Settings -> Apps*
+or `uninstall.ps1`; user data is kept unless `-RemoveUserData` is passed.
+
+### First steps: from model to agent
+
+```powershell
+11vated profile qwen2.5-coder:14b
+11vated qualify qwen2.5-coder:14b          # measured harness selection
+11vated agent create "Repo Scribe" --model qwen2.5-coder:14b --allow-provisional
+11vated agent activate "Repo Scribe"
+11vated agent run "Repo Scribe" .\agent-workspace "Summarise the project"
+```
+
+Or use the **Agent Foundry** page in the desktop app. A model that has not been
+qualified will not run as an agent anywhere in the workstation.
 
 ## CLI
 

@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ollama_workstation.agents.memory import MemoryStore
+from ollama_workstation.agents.memory import memory_store_for
 from ollama_workstation.config import AppPaths, load_settings, save_settings
 from ollama_workstation.observability import configure_logging, log_event
 from ollama_workstation.ollama.client import OllamaClient
@@ -37,6 +37,7 @@ from ollama_workstation.ui.components import (
     label,
 )
 from ollama_workstation.ui.intelligence_core import IntelligenceCore
+from ollama_workstation.ui.pages.agents import AgentFoundryPage
 from ollama_workstation.ui.pages.chat import ChatPage
 from ollama_workstation.ui.pages.command_center import CommandCenterPage
 from ollama_workstation.ui.pages.history import HistoryPage
@@ -55,6 +56,7 @@ PAGE_TITLES = {
     "command": "Command Center",
     "chat": "Advanced Chat",
     "models": "Model Intelligence",
+    "agents": "Agent Foundry",
     "workforce": "Workforce Studio",
     "operations": "Agent Operations",
     "integrations": "Integration Hub",
@@ -62,6 +64,12 @@ PAGE_TITLES = {
     "history": "Run History",
     "settings": "Settings",
 }
+
+def _shortcut_for(key: str) -> str:
+    """Ctrl+1..Ctrl+9 then Ctrl+0 for the tenth page."""
+    index = list(PAGE_TITLES).index(key) + 1
+    return f"Ctrl+{index % 10}" if index <= 10 else "no shortcut"
+
 
 NAV_GROUPS = [
     ("OPERATE", (
@@ -71,6 +79,7 @@ NAV_GROUPS = [
     )),
     ("INTELLIGENCE", (
         ("models", "◇   Model Intelligence"),
+        ("agents", "◎   Agent Foundry"),
         ("workforce", "⬡   Workforce Studio"),
     )),
     ("SYSTEM", (
@@ -100,7 +109,7 @@ class MainWindow(QMainWindow):
         )
         self.profiler = ModelProfiler(self.client, self.settings.keep_alive)
         self.repository = Repository(self.paths.database_file)
-        self.memory_store = MemoryStore(self.repository)
+        self.memory_store = memory_store_for(self.repository, self.client, self.settings)
         self.bus = EventBus()
         self.activity = ActivityRegistry()
         self.context = AppContext(
@@ -147,6 +156,7 @@ class MainWindow(QMainWindow):
             "command": CommandCenterPage(self.context),
             "chat": ChatPage(self.context),
             "models": ModelCenterPage(self.context),
+            "agents": AgentFoundryPage(self.context),
             "workforce": WorkforcePage(self.context),
             "operations": OperationsPage(self.context),
             "integrations": IntegrationHubPage(self.context),
@@ -189,7 +199,7 @@ class MainWindow(QMainWindow):
             for key, text in entries:
                 nav = NavButton(text)
                 nav.setAccessibleName(PAGE_TITLES[key])
-                nav.setToolTip(f"Open {PAGE_TITLES[key]} (Ctrl+{list(PAGE_TITLES).index(key) + 1})")
+                nav.setToolTip(f"Open {PAGE_TITLES[key]} ({_shortcut_for(key)})")
                 nav.clicked.connect(lambda checked=False, target=key: self.navigate(target))
                 self.nav_buttons[key] = nav
                 layout.addWidget(nav)
@@ -265,7 +275,9 @@ class MainWindow(QMainWindow):
         self.bus.theme_changed.connect(self._apply_motion)
         self.activity.changed.connect(self._activity_changed)
         for index, key in enumerate(PAGE_TITLES, start=1):
-            shortcut = QShortcut(QKeySequence(f"Ctrl+{index}"), self)
+            if index > 10:
+                break
+            shortcut = QShortcut(QKeySequence(f"Ctrl+{index % 10}"), self)
             shortcut.activated.connect(lambda target=key: self.navigate(target))
         QShortcut(QKeySequence("Ctrl+R"), self).activated.connect(self.refresh_inventory)
 
@@ -544,11 +556,21 @@ class MainWindow(QMainWindow):
         log_event("desktop_stopped", "Intelligence interface closed")
 
 
-def run_desktop() -> int:
+def run_desktop(*, smoke_test: bool = False) -> int:
+    """Start the desktop shell. ``smoke_test`` builds every page, renders one
+    frame and exits 0, so an installed package can be proven to launch."""
     app = QApplication.instance() or QApplication([])
     app.setApplicationName("11vatedTech Intelligence")
     app.setOrganizationName("11vatedTech")
     apply_theme(app)
     window = MainWindow()
     window.show()
+    if smoke_test:
+        for key in list(window.pages):
+            window.navigate(key, persist=False)
+            app.processEvents()
+        print(f"smoke-test ok: {len(window.pages)} pages rendered", flush=True)
+        window.close()
+        app.processEvents()
+        return 0
     return app.exec()
