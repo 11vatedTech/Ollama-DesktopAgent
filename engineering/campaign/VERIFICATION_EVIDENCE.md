@@ -173,3 +173,12 @@ Install cycle with the release zip into an isolated folder: checksum verified
 uninstall entry written -> in-place upgrade -> tampered zip refused with the
 previous install intact -> uninstall removed the folder and registry entry and
 kept user data. Not done: a clean Windows VM (R17).
+
+### Hosted CI (session 3, after push)
+
+| Run | Result |
+|---|---|
+| CI `43489970092` (dispatch, head bfdb7a9) | 4/4 jobs passed: Ubuntu and Windows, Python 3.11 and 3.12 |
+| Windows package `43489974778` (head bfdb7a9) | failed: build, SBOM, licence audit and frozen smoke tests passed, but `doctor` exits 2 without Ollama and the stale exit code failed the step |
+| CI `43491738032` (push, head fbe5487) | 4/4 jobs passed |
+| Windows package `43491747263` (head fbe5487) | passed: clean build, smoke tests, install / upgrade / uninstall cycle on a hosted runner |

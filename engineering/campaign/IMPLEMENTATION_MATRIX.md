@@ -7,7 +7,7 @@ VERIFICATION_EVIDENCE.md.
 
 | Gate | Outcome required | Status | Implemented | Evidence | Missing before the gate can close |
 |---|---|---|---|---|---|
-| G1 | Repository integrity, consolidation | PARTIAL | Campaign committed on `campaign/complete-agent-v1`; ruff and compileall clean; Windows suite green | "Final suite" | Push; hosted CI (Ubuntu + Windows); merge PRs #1-#3 to `main`; mypy debt |
+| G1 | Repository integrity, consolidation | PARTIAL | Pushed; hosted CI green on Ubuntu + Windows (3.11, 3.12) and the Windows package workflow green; ruff and compileall clean | "Hosted CI" | Merge PRs #1-#3 and this branch to `main`; mypy debt |
 | G2 | Model intelligence, empirical qualification | VERIFIED | Profiler, benchmarks, routing; verified agent-task suite run live on three models, with stored final messages for every failed attempt | "Harness qualification on real models" | (Improvement, not a gate blocker: more tasks/trials, long-context and vision suites — R7) |
 | G3 | Universal agentification, harness selection | VERIFIED | Measured harness selection; versioned digest-bound agents; one execution gate for every path; Agent Foundry UI | Live qualification; gate tests; scenarios A-E ran on gated agents | - |
 | G4 | Functional autonomous execution | VERIFIED | Bounded loop, budgets, protocol repair (fenced-JSON fix), tool-error guidance | Live scenarios A, B, C | - |
