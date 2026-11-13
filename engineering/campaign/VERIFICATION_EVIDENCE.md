@@ -247,3 +247,12 @@ Settings note that still said commands had no filesystem/network sandbox.
 `mypy src` (strict): 134 errors -> 0; added to CI on Windows. Two real defects
 fixed along the way (Integration Hub `test_runtime` method overwritten by a
 button; VRAM gauge crash when only the total was reported).
+
+### Hosted CI and release (session 4)
+
+| Run | Result |
+|---|---|
+| CI `43522474325` (head 1630890) | 4/4 jobs passed (Ubuntu/Windows, Python 3.11/3.12), including strict mypy on Windows |
+| Windows package `43522488396` | passed: clean build, smoke tests; installed CLI ran with no Python on PATH; installed GUI smoke test; AppContainer profile created on the fresh runner (`sandbox status` supported: true) |
+| Local signed build (temporary self-signed certificate, removed afterwards) | both executables Authenticode-signed and timestamped; frozen CLI/GUI smoke tests passed after signing; status `UnknownError` = untrusted test root, as expected; release-manifest.json records it |
+| Full local suite | 383 passed, 6 skipped |
