@@ -272,8 +272,11 @@ class AgentService:
     """Create, version, gate and execute agents."""
 
     def __init__(self, client: Any, repository: Any, store: AgentStore, *,
-                 keep_alive: str = "5m") -> None:
+                 keep_alive: str = "5m", admission: Any | None = None) -> None:
         self.client = client
+        # Optional AdmissionController. When present, every run is admitted
+        # against measured RAM/VRAM before the model is loaded.
+        self.admission = admission
         self.repository = repository
         self.store = store
         self.keep_alive = keep_alive
@@ -507,6 +510,13 @@ class AgentService:
         qualification = self.resolve_qualification(agent)
         assert qualification is not None  # guaranteed by readiness()
         harness = agent.harness or qualification.selected_harness
+        if self.admission is not None:
+            requested_ctx = agent.context.get("num_ctx")
+            decision = self.admission.require(  # raises ResourceDenied
+                agent.model_name, int(requested_ctx) if requested_ctx else None)
+            if event is not None:
+                event(AgentEvent("resource_admission", "; ".join(decision.reasons),
+                                 decision.to_dict()))
         skills = self.skills.resolve([dict(item) for item in agent.skills])
         instructions = "\n\n".join(part for part in (
             agent.instructions.strip(), render_skills(skills)) if part)

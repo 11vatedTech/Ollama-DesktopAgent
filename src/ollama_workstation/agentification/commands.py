@@ -26,6 +26,7 @@ from ollama_workstation.agentification.harness import (
     default_tool_factory,
     shell_tool_factory,
 )
+from ollama_workstation.agentification.resources import AdmissionController, ResourceDenied
 from ollama_workstation.agentification.skills import SkillError, SkillEvaluator
 from ollama_workstation.agentification.store import AgentStore
 from ollama_workstation.agentification.verifier import CheckSpecError, VerificationEngine
@@ -33,7 +34,7 @@ from ollama_workstation.agents.tools import WorkspaceTools
 from ollama_workstation.models.schemas import ModelProfile
 from ollama_workstation.profiling.profiler import ModelProfiler
 
-COMMANDS = frozenset({"qualify", "agent", "skill", "verify", "accept"})
+COMMANDS = frozenset({"qualify", "agent", "skill", "verify", "accept", "resources"})
 
 
 def register(commands: Any) -> None:
@@ -100,6 +101,10 @@ def register(commands: Any) -> None:
     verify.add_argument("checks", type=Path)
     verify.add_argument("--allow-commands", action="store_true")
 
+    resources = commands.add_parser(
+        "resources", help="Show measured RAM/VRAM and the admission decision for models")
+    resources.add_argument("models", nargs="*", help="Models to evaluate (default: all installed)")
+    resources.add_argument("--num-ctx", type=int, help="Context length to plan for")
     accept = commands.add_parser("accept", help="Run real-world acceptance scenarios")
     accept.add_argument("--models", nargs="+", required=True,
                         help="Models to use; the first runs scenarios A, C and E")
@@ -143,7 +148,9 @@ def _print_qualification(record: HarnessQualification) -> None:
 def dispatch(args: argparse.Namespace, paths: Any, settings: Any, client: Any,
              repository: Any) -> int:
     store = AgentStore(paths.database_file)
-    service = AgentService(client, repository, store, keep_alive=settings.keep_alive)
+    admission = AdmissionController(client)
+    service = AgentService(client, repository, store, keep_alive=settings.keep_alive,
+                           admission=admission)
     service.skills.install_builtins()
     try:
         if args.command == "qualify":
@@ -168,10 +175,21 @@ def dispatch(args: argparse.Namespace, paths: Any, settings: Any, client: Any,
                 checks)
             print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
             return 0 if report.passed else 1
+        if args.command == "resources":
+            names = args.models or [str(item.get("name") or item.get("model") or "")
+                                    for item in client.list_models()]
+            decisions = [admission.evaluate(name, args.num_ctx).to_dict() for name in names if name]
+            print(json.dumps(decisions, indent=2, ensure_ascii=False))
+            return 0 if all(item["admitted"] for item in decisions) else 1
         if args.command == "accept":
             return _accept(args, paths, settings, client, repository, store)
     except (LookupError, AgentConfigError, SkillError, CheckSpecError) as exc:
         print(str(exc).strip("'\""), file=sys.stderr)
+        return 2
+    except ResourceDenied as exc:
+        print("Resource admission denied:", file=sys.stderr)
+        for reason in exc.decision.reasons:
+            print(f"  - {reason}", file=sys.stderr)
         return 2
     except AgentNotReady as exc:
         print("Agent is not ready:", file=sys.stderr)

@@ -573,3 +573,44 @@ def test_cli_recovery_refuses_a_workspace_held_by_another_run(
         assert "not resumable" in captured.err
         assert "workspace" in captured.err.lower()
     assert repository.get_workspace_lease(workspace) is None
+
+
+def test_resumed_run_continues_the_same_time_budget(tmp_path: Path, monkeypatch) -> None:
+    """A crash must not hand the run a fresh time budget (KNOWN_RISKS R6)."""
+    from ollama_workstation.agents.runtime import RunPolicy
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "hello.txt").write_text("hello", encoding="utf-8")
+    repository = Repository(tmp_path / "state.sqlite3")
+    now = {"value": 1000.0}
+
+    def tick() -> float:
+        now["value"] += 15.0
+        return now["value"]
+
+    monkeypatch.setattr("ollama_workstation.agents.runtime.time.monotonic", tick)
+    client = ScriptedClient([
+        assistant(tool_calls=[tool_call("read_file", path="hello.txt")]),
+        SystemExit("simulated process death"),
+    ])
+    with pytest.raises(SystemExit):
+        AgentRuntime(client, repository=repository).run(
+            MODEL, make_profile(), "Read hello.txt", CountingTools(workspace),
+            policy=RunPolicy(max_seconds=100_000),
+        )
+    [metadata] = repository.list_run_checkpoints()
+    checkpoint = repository.get_run_checkpoint(str(metadata["run_id"]))
+    assert checkpoint is not None
+    spent = float(checkpoint["payload"]["elapsed_seconds"])
+    assert spent > 0
+
+    monkeypatch.setattr("ollama_workstation.agents.runtime.time.monotonic", lambda: 5.0)
+    resumed_client = ScriptedClient([assistant("should never be requested")])
+    result = AgentRuntime(resumed_client, repository=repository).run(
+        MODEL, make_profile(), "Read hello.txt", CountingTools(workspace),
+        resume_checkpoint=checkpoint, policy=RunPolicy(max_seconds=spent),
+    )
+    assert result.status == "time_limit"
+    assert resumed_client.calls == 0
+    assert result.usage["elapsed_seconds"] >= spent

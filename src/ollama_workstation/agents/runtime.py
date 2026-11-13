@@ -255,6 +255,13 @@ class AgentRuntime:
             else min(self.MAX_TOTAL_TOOL_CALLS, policy.max_tool_calls)
         )
         started_monotonic = time.monotonic()
+        # Time already spent by earlier processes of this run. A resumed run
+        # continues the same time budget instead of receiving a fresh one.
+        prior_elapsed = 0.0
+
+        def elapsed_seconds() -> float:
+            return prior_elapsed + (time.monotonic() - started_monotonic)
+
         usage: dict[str, Any] = {
             "prompt_tokens": 0, "completion_tokens": 0, "model_requests": 0,
             "tool_calls": 0, "repairs": 0, "elapsed_seconds": 0.0,
@@ -314,7 +321,7 @@ class AgentRuntime:
                 for item in trace
             ]
             usage["tool_calls"] = total_tool_calls
-            usage["elapsed_seconds"] = round(time.monotonic() - started_monotonic, 3)
+            usage["elapsed_seconds"] = round(elapsed_seconds(), 3)
             result = AgentResult(run_id, status, safe_final_message, steps, trace, dict(usage))
             if self.repository is not None:
                 try:
@@ -379,6 +386,10 @@ class AgentRuntime:
             messages = [dict(item) for item in payload["messages"]]
             start_step = int(resume_checkpoint["step"]) + 1
             step_budget = int(payload["step_budget"])
+            try:
+                prior_elapsed = max(0.0, float(payload.get("elapsed_seconds", 0.0)))
+            except (TypeError, ValueError):
+                prior_elapsed = 0.0
             total_tool_calls = int(resume_checkpoint["tool_calls"])
             resume_count = int(payload.get("resume_count", 0)) + 1
             created_at = str(resume_checkpoint.get("created_at") or created_at)
@@ -457,6 +468,7 @@ class AgentRuntime:
                 "pending_operations": _sanitize_event_value(pending_operations or []),
                 "step_budget": step_budget,
                 "resume_count": resume_count,
+                "elapsed_seconds": round(elapsed_seconds(), 3),
             }
             try:
                 self.repository.save_run_checkpoint(
@@ -494,7 +506,7 @@ class AgentRuntime:
                     step - 1,
                 )
             if (policy.max_seconds is not None
-                    and time.monotonic() - started_monotonic >= policy.max_seconds):
+                    and elapsed_seconds() >= policy.max_seconds):
                 record("time_limit", "Stopped at the host-enforced time budget.",
                        max_seconds=policy.max_seconds)
                 return finish(
