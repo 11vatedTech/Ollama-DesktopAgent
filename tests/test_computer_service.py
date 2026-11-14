@@ -126,8 +126,12 @@ def test_elevated_targets_are_refused(tmp_path: Path, monkeypatch: pytest.Monkey
     try:
         computer.launch("practice")
         monkeypatch.setattr(module, "process_is_elevated", lambda _pid: True)
+        monkeypatch.setattr(module, "_host_is_elevated", lambda: False)
         with pytest.raises(InteractionDenied, match="elevated"):
             computer.snapshot("w1")
+        # An operator running the workstation elevated is not escalated by its own apps.
+        monkeypatch.setattr(module, "_host_is_elevated", lambda: True)
+        assert computer.snapshot("w1")["window"] == "w1"
     finally:
         monkeypatch.setattr(module, "process_is_elevated", lambda _pid: False)
         computer.close()

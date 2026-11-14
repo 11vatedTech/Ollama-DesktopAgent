@@ -98,6 +98,16 @@ def _process_image(pid: int) -> str:
         kernel32.CloseHandle(handle)
 
 
+_HOST_ELEVATED: bool | None = None
+
+
+def _host_is_elevated() -> bool:
+    global _HOST_ELEVATED
+    if _HOST_ELEVATED is None:
+        _HOST_ELEVATED = process_is_elevated(os.getpid())
+    return _HOST_ELEVATED
+
+
 def _process_in_job(pid: int, job: Any) -> bool:
     if job is None or getattr(job, "_handle", None) is None:
         return False
@@ -214,7 +224,11 @@ class ComputerSession:
             raise InteractionDenied(f"Window {window.name!r} is gone (the app was closed)")
         if control.ClassName in ELEVATION_CLASSES or _process_image(control.ProcessId) in ELEVATION_PROCESSES:
             raise InteractionDenied("UAC and credential windows are never controllable")
-        if process_is_elevated(control.ProcessId):
+        # The boundary is privilege *above the host*: an agent may never drive a
+        # process that runs elevated when the workstation itself does not. (When an
+        # operator runs the workstation elevated, its own launched apps are not an
+        # escalation; UAC and credential windows above stay refused regardless.)
+        if process_is_elevated(control.ProcessId) and not _host_is_elevated():
             self.broker.decide("computer", "inspect", elevated=True)
             raise InteractionDenied("The window belongs to an elevated process; refused")
         return control
