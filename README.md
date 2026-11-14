@@ -55,7 +55,7 @@ The interface is documented with its validation matrix, screenshot gallery and k
 | Optional allow-listed command tool | Implemented but disabled by default; configured executable resolution and human approval required. On Windows each command runs in an AppContainer (workspace-only file access, no network) inside a Job Object; fail-closed |
 | SQLite profile, conversation, run, checkpoint and scoped-memory persistence | Implemented; hybrid keyword + local-embedding recall, duplicate reinforcement, contradiction flags, poisoning defences and retention consolidation |
 | Universal agentification | Implemented: empirical harness qualification on verified tasks, versioned digest-bound agents, skills, independent verifier, RAM/VRAM admission, and one execution gate for every agent path; Agent Foundry desktop page |
-| Live acceptance scenarios A-F | Implemented and run against real models on the reference workstation (see `engineering/campaign/VERIFICATION_EVIDENCE.md`) |
+| Live acceptance scenarios A–F | Implemented and exercised against real models on the reference workstation. Outcomes are scenario-specific and evidence-backed: scenarios A–F are exercised in the campaign ledger; the agent-interaction scenarios run against real Edge/UIA Automation; current local outcomes on the reference workstation: A–F exercised, the isolated-workflow scenario (H) still fails on its reference run on the reference model, the cross-workflow scenario (I) passes on the reference model with the post-fix defenses, and the injection-retest scenario (J) has not been re-run after the current fixes. See `engineering/campaign/VERIFICATION_EVIDENCE.md` and the running CI status before claiming passage. This is a pre-release development increment, not a production certification. |
 | Durable run recovery | Implemented: integrity-hashed safe-boundary checkpoints, exact model-digest/workspace/harness/tool-manifest binding, AES-256-GCM checkpoint payloads with a separate local key, desktop and CLI recovery, fail-closed review for interrupted tools, and runtime-owned atomic run/workspace admission leases with heartbeat, dead-owner reclamation, active-lease recovery blocking and lease-loss shutdown |
 | PySide6 desktop shell and headless CLI | Implemented with the nine-workspace intelligence interface, shared design system, live inventory/profile/telemetry, streamed chat and stop, local conversations, workforce approvals, diagnostics, history/recovery and settings; Windows UI tests and import are configured in CI; full interactive QA on supported hardware remains |
 | Workforce orchestration | Implemented: evidence-backed role selection, validated DAG plans, parallel read-only waves with a resource scheduler (writers run alone), shared workspace, budgets, timeouts/cancellation, retry-safe failure handling, approvals, independent verdict/artifact checks, durable hash-chained events and desktop/CLI controls. Qualification remains explicit |
@@ -178,6 +178,7 @@ The **Workforce** page and `11vated workforce` command execute a host-validated 
 
 Current local evidence on this host: Ollama 0.40.16, 15 installed models, 15 metadata profiles, one empirical profile (`qwen2.5-coder:7b`), and a `66.67/100` core benchmark (8/12 trials). A live CLI analysis workflow (`23dc040f-1aa3-40d1-882a-b3a2c7f6b6e0`) and a desktop `WorkforcePage` workflow (`beee5cd1-342a-449b-994b-e47d3a53d9be`) both completed with `verification_passed=true`; a separate desktop run (`fb65bbb1-064e-4be6-9937-a40c2d3acd30`) correctly failed because the model claimed a write it never performed.
 
+This is the 0.2 development increment. It has been locally and hosted-CI verified on this machine, and it is not a production certification. The current branch's agent-interaction acceptance status is scenario-specific and evidence-backed rather than universally passed: see `engineering/campaign/VERIFICATION_EVIDENCE.md` and the latest CI run before treating passage as general. The agent-interaction acceptance evidence live on the reference workstation profile store and in the campaign logs; reproduce them before relying on them for any other host or model.
 ## Privacy and security
 
 - Inference targets the configured Ollama endpoint.
@@ -190,6 +191,12 @@ Current local evidence on this host: Ollama 0.40.16, 15 installed models, 15 met
 - Credential-like values are heuristically redacted from workspace file/search output, command output, explicit memory, persisted run/workforce task descriptions, event payloads, structured logs and final agent responses. This is not a substitute for an OS secret broker or a complete secret scanner. No unrestricted browser, desktop-control, network or arbitrary Python-evaluation tool is exposed in this development increment. Command execution stays disabled in the desktop agent.
 
 Read [SECURITY.md](SECURITY.md) before enabling command execution or using sensitive workspaces. The desktop stop button closes the active streamed Ollama request and is checked between tool operations. Command termination is best-effort; this does not replace OS-level run isolation. Workforce children share their assigned workspace, so the host's read-only tool wrapper is a policy boundary, not an OS sandbox.
+
+Open items:
+
+- **Scenario H on the desktop/browser workflow** reaches correct invoice entry on the reference workstation model but still fails on some runs because the agent stops before performing the final required file-write action or fabricates an unsupported entry. That is an engineering gap, not a demo polish item. See `engineering/campaign/VERIFICATION_EVIDENCE.md`.
+
+- **CI timing flake**: `tests/test_execution_lease.py::test_lease_heartbeat_renews_ownership` waits 2.0 s for a 1 s heartbeat and has timed out on a loaded hosted runner; it must be made deterministic before declaring CI stable.
 
 ## Optional MCP tool servers
 
