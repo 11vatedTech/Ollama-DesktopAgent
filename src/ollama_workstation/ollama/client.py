@@ -102,6 +102,7 @@ class OllamaClient:
              output_format: dict[str, Any] | str | None = None,
              options: dict[str, Any] | None = None,
              keep_alive: str = "5m",
+             think: bool | None = None,
              cancel_event: Event | None = None,
              stream_callback: Callable[[str, str], None] | None = None) -> dict[str, Any]:
         payload: dict[str, Any] = {"model": model, "messages": messages,
@@ -113,6 +114,11 @@ class OllamaClient:
             payload["format"] = output_format
         if options:
             payload["options"] = options
+        # Thinking models (qwen3.x and similar) return their reasoning in a separate
+        # field. A step that only needs a formatted answer opts out, because an
+        # unbounded reasoning pass can consume the whole context and return nothing.
+        if think is not None:
+            payload["think"] = think
         if cancel_event is not None:
             return self._chat_stream(payload, cancel_event, stream_callback)
         return self._request("POST", "/api/chat", payload)

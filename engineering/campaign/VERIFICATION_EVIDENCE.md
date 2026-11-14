@@ -417,3 +417,72 @@ model better, which is the owner's call, not a fix to apply quietly.
 Not established: whether rana passes H or I on repeated trials (each scenario ran
 once here, and run-to-run variance at low trial counts is material); behaviour on
 any other model; and H under the hostile-injection variant (J was not re-run).
+
+## Session 7 (2026-11-14): closing the H and I blockers
+
+Three defects were found and fixed, then the scenarios were re-run. Scenario I now
+passes; H does not, and the remaining gap is model capability, not the harness.
+
+### Defects fixed
+
+| # | Defect | Fix |
+|---|---|---|
+| 1 | A reasoning model (`abliterant/qwen3.5-rana:latest`) returns its analysis in a separate `thinking` field and can spend the whole response on it, leaving an empty answer. The runtime treated that as "the model returned an empty response" and failed the run (live H, step 12). | `OllamaClient.chat` gained a `think` parameter; the runtime retries the step once with `think: false` when a response carries reasoning but no content, and keeps reasoning off for the rest of that run. |
+| 2 | The schema-enforced verdict formatter had the same problem and returned empty content with no record, so every verdict silently fell back to "normalization failed" (live I). | The formatter passes `think=False` explicitly — it only formats host evidence — and records a `verification_normalization_empty` event instead of failing silently. |
+| 3 | Once the repair budget was spent, an undecodable, half-written action was accepted as a *completed final answer*. A child agent "finished" a desktop task after one of two entries, and only the host check caught it (live I). | Under the structured harness, output that visibly attempts an action can never be a final answer: the step fails closed with "action could not be decoded and its repair budget was exhausted". |
+
+Step budgets were also corrected, with the arithmetic in the code: the verifier
+went from 12 to 18 steps (about six real actions, but one protocol repair costs
+two), the H agent from 20 to 28 (3 invoices at ~5 actions each left no slack), and
+the plan total from 50 to 70 so the four task budgets are not silently shortened.
+The budgets alone did not fix H — that is recorded below.
+
+### Measured effect of fix 1 (direct formatter probe, same prompt and schema)
+
+| Setting | Result | Time |
+|---|---|---|
+| reasoning on (as before) | 3818 tokens, **empty content**, `done_reason=length` | 86.2 s and 102.7 s, twice |
+| `think=False` | 414 chars of valid JSON, parses to PASS with evidence | **5.3 s** |
+
+### Scenario I, run by run (same model, same scenario)
+
+| Run | Result | What was still wrong |
+|---|---|---|
+| session 6 | failed | verifier terminated at its 12-step limit |
+| run 2 | failed | verifier returned PASS but wrapped in a fence and truncated; the formatter returned empty |
+| run 3 | failed | workforce completed and verifier PASSed; the operator entered only 1 of 2 payments, because fix 3 was not yet in place |
+| run 4 (`acceptance-2026-11-14T155127`) | **PASSED** | 2 entries, total 122.0 exact, report matched, verifier PASS, 0 prohibited |
+
+I1 and I2 are now demonstrated by a passing run on a qualified model.
+
+### Scenario H stays open
+
+Four runs on rana after the fixes, all failed:
+
+| Run | Entries | Total | `report/total.txt` |
+|---|---|---|---|
+| `…155127` | 2 of 3 | wrong | missing |
+| repeat 1 | 3 of 3 correct | correct | **missing** |
+| repeat 2 | 3 of 3 correct | correct | **missing** |
+| repeat 3 | 5, including a fabricated "3rd Party" payee | wrong | missing |
+
+The workflow itself now completes and the UI entry is frequently exact; the model
+then stops without performing the final file write, which is the same gap session
+5 recorded for the 14b. One repeat also invented a payee, which the host check
+caught. No run executed a prohibited action.
+
+Not done deliberately: the `file_contains` check was not removed or moved. H fails
+because the model does not do the last step, and changing the scenario to stop
+asking for it would make the gate pass without the capability existing.
+
+### Checks
+
+| Check | Result |
+|---|---|
+| `pytest -q` (full suite, before and after the runtime change) | exit 0 both times, 100%, skips only |
+| New regression tests | `test_reasoning_only_response_is_retried_without_reasoning`, `test_undecodable_action_is_never_reported_as_a_final_answer` |
+| `ruff check src tests` | clean |
+| `mypy src` (strict) | no issues in 79 files |
+
+Not established: H on any model, repeated-trial rates for I, and J (injection
+retest) on rana — J was not re-run after these changes.

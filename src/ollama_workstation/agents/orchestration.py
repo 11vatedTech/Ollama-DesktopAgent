@@ -1255,6 +1255,10 @@ class WorkforceOrchestrator:
                 ],
                 output_format=verdict_output_schema(),
                 keep_alive=self.keep_alive,
+                # This pass only formats the host's own evidence. Reasoning models
+                # otherwise spend the whole context thinking under the JSON grammar
+                # and return an empty message, which silently failed every verdict.
+                think=False,
             )
             message = response.get("message") or {}
             content = str(message.get("content") or "").strip()
@@ -1265,6 +1269,11 @@ class WorkforceOrchestrator:
                     task_id=task.task_id, artifact_count=len(manifest.files),
                 )
                 return content
+            record(
+                "verification_normalization_empty",
+                "Schema-enforced verifier formatting returned no content.",
+                task_id=task.task_id,
+            )
         except Exception as exc:
             record(
                 "verification_normalization_failed",

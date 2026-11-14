@@ -106,3 +106,51 @@ def test_context_budget_counts_structured_tool_call_arguments(monkeypatch, tmp_p
     )
     assert result.status == "context_limit"
     assert len(client.calls) == 1
+
+
+def test_reasoning_only_response_is_retried_without_reasoning(tmp_path) -> None:
+    """A reasoning model can answer with analysis and no content (live H failure)."""
+    client = BatchClient(
+        {"message": {"role": "assistant", "content": "",
+                     "thinking": "Deliberating about the task at length."}},
+        {"message": {"role": "assistant", "content": "Finished after the retry."}},
+    )
+    workspace = tmp_path / "workspace"
+    result = AgentRuntime(client, max_steps=3).run(
+        "local:latest", _profile(), "Do the task.", WorkspaceTools(workspace)
+    )
+    assert result.status == "completed"
+    assert result.final_message == "Finished after the retry."
+    assert any(event.kind == "thinking_suppressed" for event in result.trace)
+    assert client.calls[1]["kwargs"].get("think") is False
+    # The reasoning-only turn is discarded rather than kept as an empty answer.
+    roles = [message.get("role") for message in client.calls[1]["messages"]]
+    assert roles.count("assistant") == 0
+    # A model without reasoning text still fails closed on a truly empty answer.
+    empty = BatchClient({"message": {"role": "assistant", "content": ""}})
+    failed = AgentRuntime(empty, max_steps=2).run(
+        "local:latest", _profile(), "Do the task.", WorkspaceTools(tmp_path / "second")
+    )
+    assert failed.status == "failed"
+    assert "think" not in empty.calls[0]["kwargs"]
+
+
+def test_undecodable_action_is_never_reported_as_a_final_answer(tmp_path) -> None:
+    """Live scenario I: a half-written action was accepted as a completed answer."""
+    truncated = '{"action": "tool", "name": "write_file", "arguments": {"path": "a'
+    client = BatchClient(*[
+        {"message": {"role": "assistant", "content": truncated}} for _ in range(6)
+    ])
+    profile = ModelProfile(
+        model_name="local:latest", digest="digest", generated_at="now",
+        professional_title="Workflow Operations Specialist",
+        primary_specialization="Controlled tool execution.",
+        agentability_mode="structured_actions",
+    )
+    workspace = tmp_path / "workspace"
+    result = AgentRuntime(client, max_steps=6).run(
+        "local:latest", profile, "Create the file.", WorkspaceTools(workspace)
+    )
+    assert result.status == "failed"
+    assert "could not be decoded" in result.final_message
+    assert not list(workspace.iterdir())

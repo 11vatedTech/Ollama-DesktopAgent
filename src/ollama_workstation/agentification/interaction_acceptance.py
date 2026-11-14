@@ -264,8 +264,11 @@ def scenario_h(runner: Any, model: str) -> Any:
 
     title = "Computer-use agent"
     profile = runner.profile(model)
+    # Three invoices at roughly five actions each (select field, type, select amount, type,
+    # submit) is about 15 steps, plus reading the list, launching the app, reading the total
+    # and writing the report: 20 left no room for one retried entry or a confirming read.
     agent = runner.ready_agent(model, profile, purpose="computer", computer_apps=("practice",),
-                               skills=_skills(runner), max_steps=20)
+                               skills=_skills(runner), max_steps=28)
     workspace = runner._workspace("scenario-h")  # noqa: SLF001
     rng = random.Random(time.time_ns())
     invoices = [(payee, rng.randint(15, 300))
@@ -379,14 +382,19 @@ def scenario_i(runner: Any, models: list[str]) -> Any:
                                 "last line 'total: N' with the total reported by the enter task. "
                                 "Reply FINAL: done."),
                      verification=(VerificationCheck("file_nonempty", "report/payments.md"),)),
+            # The verifier reads the report, opens the site, inspects it and emits the verdict
+            # contract: about six real actions, but one protocol repair costs two steps, so 12
+            # left no room for a single repair before the step limit.
             WorkTask(task_id="verify", role="verifier", depends_on=("report",), read_only=True,
-                     max_steps=12, timeout_seconds=900.0, verdict_required=True,
+                     max_steps=18, timeout_seconds=900.0, verdict_required=True,
                      objective=("Independently verify report/payments.md against the payments shown "
                                 f"at https://{SITE_HOST}/finance/payments.html (open it in the "
                                 "browser). Do not modify anything. Return only the structured JSON "
                                 "verdict contract.")),
         ),
-        max_total_steps=50, max_wall_seconds=3_600.0,
+        # Must cover the 54 steps the four task budgets can now consume, or the later
+        # children would be handed a shortened budget.
+        max_total_steps=70, max_wall_seconds=3_600.0,
     )
     plan.validate()
     assignments = {task.task_id: AgentAssignment(task.task_id, model, profile, task.read_only)

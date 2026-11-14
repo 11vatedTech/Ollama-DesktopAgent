@@ -495,6 +495,10 @@ class AgentRuntime:
                 )
                 return False
 
+        # A reasoning model can return only its thinking and no content, which otherwise
+        # looks like an empty answer. The first time that happens, the same step is
+        # retried with reasoning switched off for the rest of this run.
+        thinking_disabled = False
         for step in range(start_step, step_budget + 1):
             if cancel_event is not None and cancel_event.is_set():
                 record("cancelled", "Agent cancellation acknowledged before the next provider request.")
@@ -552,6 +556,8 @@ class AgentRuntime:
                     request_options["cancel_event"] = cancel_event
                 if policy.options:
                     request_options["options"] = dict(policy.options)
+                if thinking_disabled:
+                    request_options["think"] = False
                 response = self.client.chat(model, messages, **request_options)
                 usage["model_requests"] += 1
                 for usage_key, response_key in (("prompt_tokens", "prompt_eval_count"),
@@ -580,6 +586,18 @@ class AgentRuntime:
             messages.append({"role": "assistant", **assistant})
             raw_calls = assistant.get("tool_calls") or []
             calls = raw_calls if isinstance(raw_calls, list) else []
+            if (not calls and not thinking_disabled
+                    and not str(assistant.get("content") or "").strip()
+                    and str(assistant.get("thinking") or "").strip()):
+                # Reasoning models return their analysis in a separate field and can
+                # spend the whole response on it, leaving no answer at all. Retry this
+                # step without reasoning instead of treating it as an empty answer.
+                thinking_disabled = True
+                messages.pop()
+                record("thinking_suppressed",
+                       "Model returned reasoning but no answer; retrying the step "
+                       "without reasoning.", step=step)
+                continue
             if not calls and structured:
                 calls, final = self._decode_structured_action(str(assistant.get("content") or ""))
                 if final is not None:
@@ -613,6 +631,18 @@ class AgentRuntime:
                 if not final:
                     record("error", "Model returned neither a tool call nor a final response.")
                     return finish("failed", "The model returned an empty response.", step)
+                if structured and (final.startswith("{") or final.startswith("ACTION:")
+                                   or "```" in final):
+                    # Repairs are spent and this is a half-written action, not an answer.
+                    # Reporting it as a completed response is how a child agent "finished"
+                    # a desktop task it had not done (live finding, scenario I).
+                    record("error", "Model returned an undecodable action and no repairs remain.")
+                    return finish(
+                        "failed",
+                        "The model's action could not be decoded and its repair budget "
+                        "was exhausted.",
+                        step,
+                    )
                 record("completed", "Agent returned a final response.")
                 return finish("completed", final, step)
 
