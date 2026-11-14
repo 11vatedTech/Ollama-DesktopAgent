@@ -176,7 +176,7 @@ The **Workforce** page and `11vated workforce` command execute a host-validated 
 
 `11vated doctor` and the rotating JSONL log under the application data directory provide structured operational evidence without uploading telemetry. See [Operations and performance](docs/OPERATIONS.md).
 
-Current local evidence on this host: Ollama 0.40.16, 15 installed models, 15 metadata profiles, one empirical profile (`qwen2.5-coder:7b`), and a `66.67/100` core benchmark (8/12 trials). A live CLI analysis workflow (`23dc040f-1aa3-40d1-882a-b3a2c7f6b6e0`) and a desktop `WorkforcePage` workflow (`beee5cd1-342a-449b-994b-e47d3a53d9be`) both completed with `verification_passed=true`; a separate desktop run (`fb65bbb1-064e-4be6-9937-a40c2d3acd30`) correctly failed because the model claimed a write it never performed.
+Current local evidence on this host: Ollama 0.40.16, 15 installed models, 15 metadata profiles, one empirical profile (`qwen2.5-coder:7b`), and a `66.67/100` core benchmark (8/12 trials). A live CLI analysis workflow completed with `verification_passed=true`; a separate desktop run correctly failed because the model claimed a write it never performed.
 
 This is the 0.2 development increment. It has been locally and hosted-CI verified on this machine, and it is not a production certification. The current branch's agent-interaction acceptance status is scenario-specific and evidence-backed rather than universally passed: see `engineering/campaign/VERIFICATION_EVIDENCE.md` and the latest CI run before treating passage as general. The agent-interaction acceptance evidence live on the reference workstation profile store and in the campaign logs; reproduce them before relying on them for any other host or model.
 ## Privacy and security
