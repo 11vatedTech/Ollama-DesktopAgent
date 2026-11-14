@@ -322,3 +322,11 @@ follows injected instructions often enough to abandon tasks.
 | `ruff`, strict `mypy` (79 files) | clean |
 | Release build with the `interaction` extra | licence audit: playwright, uiautomation Apache-2.0; comtypes MIT; greenlet MIT/PSF; 0 blocking. Zip 91 MB (was 48 MB; Playwright driver) |
 | Frozen `11vated.exe interaction-selftest` | browser renders JavaScript, refuses a destructive click and loopback; practice app workflow via UIA; destructive click refused; audit chain valid |
+
+### Session 5 hosted CI
+
+| Run | Result |
+|---|---|
+| CI `43558880225` | failed on Windows: hosted runners run elevated, so the launched practice app was refused as "elevated". The boundary was redefined as privilege above the host (`ae5239a`); UAC and credential windows stay refused |
+| CI `43560227713` (ae5239a) | all 4 jobs passed, including the browser and computer-use tests on real Edge and UI Automation on Windows |
+| Windows package `43560227781` | passed: frozen interaction self-test in the build; on the fresh runner the installed app (no Python on PATH) rendered JavaScript in the isolated browser and completed the practice-app workflow |
