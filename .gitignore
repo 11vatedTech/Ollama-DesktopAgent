@@ -20,3 +20,6 @@ Thumbs.db
 .test-logs/
 
 .artifacts/
+
+# uiautomation library log
+@AutomationLog.txt

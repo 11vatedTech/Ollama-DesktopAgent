@@ -30,6 +30,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from ollama_workstation.interaction.actor import Actor
@@ -172,8 +173,14 @@ class ComputerSession:
 
     # -- lifecycle -------------------------------------------------------------------------
     def _setup(self) -> _State:
+        # COM must be initialised on this thread before uiautomation is imported here,
+        # otherwise its import-time probe fails and logs to the current directory.
+        ctypes.WinDLL("ole32").CoInitializeEx(None, 0x2)  # COINIT_APARTMENTTHREADED  # type: ignore[attr-defined,unused-ignore]
         import uiautomation as auto
 
+        log_dir = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "11vated-interaction"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        auto.Logger.SetLogFile(str(log_dir / "uiautomation.log"))
         auto.SetGlobalSearchTimeout(2.0)
         self._initializer = auto.UIAutomationInitializerInThread()
         return _State(auto=auto)
