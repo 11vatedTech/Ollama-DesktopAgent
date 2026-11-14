@@ -41,7 +41,7 @@ Write-Host "== Clean build environment =="
 if ($LASTEXITCODE -ne 0) { throw "Could not create the build environment." }
 $py = Join-Path $buildEnv "Scripts\python.exe"
 & $py -m pip install --quiet --disable-pip-version-check --upgrade pip
-& $py -m pip install --quiet --disable-pip-version-check ".[desktop]"
+& $py -m pip install --quiet --disable-pip-version-check ".[desktop,interaction]"
 if ($LASTEXITCODE -ne 0) { throw "Installing the application failed." }
 
 $version = (& $py -c "import ollama_workstation; print(ollama_workstation.__version__)").Trim()
@@ -112,6 +112,10 @@ $doctorJson = (& (Join-Path $app "11vated.exe") doctor) -join "`n"
 $doctor = $doctorJson | ConvertFrom-Json
 if ($doctor.database.integrity -ne "ok") { throw "Frozen doctor reported database integrity: $($doctor.database.integrity)" }
 $doctorJson | Out-File -Encoding utf8 (Join-Path $out "smoke-doctor.json")
+# Browser and computer use from the frozen build (offline; drives Edge and UI Automation).
+$interaction = (& (Join-Path $app "11vated.exe") interaction-selftest) -join "`n"
+$interaction | Out-File -Encoding utf8 (Join-Path $out "smoke-interaction.json")
+if ($LASTEXITCODE -ne 0) { throw "Frozen interaction self-test failed: $interaction" }
 $gui = Start-Process -FilePath (Join-Path $app "11vated-Intelligence.exe") -ArgumentList "--smoke-test" -PassThru -Wait -NoNewWindow -RedirectStandardOutput (Join-Path $out "smoke-gui.log")
 if ($gui.ExitCode -ne 0) { throw "Frozen GUI smoke test failed (exit $($gui.ExitCode))." }
 Remove-Item Env:OLLAMA_WORKSTATION_HOME

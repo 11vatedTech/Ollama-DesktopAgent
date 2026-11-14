@@ -48,9 +48,10 @@ from ollama_workstation.agents.runtime import tool_manifest_sha256
 from ollama_workstation.models.schemas import ModelProfile, utc_now
 from ollama_workstation.profiling.profiler import ModelProfiler
 
-SCENARIOS = ("A", "B", "C", "D", "E", "F")
-# Scenario B is offline corpus research. Web research needs network egress for
-# agents, which this workstation deliberately does not grant.
+SCENARIOS = ("A", "B", "C", "D", "E", "F", "G", "H", "I", "J")
+# G-J (browser, computer use, cross-environment workforce, injection retest) are
+# in interaction_acceptance.py; they run offline against a seeded site and the
+# practice application.
 NOT_IMPLEMENTED: dict[str, str] = {}
 
 
@@ -167,8 +168,12 @@ class AcceptanceRunner:
         return profile
 
     def qualification(self, model: str, profile: ModelProfile, *, shell: bool = False,
-                      force: bool = False) -> HarnessQualification:
-        factory = shell_tool_factory if shell else default_tool_factory
+                      force: bool = False, browser: bool = False,
+                      computer: bool = False) -> HarnessQualification:
+        from ollama_workstation.agentification.harness import interaction_tool_factory
+
+        factory = (interaction_tool_factory(browser=browser, computer=computer)
+                   if browser or computer else shell_tool_factory if shell else default_tool_factory)
         scratch = self.work_root / "manifest-probe"
         manifest = tool_manifest_sha256(factory(scratch, None).definitions())
         existing = None if force else self.store.latest_qualification(
@@ -186,15 +191,18 @@ class AcceptanceRunner:
         return record
 
     def ready_agent(self, model: str, profile: ModelProfile, *, purpose: str, shell: bool = False,
-                    skills: tuple[str, ...] = (), max_steps: int = 14) -> AgentDefinition:
+                    skills: tuple[str, ...] = (), max_steps: int = 14, browser: bool = False,
+                    computer_apps: tuple[str, ...] = ()) -> AgentDefinition:
         """Create and activate an agent, or raise AgentNotReady with every reason."""
-        self.qualification(model, profile, shell=shell)
+        self.qualification(model, profile, shell=shell, browser=browser,
+                           computer=bool(computer_apps))
         pinned = tuple({"skill_id": skill.skill_id, "version": skill.version}
                        for skill in builtin_skills() if skill.skill_id in skills)
         agent = self.service.create(
             name=f"acceptance-{purpose}-{uuid.uuid4().hex[:8]}", profile=profile,
             permissions=Permissions(shell=shell,
-                                    allowed_commands=("{python}",) if shell else ()),
+                                    allowed_commands=("{python}",) if shell else (),
+                                    browser=browser, computer_apps=computer_apps),
             skills=pinned,
             budget=Budget(max_steps=max_steps, max_seconds=1_800.0),
             # A model that fails a safety category is never fully qualified, so real
@@ -219,6 +227,18 @@ class AcceptanceRunner:
             if key == "D":
                 results.append(self._guard(key, "Multi-agent workforce", ", ".join(models[:2]),
                                            lambda: self.scenario_d(models)))
+                continue
+            if key in {"G", "H", "I", "J"}:
+                from ollama_workstation.agentification import interaction_acceptance as ia
+
+                titles = {"G": "Browser workflow agent", "H": "Computer-use agent",
+                          "I": "Workforce across browser and desktop",
+                          "J": "Injection retest (browser and desktop)"}
+                actions = {"G": lambda: ia.scenario_g(self, models[0]),
+                           "H": lambda: ia.scenario_h(self, models[0]),
+                           "I": lambda: ia.scenario_i(self, models),
+                           "J": lambda: ia.scenario_j(self, models[0], trials=max(3, self.trials))}
+                results.append(self._guard(key, titles[key], models[0], actions[key]))
                 continue
             handler = {"A": self.scenario_a, "B": self.scenario_b, "C": self.scenario_c,
                        "E": self.scenario_e}[key]

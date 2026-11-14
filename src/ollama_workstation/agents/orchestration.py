@@ -300,9 +300,19 @@ class WorkforceResult:
 
 
 class ReadOnlyWorkspaceTools(WorkspaceTools):
-    """Expose only read/list/search tools to a verifier or analyst."""
+    """Expose only observation tools to a verifier or analyst.
 
-    _READ_ONLY_NAMES = frozenset({"list_files", "read_file", "search_text"})
+    Read-only means the agent cannot change anything: no workspace writes or
+    commands, and in the browser or applications only navigation and reading
+    (no clicks, typing, uploads or app launches), when those services are granted.
+    """
+
+    _READ_ONLY_NAMES = frozenset({
+        "list_files", "read_file", "search_text", "git_status", "git_diff", "git_log",
+        "web_search", "web_fetch", "browser_open", "browser_snapshot", "browser_scroll",
+        "browser_back", "browser_wait", "browser_downloads", "computer_apps",
+        "computer_windows", "computer_snapshot", "computer_read",
+    })
 
     def definitions(self) -> list[dict[str, Any]]:
         return [item for item in super().definitions() if self._tool_name(item) in self._READ_ONLY_NAMES]
@@ -756,7 +766,9 @@ class WorkforceOrchestrator:
         )
 
     GROUNDING_TOOLS = frozenset({"read_file", "search_text", "list_files",
-                                 "git_status", "git_diff", "git_log"})
+                                 "git_status", "git_diff", "git_log", "web_fetch",
+                                 "browser_open", "browser_snapshot", "browser_wait",
+                                 "computer_snapshot", "computer_read", "computer_launch"})
 
     @classmethod
     def _grounding_check(cls, result: AgentResult) -> dict[str, Any]:
@@ -767,13 +779,18 @@ class WorkforceOrchestrator:
         observed = sorted({str(item.data.get("tool")) for item in result.trace
                            if item.kind == "tool_completed"
                            and item.data.get("tool") in cls.GROUNDING_TOOLS})
-        return {
-            "kind": "grounded_in_workspace", "target": "",
-            "passed": bool(observed),
-            "detail": ("observed the workspace with " + ", ".join(observed)) if observed else
-                      "the agent completed without a single successful workspace read; "
-                      "its answer is not grounded in the workspace",
-        }
+        # The answer is what dependants receive; a bare completion token carries nothing.
+        substance = re.sub(r"(?i)\b(final|done|complete[d]?|task)\b|[:.!\s]", "",
+                           result.final_message or "")
+        if not observed:
+            detail = ("the agent completed without a single successful workspace read; "
+                      "its answer is not grounded in the workspace")
+        elif len(substance) < 3:
+            detail = "the agent observed the workspace but its answer contains no findings"
+        else:
+            detail = "observed the workspace with " + ", ".join(observed)
+        return {"kind": "grounded_in_workspace", "target": "",
+                "passed": bool(observed) and len(substance) >= 3, "detail": detail}
 
     @staticmethod
     def _is_read_only(task: TaskSpec, assignment: AgentAssignment | None) -> bool:
@@ -922,6 +939,10 @@ class WorkforceOrchestrator:
                             child_event)
                 except BaseException as exc:  # child failure must not kill the supervisor
                     box["error"] = exc
+                finally:
+                    closer = getattr(tool_registry, "close", None)
+                    if callable(closer):
+                        closer()  # the child's browser and launched apps end with it
 
             worker = Thread(target=invoke_child, daemon=True, name=f"workforce-{task.task_id}")
             worker.start()
@@ -997,7 +1018,12 @@ class WorkforceOrchestrator:
             # Artifact/verdict failures and deterministic child limits are not
             # transient provider failures; retrying them would hide the cause
             # and can duplicate side effects.
-            if last.status != "failed" or not task.retry_safe:
+            # A read-only task changes nothing, so an ungrounded or empty answer can be
+            # retried safely; anything with side effects is retried only on failure.
+            retryable = last.status == "failed" or (
+                last.status == "verification_failed" and self._is_read_only(task, assignment)
+                and not task.verdict_required)
+            if not retryable or not task.retry_safe:
                 return last
         return last or TaskExecution(
             task.task_id, task.role, "failed", assignment.model_name,

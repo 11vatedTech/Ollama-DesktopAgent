@@ -291,3 +291,65 @@ Ollama endpoints the client uses, with scripted models of differing protocol
 ability. It exercises the client, runtime, laboratory, gate, child-process kill
 and recovery over real sockets. It verifies the workstation; it is not evidence
 about any real model.
+
+## Browser and computer use (`interaction/`)
+
+Two execution services, both reached only through `InteractionBroker`
+(`interaction/policy.py`), which authorizes each action from host-observed facts
+(action kind, the target's role and accessible label, process elevation, the
+agent's grants) and appends every decision to a hash-chained audit trail
+(`%LOCALAPPDATA%\11vated-interaction\audit`). Model output and page or
+application text never change a decision.
+
+| Action | Default |
+|---|---|
+| Read public websites, run page JavaScript | allowed inside the isolated browser |
+| `file:`, `chrome:`, `javascript:` and other non-web schemes | denied |
+| Localhost, private, link-local, metadata addresses | denied unless the operator grants the host |
+| Downloads | fetched by the host through the egress policy, quarantined with Mark-of-the-Web, never opened |
+| Uploads | workspace files only, granted per agent, then confirmed |
+| User browser profile, cookies, passwords | never used (fresh in-memory context per session) |
+| Inspect/type in applications | only applications the agent launched, from its granted list |
+| Password/credential fields | denied |
+| Delete, send, submit, publish; buy, pay, transfer; account security | human confirmation (refused when unattended) |
+| Administrator, elevated or UAC windows | denied |
+
+**Browser** (`interaction/browser.py`): Playwright drives the installed Edge (or
+Chrome) headless with a fresh context. The browser's network stack points at a
+dead proxy; every request is intercepted, checked by the egress policy and
+fetched by the host connected to the exact checked address (TLS still verified
+against the real host name), so DNS rebinding is closed and WebSockets, WebRTC
+and anything else not interceptable cannot leave. Navigations and
+state-changing requests need the domain allow-list (or approval); page
+sub-resources fetched with GET need only a public address. Redirect targets are
+checked before the redirect reaches the page. Tools: `browser_open`,
+`browser_snapshot`, `browser_click`, `browser_type`, `browser_select`,
+`browser_scroll`, `browser_back`, `browser_wait`, `browser_downloads`,
+`browser_upload` (only with the upload grant).
+
+**Computer use** (`interaction/computer.py`): Windows UI Automation. The agent
+launches granted applications (`calculator`, `notepad`, `practice`) and sees
+only their windows, as a tree of `[wN.cM]` control refs. Clicks and typing use
+UI Automation patterns (Invoke, Toggle, SelectionItem, Value), which act on the
+named control without moving the real mouse or typing into whatever has focus.
+Physical mouse/keyboard input is a separate opt-in grant and requires the
+agent's window to be verified in the foreground. Window refs are never reused.
+Tools: `computer_apps`, `computer_launch`, `computer_windows`,
+`computer_snapshot`, `computer_click`, `computer_type`, `computer_read`,
+`computer_close`.
+
+**Practice application** (`interaction/practice_app.py`): a small ledger with
+an injected notice, destructive buttons and a password field. It writes its
+state to a host file outside the workspace, so tests and acceptance verify what
+really happened in the application (`host_json` checks).
+
+**Qualification**: `11vated qualify MODEL --browser` and `--computer` add
+`browser_render`, `browser_workflow`, `browser_injection` (offline JavaScript
+test site served through the production interception path) and
+`computer_ledger`, `computer_injection` (practice application, started
+minimized). Like the web tasks they run only for their catalogues.
+
+**Acceptance**: `11vated accept --scenarios G,H,I,J` runs the browser workflow
+(G), the computer workflow (H), a workforce in which a browser child collects
+data, a computer child enters it and a verifier checks it (I), and an injection
+retest that counts prohibited actions attempted and executed (J).

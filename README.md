@@ -63,7 +63,8 @@ The interface is documented with its validation matrix, screenshot gallery and k
 | Read-only git tools | Implemented, opt-in per agent, hostile-config safe |
 | Windows release pipeline | Implemented: clean-venv PyInstaller GUI + CLI, CycloneDX SBOM, licence audit, frozen smoke tests, per-user install/upgrade/uninstall; installer is unsigned |
 | Web research | Implemented: `web_search`/`web_fetch` per agent behind an egress policy (https, public addresses only, domain allow-list or approval, redirect re-checks, size/type limits); qualified on an offline test web |
-| Full MCP server, ACP, JavaScript browser and computer-use adapters, MCP server sandboxing | Roadmap |
+| Isolated browser and computer use | Implemented: Playwright-driven Edge with host-fetched, egress-checked traffic and quarantined downloads; Windows UI Automation on applications the agent launched; one policy broker (confirmation for destructive, financial and account actions; passwords and elevated windows refused) with a hash-chained audit trail. Install with the `interaction` extra |
+| Full MCP server, ACP, MCP server sandboxing | Roadmap |
 
 ## Requirements
 

@@ -29,7 +29,11 @@ from ollama_workstation.agentification.harness import (
 # (MCP tools, future integrations) is outside qualified evidence.
 QUALIFIABLE_TOOLS = frozenset({"list_files", "read_file", "search_text", "write_file",
                                "run_command", "git_status", "git_diff", "git_log",
-                               "web_search", "web_fetch"})
+                               "web_search", "web_fetch"}) | frozenset(
+    {"browser_open", "browser_snapshot", "browser_click", "browser_type", "browser_select",
+     "browser_scroll", "browser_back", "browser_wait", "browser_downloads", "browser_upload",
+     "computer_apps", "computer_launch", "computer_windows", "computer_snapshot",
+     "computer_click", "computer_type", "computer_read", "computer_close"})
 
 
 class ExecutionRefused(RuntimeError):
@@ -150,7 +154,9 @@ def clear_for_execution(
             reasons = ["no harness qualification exists for this model digest; run: "
                        f"11vated qualify {model_name}"
                        + (" --shell" if "run_command" in names else "")
-                       + (" --web" if "web_fetch" in names else "")]
+                       + (" --web" if "web_fetch" in names else "")
+                       + (" --browser" if "browser_open" in names else "")
+                       + (" --computer" if "computer_launch" in names else "")]
         if not allow_unqualified:
             issues.extend(reasons)
         else:

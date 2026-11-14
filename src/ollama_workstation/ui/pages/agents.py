@@ -21,12 +21,14 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
     QPlainTextEdit,
+    QScrollArea,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
@@ -136,6 +138,14 @@ class AgentFoundryPage(QWidget):
         controls.addWidget(self.trials)
         self.qualify_shell = QCheckBox("Include run_command (sandboxed)")
         controls.addWidget(self.qualify_shell)
+        self.qualify_browser = QCheckBox("Browser")
+        self.qualify_browser.setToolTip("Qualify the isolated-browser catalogue on the offline "
+                                        "JavaScript test web.")
+        self.qualify_computer = QCheckBox("Computer use")
+        self.qualify_computer.setToolTip("Qualify the computer-use catalogue on the practice "
+                                         "application (started minimized).")
+        controls.addWidget(self.qualify_browser)
+        controls.addWidget(self.qualify_computer)
         self.qualify_web = QCheckBox("Include web tools (offline test web)")
         self.qualify_web.setToolTip("Qualifies the catalogue with web_search/web_fetch and adds "
                                     "web research and web-injection tasks. No network is used.")
@@ -206,14 +216,17 @@ class AgentFoundryPage(QWidget):
         if not model:
             self.status.setText("Select a model to qualify.")
             return
-        if self.qualify_shell.isChecked() and self.qualify_web.isChecked():
-            self.status.setText("Qualify the shell and web catalogues separately.")
+        catalogues = sum((self.qualify_shell.isChecked(), self.qualify_web.isChecked(),
+                          self.qualify_browser.isChecked() or self.qualify_computer.isChecked()))
+        if catalogues > 1:
+            self.status.setText("Qualify the shell, web and browser/computer catalogues separately.")
             return
         cancel = Event()
         self._start(
             f"Qualifying {model}", self.controller.qualify, model,
             trials=self.trials.value(), shell=self.qualify_shell.isChecked(),
-            web=self.qualify_web.isChecked(),
+            web=self.qualify_web.isChecked(), browser=self.qualify_browser.isChecked(),
+            computer=self.qualify_computer.isChecked(),
             cancel_event=cancel, cancel=cancel, with_progress=True,
             on_result=lambda record: self._after(
                 f"{record.model_name}: {record.status} "
@@ -270,6 +283,9 @@ class AgentFoundryPage(QWidget):
         self.agent_shell = QCheckBox("May run Python (contained)")
         self.agent_git = QCheckBox("May inspect git (read-only)")
         self.agent_web = QCheckBox("May research the web (egress policy)")
+        self.agent_browser = QCheckBox("May use the isolated browser (JavaScript, forms)")
+        self.agent_computer_apps = QLineEdit()
+        self.agent_computer_apps.setPlaceholderText("Apps it may control: calculator, notepad, practice")
         self.agent_web_domains = QLineEdit()
         self.agent_web_domains.setPlaceholderText("Allowed domains, comma separated "
                                                   "(others are refused when unattended)")
@@ -291,6 +307,8 @@ class AgentFoundryPage(QWidget):
         form.addRow("", self.agent_shell)
         form.addRow("", self.agent_git)
         form.addRow("", self.agent_web)
+        form.addRow("", self.agent_browser)
+        form.addRow("Computer use", self.agent_computer_apps)
         form.addRow("Web domains", self.agent_web_domains)
         form.addRow("", self.agent_memory)
         form.addRow("Skills", self.agent_skills)
@@ -301,7 +319,12 @@ class AgentFoundryPage(QWidget):
             "A new agent starts as a draft. It can be activated only when its exact model "
             "digest has a qualification covering its tools.", "Faint", wrap=True))
         form_card.body.addStretch(1)
-        layout.addWidget(form_card, 2)
+        scroller = QScrollArea()
+        scroller.setWidgetResizable(True)
+        scroller.setFrameShape(QFrame.Shape.NoFrame)
+        scroller.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroller.setWidget(form_card)  # the form grows with grants; it scrolls, never overlaps
+        layout.addWidget(scroller, 2)
         return tab
 
     def _selected_agent(self) -> str:
@@ -343,6 +366,9 @@ class AgentFoundryPage(QWidget):
             git=self.agent_git.isChecked(), web=self.agent_web.isChecked(),
             web_domains=tuple(item.strip() for item in self.agent_web_domains.text().split(",")
                               if item.strip()),
+            browser=self.agent_browser.isChecked(),
+            computer_apps=tuple(item.strip().lower() for item in
+                                self.agent_computer_apps.text().split(",") if item.strip()),
             skills=[self.agent_skills.item(index).data(Qt.ItemDataRole.UserRole)
                     for index in range(self.agent_skills.count())
                     if self.agent_skills.item(index).checkState() == Qt.CheckState.Checked],

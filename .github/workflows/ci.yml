@@ -30,8 +30,11 @@ jobs:
       - name: Desktop import (Windows)
         if: runner.os == 'Windows'
         run: |
-          python -m pip install -e ".[desktop]"
+          python -m pip install -e ".[desktop,interaction]"
           python -c "from ollama_workstation.ui.main_window import MainWindow; print('Qt desktop import OK')"
+      - name: Browser and computer-use tests (Windows, real Edge and UI Automation)
+        if: runner.os == 'Windows'
+        run: pytest -q -o addopts="" tests/test_browser_service.py tests/test_computer_service.py tests/test_interaction_integration.py
       - name: Type check (strict, Windows with Qt)
         if: runner.os == 'Windows'
         run: python -m mypy src

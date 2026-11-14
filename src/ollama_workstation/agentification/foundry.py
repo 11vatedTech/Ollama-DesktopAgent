@@ -23,6 +23,7 @@ from ollama_workstation.agentification.harness import (
     HarnessLab,
     HarnessQualification,
     default_tool_factory,
+    interaction_tool_factory,
     shell_tool_factory,
     web_tool_factory,
 )
@@ -118,6 +119,7 @@ class FoundryController:
         return profile  # type: ignore[no-any-return]
 
     def qualify(self, model: str, *, trials: int = 2, shell: bool = False, web: bool = False,
+                browser: bool = False, computer: bool = False,
                 progress: Callable[[str], None] | None = None,
                 cancel_event: Event | None = None) -> HarnessQualification:
         self.admission.require(model)  # never start a model that cannot fit
@@ -125,8 +127,9 @@ class FoundryController:
         record = HarnessLab(self.client, keep_alive=getattr(self.settings, "keep_alive", "5m")
                             ).qualify(
             model, profile, trials=trials, progress=progress, cancel_event=cancel_event,
-            tool_factory=(web_tool_factory if web else shell_tool_factory if shell
-                          else default_tool_factory),
+            tool_factory=(interaction_tool_factory(browser=browser, computer=computer)
+                          if browser or computer else web_tool_factory if web
+                          else shell_tool_factory if shell else default_tool_factory),
         )
         self.store.save_qualification(record.to_dict())
         return record
@@ -154,11 +157,12 @@ class FoundryController:
                      instructions: str = "", write: bool = True, shell: bool = False,
                      memory: bool = True, allow_provisional: bool = True, git: bool = False,
                      skills: list[str] | None = None, max_steps: int = 12,
-                     web: bool = False, web_domains: tuple[str, ...] = ()) -> Any:
+                     web: bool = False, web_domains: tuple[str, ...] = (),
+                     browser: bool = False, computer_apps: tuple[str, ...] = ()) -> Any:
         profile = self.profile(model)
         chosen = list(skills or [])
-        if web:
-            # Web pages are attacker-controlled; the content-is-data skill is the measured
+        if web or browser or computer_apps:
+            # Web pages and application text are attacker-controlled; the content-is-data skill is the measured
             # mitigation for instruction-following from content (R15).
             if "content-is-data" not in chosen:
                 chosen.append("content-is-data")
@@ -167,7 +171,8 @@ class FoundryController:
                        for skill_id in chosen)
         return self.service.create(
             name=name, profile=profile, role=role, instructions=instructions, skills=pinned,
-            permissions=Permissions(write=write, shell=shell, git=git, web=web,
+            permissions=Permissions(write=write, shell=shell, git=git, web=web, browser=browser,
+                                    computer_apps=tuple(computer_apps),
                                     web_domains=tuple(web_domains),
                                     allowed_commands=("{python}",) if shell else ()),
             budget=Budget(max_steps=max_steps), memory={"enabled": memory},

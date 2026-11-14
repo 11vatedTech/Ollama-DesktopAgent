@@ -55,6 +55,8 @@ class TaskSpec:
     # Pages served by the offline qualification web (path -> HTML); see
     # harness.web_tool_factory. Never written into the workspace.
     web_pages: dict[str, str] = field(default_factory=dict)
+    # Notice text shown in the practice application (computer-use tasks).
+    practice_notice: str = ""
 
     def __post_init__(self) -> None:
         if not self.task_id or not self.objective.strip():
@@ -81,6 +83,7 @@ class TaskSpec:
             "max_steps": self.max_steps, "requires_tools": list(self.requires_tools),
             # Omitted when empty so the fingerprints of existing tasks are unchanged.
             **({"web_pages": dict(self.web_pages)} if self.web_pages else {}),
+            **({"practice_notice": self.practice_notice} if self.practice_notice else {}),
         }
 
     @classmethod
@@ -98,6 +101,7 @@ class TaskSpec:
                 max_steps=int(payload.get("max_steps", 10)),
                 requires_tools=tuple(str(item) for item in payload.get("requires_tools") or ()),
                 web_pages={str(k): str(v) for k, v in dict(payload.get("web_pages") or {}).items()},
+                practice_notice=str(payload.get("practice_notice") or ""),
             )
         except (KeyError, TypeError, AttributeError) as exc:
             raise TaskSpecError(f"Invalid task specification: {exc}") from exc
@@ -119,6 +123,7 @@ class TaskInstance:
     files: dict[str, str]
     checks: tuple[dict[str, Any], ...]
     web_pages: dict[str, str] = field(default_factory=dict)
+    practice_notice: str = ""
 
     def materialize(self, workspace: Path) -> None:
         workspace.mkdir(parents=True, exist_ok=True)
@@ -183,6 +188,7 @@ def instantiate(spec: TaskSpec, seed: int) -> TaskInstance:
         checks=tuple(_render(dict(check), values) for check in spec.checks),
         web_pages={str(_render(path, values)): str(_render(content, values))
                    for path, content in spec.web_pages.items()},
+        practice_notice=str(_render(spec.practice_notice, values)),
     )
 
 

@@ -77,6 +77,10 @@ class Permissions:
     # web_domains are allowed; any other domain needs approval per session.
     web: bool = False
     web_domains: tuple[str, ...] = ()
+    # Isolated browser (JavaScript, forms, downloads to quarantine) and computer
+    # use of the listed applications only. Both act through the interaction broker.
+    browser: bool = False
+    computer_apps: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         payload = {"write": self.write, "shell": self.shell,
@@ -88,6 +92,10 @@ class Permissions:
         if self.web:  # likewise omitted when off
             payload["web"] = True
             payload["web_domains"] = list(self.web_domains)
+        if self.browser:
+            payload["browser"] = True
+        if self.computer_apps:
+            payload["computer_apps"] = list(self.computer_apps)
         return payload
 
 
@@ -171,6 +179,8 @@ class AgentDefinition:
                     git=bool(permissions.get("git", False)),
                     web=bool(permissions.get("web", False)),
                     web_domains=tuple(str(item) for item in permissions.get("web_domains") or ()),
+                    browser=bool(permissions.get("browser", False)),
+                    computer_apps=tuple(str(item) for item in permissions.get("computer_apps") or ()),
                 ),
                 budget=Budget(
                     max_steps=int(budget.get("max_steps", 12)),
@@ -202,6 +212,11 @@ def validate_definition(agent: AgentDefinition) -> None:
         problems.append("name must be 2-80 characters of letters, digits, spaces or . : @ ( ) + -")
     if not agent.model_name.strip():
         problems.append("a model is required")
+    known_apps = {"calculator", "notepad", "practice"}
+    unknown_apps = sorted(set(agent.permissions.computer_apps) - known_apps)
+    if unknown_apps:
+        problems.append("unknown computer-use applications: " + ", ".join(unknown_apps)
+                        + " (known: " + ", ".join(sorted(known_apps)) + ")")
     if not agent.model_digest.strip():
         problems.append("the exact model digest is required")
     if agent.role not in ROLE_KEYS:
@@ -251,6 +266,9 @@ class GrantedTools:
     def definitions(self) -> list[dict[str, Any]]:
         return self._inner.definitions()
 
+    def close(self) -> None:
+        self._inner.close()
+
     def invoke(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if name == "write_file" and not self._permissions.write:
             raise ToolError("This agent does not hold the write permission.")
@@ -258,6 +276,10 @@ class GrantedTools:
             raise ToolError("This agent does not hold the shell permission.")
         if name in ("web_search", "web_fetch") and not self._permissions.web:
             raise ToolError("This agent does not hold the web permission.")
+        if name.startswith("browser_") and not self._permissions.browser:
+            raise ToolError("This agent does not hold the browser permission.")
+        if name.startswith("computer_") and not self._permissions.computer_apps:
+            raise ToolError("This agent does not hold the computer-use permission.")
         return self._inner.invoke(name, arguments)
 
 
@@ -397,9 +419,28 @@ class AgentService:
             allow_git=permissions.git,
             web=AgentService.web_access(permissions, decide) if permissions.web else None,
         )
+        if permissions.browser or permissions.computer_apps:
+            inner.interaction = AgentService.interaction_tools(
+                permissions, decide, inner, cancel_event)
         if permissions.shell and "{python}" in permissions.allowed_commands:
             inner.allowed_command_paths["python"] = Path(sys.executable).resolve()
         return GrantedTools(inner, permissions)
+
+    @staticmethod
+    def interaction_tools(permissions: Permissions, approval: Callable[[str], bool],
+                          workspace_tools: WorkspaceTools, cancel_event: Event | None) -> Any:
+        from ollama_workstation.agents.web import EgressPolicy
+        from ollama_workstation.interaction.policy import InteractionBroker, InteractionGrants
+        from ollama_workstation.interaction.tools import InteractionTools
+
+        broker = InteractionBroker(
+            InteractionGrants(browser=permissions.browser, computer=bool(permissions.computer_apps),
+                              computer_apps=permissions.computer_apps),
+            approval=approval)
+        egress = EgressPolicy(enabled=permissions.browser, allowed_domains=permissions.web_domains,
+                              approval=approval)
+        return InteractionTools(broker, egress=egress, resolve_path=workspace_tools._path,  # noqa: SLF001
+                                cancel_event=cancel_event)
 
     @staticmethod
     def web_access(permissions: Permissions, approval: Callable[[str], bool]) -> Any:
@@ -501,8 +542,19 @@ class AgentService:
         def factory(workspace: Path, cancel: Event | None = None) -> Any:
             lab_agent = replace(agent, permissions=replace(agent.permissions, overwrite="ask",
                                                            command="ask"))
-            return self.build_tools(lab_agent, workspace, approval=lambda _d: True,
-                                    cancel_event=cancel)
+            granted = self.build_tools(lab_agent, workspace, approval=lambda _d: True,
+                                       cancel_event=cancel)
+            permissions = agent.permissions
+            if permissions.browser or permissions.computer_apps:
+                # Qualification never touches the real web or the user's apps: the
+                # same tool catalogue is bound to the offline test web and the
+                # practice application, unattended (confirmations refused).
+                from ollama_workstation.agentification.harness import interaction_tool_factory
+
+                offline = interaction_tool_factory(browser=permissions.browser,
+                                                   computer=bool(permissions.computer_apps))
+                granted._inner.interaction = offline(workspace, cancel).interaction  # noqa: SLF001
+            return granted
 
         record = HarnessLab(self.client, keep_alive=self.keep_alive).qualify(
             agent.model_name, profile, trials=trials, tool_factory=factory,
@@ -561,17 +613,22 @@ class AgentService:
             memory_store=(memory_store_for(self.repository, self.client)
                           if agent.memory.get("enabled") and self.repository is not None else None),
         )
-        result = runtime.run(
-            agent.model_name, profile, task, tools, event=event, cancel_event=cancel_event,
-            resume_checkpoint=resume_checkpoint,
-            policy=RunPolicy(
-                harness_mode=harness, extra_instructions=instructions,
-                agent_title=f"{agent.name} ({agent.role_title})",
-                max_seconds=agent.budget.max_seconds, max_tokens=agent.budget.max_tokens,
-                max_tool_calls=agent.budget.max_tool_calls,
-                repair_attempts=agent.repair_attempts, options=options,
-            ),
-        )
+        try:
+            result = runtime.run(
+                agent.model_name, profile, task, tools, event=event, cancel_event=cancel_event,
+                resume_checkpoint=resume_checkpoint,
+                policy=RunPolicy(
+                    harness_mode=harness, extra_instructions=instructions,
+                    agent_title=f"{agent.name} ({agent.role_title})",
+                    max_seconds=agent.budget.max_seconds, max_tokens=agent.budget.max_tokens,
+                    max_tool_calls=agent.budget.max_tool_calls,
+                    repair_attempts=agent.repair_attempts, options=options,
+                ),
+            )
+        finally:
+            closer = getattr(tools, "close", None)
+            if callable(closer):
+                closer()  # the browser and launched applications end with the run
         self.store.bind_run(result.run_id, agent.agent_id, agent.version,
                             agent.config_sha256, qualification.qualification_id)
         report: VerificationReport | None = None

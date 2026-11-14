@@ -81,9 +81,21 @@ class EgressPolicy:
     resolver: Resolver = field(default=system_resolver)
     approved: set[str] = field(default_factory=set)
     log: list[dict[str, Any]] = field(default_factory=list)
+    # Hosts the operator explicitly granted although they are local/private
+    # (for example an intranet app). Never inferred from model output.
+    private_hosts: tuple[str, ...] = ()
 
     def check(self, url: str) -> str:
         """Raise :class:`EgressDenied` unless ``url`` may be requested; return the host."""
+        return self.admit(url)[0]
+
+    def admit(self, url: str, *, document: bool = True) -> tuple[str, list[str]]:
+        """Check ``url`` and return ``(host, addresses)``; connect only to those addresses.
+
+        ``document=False`` is for page sub-resources fetched with GET: they need a
+        public address but not a listed domain (pages load scripts and images from
+        CDNs). Navigations and state-changing requests use the full domain policy.
+        """
         if not self.enabled:
             raise EgressDenied("Web access is disabled for this agent")
         parts = urlsplit(url)
@@ -98,26 +110,60 @@ class EgressPolicy:
             literal = ipaddress.ip_address(host)
         except ValueError:
             literal = None
-        if literal is not None and not _public(host):
+        granted_private = any(domain_matches(host, item) or host == item.lower()
+                              for item in self.private_hosts)
+        if literal is not None and not _public(host) and not granted_private:
             raise EgressDenied(f"{host} is not a public address")
-        if not any(domain_matches(host, item) for item in self.allowed_domains) \
+        if document and not granted_private \
+                and not any(domain_matches(host, item) for item in self.allowed_domains) \
                 and host not in self.approved:
             if not self.approval(f"Allow the agent to access the web domain: {host}"):
                 self.log.append({"url": url, "host": host, "decision": "denied_domain"})
                 raise EgressDenied(f"Domain {host} is not on the allow-list and was not approved")
             self.approved.add(host)
+        addresses = [host] if literal is not None else []
         if literal is None:
             try:
                 addresses = self.resolver(host)
             except OSError as exc:
                 raise EgressDenied(f"Could not resolve {host}: {exc}") from exc
             blocked = [address for address in addresses if not _public(address)]
-            if not addresses or blocked:
+            if not addresses or (blocked and not granted_private):
                 self.log.append({"url": url, "host": host, "decision": "denied_address"})
                 raise EgressDenied(f"{host} resolves to a non-public address "
                                    f"({', '.join(blocked) or 'none'}); refused")
         self.log.append({"url": url, "host": host, "decision": "allowed"})
-        return host
+        return host, list(addresses)
+
+
+def pinned_request(client: httpx.Client, method: str, url: str, address: str, *,
+                   headers: dict[str, str] | None = None, content: bytes | None = None,
+                   max_bytes: int = 15_000_000) -> tuple[int, dict[str, str], bytes]:
+    """One request to ``url`` connected to the already-checked ``address``.
+
+    The TLS handshake and certificate check still use the real host name (SNI),
+    so the connection cannot be redirected by a DNS answer that changed after
+    the egress check (DNS rebinding). Redirects are returned, not followed.
+    """
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    literal = f"[{address}]" if ":" in address else address
+    netloc = literal + (f":{parts.port}" if parts.port else "")
+    target = parts._replace(netloc=netloc).geturl()
+    outgoing = {key: value for key, value in (headers or {}).items()
+                if key.lower() not in {"host", "connection", "content-length", "accept-encoding"}}
+    outgoing["Host"] = host + (f":{parts.port}" if parts.port else "")
+    with client.stream(method, target, headers=outgoing, content=content,
+                       extensions={"sni_hostname": host}) as response:
+        body = bytearray()
+        for chunk in response.iter_bytes():
+            body.extend(chunk)
+            if len(body) > max_bytes:
+                raise EgressDenied(f"Response from {host} exceeds {max_bytes} bytes")
+        response_headers = {key: value for key, value in response.headers.items()
+                            if key.lower() not in {"content-encoding", "content-length",
+                                                   "transfer-encoding", "connection"}}
+        return response.status_code, response_headers, bytes(body)
 
 
 class _TextExtractor(HTMLParser):

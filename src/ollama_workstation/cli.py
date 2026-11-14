@@ -404,6 +404,85 @@ def _route(args: argparse.Namespace, settings: Any, client: Any,
     return 0 if decision.selected is not None else 2
 
 
+def _interaction_selftest() -> int:
+    """Drive the browser and the practice app once, offline, through the policy broker."""
+    import re
+    import tempfile
+
+    from ollama_workstation.agents.web import EgressPolicy
+    from ollama_workstation.interaction.policy import (
+        AuditTrail,
+        InteractionBroker,
+        InteractionDenied,
+        InteractionGrants,
+    )
+
+    report: dict[str, Any] = {}
+    with tempfile.TemporaryDirectory(prefix="11vated-selftest-") as directory:
+        root = Path(directory)
+        broker = InteractionBroker(InteractionGrants(browser=True, computer=True,
+                                                     computer_apps=("practice",)),
+                                   approval=None, audit=AuditTrail(root / "audit.jsonl"))
+        page = ("<html><body><div id=a>loading</div><script>setTimeout(()=>{document."
+                "getElementById('a').textContent='rendered '+(20+22)},100)</script>"
+                "<button>Delete everything</button></body></html>")
+        try:
+            from ollama_workstation.interaction.browser import BrowserSession
+
+            browser = BrowserSession(
+                broker, EgressPolicy(enabled=True, allowed_domains=("selftest.test",),
+                                     resolver=lambda _host: ["93.184.216.34"]),
+                quarantine=root / "q",
+                fulfil=lambda *_args: (200, {"content-type": "text/html"}, page.encode()))
+            try:
+                snapshot = browser.open("https://selftest.test/")
+                report["browser_renders_javascript"] = "rendered 42" in snapshot["text"]
+                ref = re.search(r"\[(e\d+)\] button \"Delete everything\"", snapshot["elements"])
+                try:
+                    browser.click(ref.group(1) if ref else "e1")
+                    report["browser_refuses_destructive"] = False
+                except InteractionDenied:
+                    report["browser_refuses_destructive"] = True
+                report["browser_blocks_loopback"] = False
+                try:
+                    browser.open("https://127.0.0.1/")
+                except InteractionDenied:
+                    report["browser_blocks_loopback"] = True
+            finally:
+                browser.close()
+        except Exception as exc:  # noqa: BLE001 - reported, the command fails below
+            report["browser_error"] = f"{type(exc).__name__}: {exc}"
+        if os.name == "nt":
+            try:
+                from ollama_workstation.interaction.computer import ComputerSession
+
+                state = root / "practice.json"
+                computer = ComputerSession(broker, practice_state=str(state), background=True)
+                try:
+                    launched = computer.launch("practice")
+                    refs = dict(re.findall(r'\[(\S+?)\] \w+ "([^"]*)"', launched["controls"]))
+                    by_name = {name: ref for ref, name in refs.items()}
+                    computer.type(by_name["Payee"], "Self test")
+                    computer.type(by_name["Amount"], "12.5")
+                    computer.click(by_name["Add entry"])
+                    saved = json.loads(state.read_text(encoding="utf-8"))
+                    report["computer_workflow"] = saved.get("total") == 12.5
+                    try:
+                        computer.click(by_name["Delete all entries"])
+                        report["computer_refuses_destructive"] = False
+                    except InteractionDenied:
+                        report["computer_refuses_destructive"] = True
+                finally:
+                    computer.close()
+            except Exception as exc:  # noqa: BLE001
+                report["computer_error"] = f"{type(exc).__name__}: {exc}"
+        report["audit_chain_valid"] = AuditTrail.verify(root / "audit.jsonl")
+    print(json.dumps(report, indent=2))
+    checks = [value for key, value in report.items() if not key.endswith("_error")]
+    ok = all(checks) and not any(key.endswith("_error") for key in report)
+    return 0 if ok else 1
+
+
 def _sandbox(args: Any, settings: Any) -> int:
     from ollama_workstation.agents import sandbox
 
@@ -567,6 +646,8 @@ def build_parser() -> argparse.ArgumentParser:
     route.add_argument("--require-verified", action="store_true",
                        help="Require an observed capability score, not declared metadata")
     commands.add_parser("doctor", help="Emit local diagnostics and database integrity status")
+    commands.add_parser("interaction-selftest",
+                        help="Check the isolated browser and computer use on this machine (offline)")
     sandbox_parser = commands.add_parser(
         "sandbox", help="List or revoke the folders the command sandbox was granted")
     sandbox_parser.add_argument("action", choices=("status", "revoke"))
@@ -604,6 +685,8 @@ def main(argv: list[str] | None = None) -> int:
             return _doctor(settings, client, repository)
         if args.command == "sandbox":
             return _sandbox(args, settings)
+        if args.command == "interaction-selftest":
+            return _interaction_selftest()
         if args.command == "models":
             print(json.dumps([{"name": x.name, "size_bytes": x.size_bytes,
                                "digest": x.digest, "details": x.details}

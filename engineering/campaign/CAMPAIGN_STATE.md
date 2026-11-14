@@ -3,7 +3,7 @@
 **Product:** 11VATED INTELLIGENCE - Ollama Desktop Agent
 **Branch:** `campaign/complete-agent-v2` (from `main` after PR #4)
 **Baseline commit:** `974517c0cf4f293192a289cb419f21654671c39b`
-**Last updated:** 2026-11-13 (session 4)
+**Last updated:** 2026-11-14 (session 5)
 **Overall status:** 10 of 15 gates VERIFIED, 4 PARTIAL, 1 OPEN. Every open item
 needs an owner action or decision. See IMPLEMENTATION_MATRIX.md.
 
@@ -31,6 +31,14 @@ significant paired improvement.
 7. Strict mypy clean and enforced in CI; release signing support; clean-machine
    CI install check; loopback-only URL override.
 
+## Session 5 (2026-11-14)
+
+Owner decision: build the browser and computer use now. Built the interaction
+engine (policy broker with audit, isolated browser, UI Automation broker,
+practice app), qualification tasks for both, acceptance scenarios G-J. B1-B5 and
+C1-C5 pass automated tests on real Edge and UI Automation; live G and J passed,
+I passed 1/3, H failed 0/9 because of model reliability. See VERIFICATION_EVIDENCE.
+
 ## Next exact action
 
 Owner: open and merge a PR for `campaign/complete-agent-v2`, close PRs #2/#3
@@ -38,8 +46,8 @@ Owner: open and merge a PR for `campaign/complete-agent-v2`, close PRs #2/#3
 
 ## Owner decisions and inputs still needed
 
-1. G9: whether to build a JavaScript browser and computer-use tools now. The
-   measured injection behaviour (R15) argues for waiting for stronger models.
+1. G9: decided and built. Remaining: a local model that passes scenario H
+   reliably (qwen2.5-coder:14b 0/9, qwen3-vl:8b unsuitable).
 2. G14: a code-signing certificate (thumbprint or PFX) for signed releases.
 3. G11: interactive QA of the desktop.
 4. G15: release certification once the above are done.

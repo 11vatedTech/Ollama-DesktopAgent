@@ -168,6 +168,9 @@ _REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "changed": ("paths",),
     "unchanged": ("paths",),
     "command": ("argv",),
+    # A value in a host-owned state file the agent cannot write (for example the
+    # practice application's state), named by ``source``.
+    "host_json": ("source", "pointer", "equals"),
 }
 
 
@@ -215,8 +218,10 @@ class VerificationEngine:
         allow_commands: bool = False,
         command_timeout_seconds: float = 180.0,
         command_runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+        host_files: Mapping[str, Path] | None = None,
     ) -> None:
         self.workspace = workspace.expanduser().resolve()
+        self.host_files = dict(host_files or {})
         self.allow_commands = allow_commands
         self.command_timeout_seconds = max(1.0, min(float(command_timeout_seconds), 1_800.0))
         self._run = command_runner or subprocess.run
@@ -339,6 +344,29 @@ class VerificationEngine:
 
         if kind == "command":
             return self._command(check_id, check)
+
+        if kind == "host_json":
+            source = str(check["source"])
+            host_path = self.host_files.get(source)
+            if host_path is None or not Path(host_path).is_file():
+                return result(failed, FailureReason.ARTIFACT_MISSING,
+                              f"host state {source!r} is not available")
+            try:
+                state: Any = json.loads(Path(host_path).read_text(encoding="utf-8"))
+            except json.JSONDecodeError as exc:
+                return result(failed, FailureReason.SCHEMA_VIOLATION, f"host state is not JSON: {exc.msg}")
+            for token in [part for part in str(check["pointer"]).split("/") if part]:
+                try:
+                    state = state[int(token)] if isinstance(state, list) else state[token]
+                except (KeyError, IndexError, ValueError, TypeError):
+                    return result(failed, FailureReason.CONTENT_MISMATCH,
+                                  f"host state {source!r} has no value at {check['pointer']}")
+            if check.get("length"):
+                state = len(state) if isinstance(state, (list, dict, str)) else -1
+            ok = state == check["equals"]
+            return result(passed if ok else failed,
+                          FailureReason.NONE if ok else FailureReason.CONTENT_MISMATCH,
+                          f"host state {source}{check['pointer']} is {state!r}")
 
         relative = str(check["path"])
         path = self._resolve(relative)

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased - Agent interaction engine, session 5 (2026-11-14)
+
+- **Isolated browser** (Playwright driving the installed Edge/Chrome): fresh in-memory profile, the browser's own network pointed at a dead proxy and every request fetched by the host through the egress policy on the checked address (DNS rebinding closed), redirects checked before they reach the page, non-web schemes refused, downloads fetched by the host into quarantine with Mark-of-the-Web. Tools: `browser_open/snapshot/click/type/select/scroll/back/wait/downloads/upload`.
+- **Computer use** through Windows UI Automation: only applications the agent launched from its grant (`calculator`, `notepad`, `practice`), ownership bound by a Job Object, semantic Invoke/Value actions (no real mouse or focus stealing), physical input as a separate grant, password fields and elevated/UAC windows refused, destructive/financial/account-security controls need human confirmation. Tools: `computer_apps/launch/windows/snapshot/click/type/read/close`.
+- **Interaction policy broker** with a hash-chained, tamper-evident audit trail; decisions never depend on model or page text.
+- **Practice Desk** test application whose state the host verifies (`host_json` verification checks).
+- Qualification (`qualify --browser`, `--computer`) on an offline JavaScript site and the practice app; acceptance scenarios G (browser workflow), H (desktop workflow), I (workforce across both), J (injection retest). Agent Foundry and `agent create --browser --computer-app` grant them; the `interaction` extra installs Playwright and UI Automation.
+- Orchestration: read-only children get observation tools of every granted service; empty research answers fail; read-only tasks retry safely; children's browsers and apps are closed with them.
+- Live: G and J passed (no prohibited action executed in any run); I passed 1/3; H failed 0/9 with qwen2.5-coder:14b (model reliability, documented).
+
 ## Unreleased — Complete Agent campaign, session 4 (2026-11-13)
 
 - **Command sandbox (AppContainer).** On Windows every agent command now runs in an AppContainer inside its Job Object: write access to the agent workspace only, read access to the executable's runtime folders, no network and no loopback. Fail-closed; real-kernel tests with a job-only negative control. `11vated sandbox status|revoke` lists and removes folder grants; Settings switch `command_sandbox`. Live scenario A (model runs pytest) passed inside the sandbox.

@@ -35,6 +35,9 @@ jobs:
           if ($doctor.database.integrity -ne "ok") { throw "Installed doctor: database $($doctor.database.integrity)" }
           $gui = Start-Process "$root\11vated-Intelligence.exe" -ArgumentList "--smoke-test" -Wait -PassThru -NoNewWindow
           if ($gui.ExitCode -ne 0) { throw "Installed GUI smoke test failed" }
+          # Browser and computer use must work from the installed build on a clean machine.
+          & "$root\11vated.exe" interaction-selftest
+          if ($LASTEXITCODE -ne 0) { throw "Installed interaction self-test failed" }
           # The command sandbox must work on a fresh profile (AppContainer creation).
           & "$root\11vated.exe" sandbox status | Out-Host
           & "$($release.FullName)\install.ps1" -Source $zip.FullName -InstallRoot $root -NoShortcut

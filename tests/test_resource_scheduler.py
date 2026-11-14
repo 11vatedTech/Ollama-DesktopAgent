@@ -173,7 +173,7 @@ class ConcurrencyClient:
         if self.grounded and "SURVEY" in task and not observed:
             return {"message": {"role": "assistant", "content": "", "tool_calls": [
                 {"function": {"name": "list_files", "arguments": {}}}]}}
-        return {"message": {"role": "assistant", "content": "Done."}}
+        return {"message": {"role": "assistant", "content": "Surveyed: the workspace has 0 files."}}
 
 
 def _plan(max_parallel: int) -> WorkforcePlan:
@@ -247,3 +247,28 @@ def test_children_hold_scheduler_leases_while_they_run(tmp_path: Path) -> None:
     assert result.status == "completed"
     assert seen and all(item.get("local:latest", 0) >= 1 for item in seen)
     assert queue.active() == {}
+
+
+
+def test_empty_research_answer_fails_and_read_only_tasks_retry(tmp_path: Path) -> None:
+    """Live finding: a browser researcher answered only "FINAL: done" and the next
+    agent invented the data. An empty answer fails; read-only retries are safe."""
+    class EmptyThenUseful(ConcurrencyClient):
+        calls = 0
+
+        def chat(self, model, messages, **kwargs):  # type: ignore[no-untyped-def]
+            observed = any(m.get("role") == "tool" for m in messages)
+            if not observed:
+                return {"message": {"role": "assistant", "content": "", "tool_calls": [
+                    {"function": {"name": "list_files", "arguments": {}}}]}}
+            type(self).calls += 1
+            text = "FINAL: done" if type(self).calls == 1 else "Found: alpha.txt lists 3 items."
+            return {"message": {"role": "assistant", "content": text}}
+
+    plan = WorkforcePlan(objective="Survey.", require_approval=False, tasks=(
+        TaskSpec("survey", "researcher", "SURVEY", read_only=True, retry_safe=True, max_retries=1),))
+    result = WorkforceOrchestrator(EmptyThenUseful(), None).run(
+        plan, tmp_path / "ws", {"survey": _assignments()["survey-1"]}, approval=lambda _m: True)
+    task = result.tasks[0]
+    assert task.status == "completed" and task.attempts == 2
+    assert "3 items" in task.final_message
