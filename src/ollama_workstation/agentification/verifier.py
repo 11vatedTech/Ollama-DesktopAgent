@@ -18,7 +18,7 @@ import re
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -172,6 +172,25 @@ _REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     # practice application's state), named by ``source``.
     "host_json": ("source", "pointer", "equals"),
 }
+
+
+def with_refused_claims(report: VerificationReport,
+                        claims: Sequence[Mapping[str, Any]]) -> VerificationReport:
+    """Add one failing host check per artifact that records a refused change."""
+    if not claims:
+        return report
+    extra = tuple(
+        CheckResult(
+            check_id=f"refused_change_claimed-{index}", kind="refused_change_claimed",
+            status=VerificationStatus.FAILED, reason=FailureReason.CLAIM_UNSUPPORTED,
+            detail=(f"{claim.get('artifact')} records content of a change the host refused "
+                    f"({claim.get('refused_tool')} {claim.get('refused_path')})"),
+            evidence={key: claim.get(key) for key in ("artifact", "refused_tool",
+                                                       "refused_path", "fragments")},
+        )
+        for index, claim in enumerate(claims)
+    )
+    return replace(report, checks=report.checks + extra, status=VerificationStatus.FAILED)
 
 
 def validate_checks(checks: Sequence[Mapping[str, Any]]) -> None:

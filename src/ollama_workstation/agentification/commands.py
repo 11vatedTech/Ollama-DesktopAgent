@@ -39,9 +39,20 @@ COMMANDS = frozenset({"qualify", "agent", "skill", "verify", "accept", "resource
 
 
 def _qualification_factory(shell: bool, web: bool, browser: bool = False,
-                           computer: bool = False) -> Any:
+                           computer: bool = False, edit: bool = False) -> Any:
     if sum((shell, web, browser or computer)) > 1:
         raise ValueError("Qualify the --shell, --web and --browser/--computer catalogues separately")
+    if edit:
+        if web or browser or computer:
+            raise ValueError("--edit qualifies the coding catalogue; combine it only with --shell")
+        base = shell_tool_factory if shell else default_tool_factory
+
+        def edit_factory(workspace: Path, cancel_event: Any = None) -> Any:
+            tools = base(workspace, cancel_event)
+            tools.allow_edit = True
+            return tools
+
+        return edit_factory
     if browser or computer:
         from ollama_workstation.agentification.harness import interaction_tool_factory
 
@@ -63,6 +74,9 @@ def register(commands: Any) -> None:
                          help="Qualify the isolated-browser catalogue (offline JavaScript test web)")
     qualify.add_argument("--computer", action="store_true",
                          help="Qualify the computer-use catalogue (practice application)")
+    qualify.add_argument("--edit", action="store_true",
+                         help="Qualify the coding catalogue that includes edit_file "
+                              "(adds the exact-edit task; combine with --shell if needed)")
     qualify.add_argument("--json", action="store_true")
 
     agent = commands.add_parser("agent", help="Create, inspect, gate and run agents")
@@ -78,6 +92,8 @@ def register(commands: Any) -> None:
     create.add_argument("--allow-command", action="append", default=[],
                         help="Executable the agent may request; use {python} for this interpreter")
     create.add_argument("--read-only", action="store_true")
+    create.add_argument("--edit", action="store_true",
+                        help="Grant edit_file (exact-string edits of existing files)")
     create.add_argument("--web", action="store_true",
                         help="Grant web_search/web_fetch through the egress policy")
     create.add_argument("--browser", action="store_true",
@@ -185,7 +201,7 @@ def dispatch(args: argparse.Namespace, paths: Any, settings: Any, client: Any,
             record = HarnessLab(client, keep_alive=settings.keep_alive).qualify(
                 args.model, profile, trials=args.trials, progress=_say,
                 tool_factory=_qualification_factory(args.shell, args.web, args.browser,
-                                                    args.computer),
+                                                    args.computer, args.edit),
             )
             store.save_qualification(record.to_dict())
             if args.json:
@@ -245,7 +261,8 @@ def _agent(args: argparse.Namespace, service: AgentService, store: AgentStore, c
             permissions=Permissions(write=not args.read_only, shell=args.shell,
                                     allowed_commands=commands, web=args.web,
                                     web_domains=tuple(args.web_domain), browser=args.browser,
-                                    computer_apps=tuple(args.computer_app)),
+                                    computer_apps=tuple(args.computer_app),
+                                    edit=args.edit and not args.read_only),
             budget=Budget(max_steps=args.max_steps, max_seconds=args.max_seconds,
                           max_tokens=args.max_tokens),
             memory={"enabled": bool(args.memory)}, allow_provisional=args.allow_provisional,

@@ -3,9 +3,9 @@
   "repository": "https://github.com/11vatedTech/Ollama-DesktopAgent",
   "baseline_commit": "974517c0cf4f293192a289cb419f21654671c39b",
   "baseline_branch": "feat/execution-integrity-v1-1",
-  "branch": "campaign/complete-agent-v2",
-  "current_commit": "8ffd076",
-  "updated_at": "2026-11-13",
+  "branch": "main",
+  "current_commit": "52ca3b9",
+  "updated_at": "2026-11-16",
   "objectives": [
     "model -> qualified agent",
     "multi-step task with real tools",
@@ -74,15 +74,16 @@
       "note": "AppContainer + Job Object for every agent command on Windows; real-kernel tests with job-only negative control; live scenario A ran pytest inside the sandbox. Residual: MCP servers and POSIX hosts are not sandboxed"
     },
     "G9": {
-      "status": "PARTIAL",
+      "status": "VERIFIED",
       "evidence": [
-        "engineering/campaign/VERIFICATION_EVIDENCE.md#session-5-2026-11-14-browser-and-computer-use",
-        "tests/test_browser_service.py",
+        "engineering/campaign/VERIFICATION_EVIDENCE.md#session-8-2026-11-16-the-context-window-was-the-h-blocker",
+        "tests/test_context_window.py",
+        "tests/test_deliverables.py",
+        "tests/test_edit_file.py",
         "tests/test_computer_service.py",
-        "tests/test_interaction_policy.py",
         "tests/test_interaction_integration.py"
       ],
-      "note": "isolated browser and computer-use broker built; B1-B5 and C1-C5 pass automated tests on real Edge and UI Automation; live: G passed, J passed (0 prohibited actions executed), I passed 1/3, H 0/9 (model forgets the report step; with hostile notice it abandons the task). Real-model acceptance of H is the remaining gap; it is a model-capability limit, not an engineering gap"
+      "note": "Session 8: the H failures were caused by Ollama's silent 4096-token truncation (the runtime never sent num_ctx). With an explicit window H passed 5/5 (rana) and 3/3 (qwen3.5:9b); ablation back to 4096 failed 0/2. I passed 1/1 (qwen3.5:9b) and 2/3 (rana) since the session 7 fixes; J 6/6 hostile runs on both, 0 prohibited executed."
     },
     "G10": {
       "status": "VERIFIED",
@@ -232,9 +233,9 @@
     }
   ],
   "next_action": {
-    "description": "Owner: merge campaign/complete-agent-v2; try a stronger local model on scenario H",
-    "command": "11vated qualify MODEL --computer; 11vated accept --models MODEL --scenarios H,I",
-    "then": "owner QA, signing certificate, release certification"
+    "description": "Owner: review and commit the session 8 working-tree changes (context window, deliverable gate, edit_file, model classification)",
+    "command": "git status; pytest -q; 11vated accept --models qwen3.5:9b --scenarios H,I,J",
+    "then": "owner interactive QA (G11), signing certificate (G14), release certification (G15)"
   },
   "evidence": {
     "document": "engineering/campaign/VERIFICATION_EVIDENCE.md",

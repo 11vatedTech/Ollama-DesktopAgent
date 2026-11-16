@@ -30,6 +30,7 @@ from ollama_workstation.agentification.verifier import (
     VerificationEngine,
     VerificationReport,
     snapshot_workspace,
+    with_refused_claims,
 )
 from ollama_workstation.agents.memory import memory_store_for
 from ollama_workstation.agents.runtime import (
@@ -73,6 +74,8 @@ class Permissions:
     command: str = "ask"
     # Read-only git inspection tools (git_status, git_diff, git_log).
     git: bool = False
+    # Exact-string edits of existing files (edit_file); needs write.
+    edit: bool = False
     # Web research (web_search, web_fetch) through the egress policy. Domains on
     # web_domains are allowed; any other domain needs approval per session.
     web: bool = False
@@ -89,6 +92,8 @@ class Permissions:
                    "overwrite": self.overwrite, "command": self.command}
         if self.git:  # omitted when off so existing agent digests are unchanged
             payload["git"] = True
+        if self.edit:  # likewise omitted when off
+            payload["edit"] = True
         if self.web:  # likewise omitted when off
             payload["web"] = True
             payload["web_domains"] = list(self.web_domains)
@@ -177,6 +182,7 @@ class AgentDefinition:
                     overwrite=str(permissions.get("overwrite", "ask")),
                     command=str(permissions.get("command", "ask")),
                     git=bool(permissions.get("git", False)),
+                    edit=bool(permissions.get("edit", False)),
                     web=bool(permissions.get("web", False)),
                     web_domains=tuple(str(item) for item in permissions.get("web_domains") or ()),
                     browser=bool(permissions.get("browser", False)),
@@ -272,6 +278,8 @@ class GrantedTools:
     def invoke(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if name == "write_file" and not self._permissions.write:
             raise ToolError("This agent does not hold the write permission.")
+        if name == "edit_file" and not (self._permissions.edit and self._permissions.write):
+            raise ToolError("This agent does not hold the edit and write permissions.")
         if name == "run_command" and not self._permissions.shell:
             raise ToolError("This agent does not hold the shell permission.")
         if name in ("web_search", "web_fetch") and not self._permissions.web:
@@ -417,6 +425,7 @@ class AgentService:
             approval=decide, cancel_event=cancel_event,
             allow_sensitive_files=permissions.sensitive_files,
             allow_git=permissions.git,
+            allow_edit=permissions.edit and permissions.write,
             web=AgentService.web_access(permissions, decide) if permissions.web else None,
         )
         if permissions.browser or permissions.computer_apps:
@@ -588,10 +597,13 @@ class AgentService:
         qualification = self.resolve_qualification(agent)
         assert qualification is not None  # guaranteed by readiness()
         harness = agent.harness or qualification.selected_harness
+        requested_ctx = agent.context.get("num_ctx")
+        working_ctx: int | None = int(requested_ctx) if requested_ctx else None
         if self.admission is not None:
-            requested_ctx = agent.context.get("num_ctx")
+            if working_ctx is None and hasattr(self.admission, "working_context"):
+                working_ctx = int(self.admission.working_context(agent.model_name))
             decision = self.admission.require(  # raises ResourceDenied
-                agent.model_name, int(requested_ctx) if requested_ctx else None)
+                agent.model_name, working_ctx)
             if event is not None:
                 event(AgentEvent("resource_admission", "; ".join(decision.reasons),
                                  decision.to_dict()))
@@ -605,8 +617,7 @@ class AgentService:
         workspace_root = Path(tools.workspace)
         if baseline is None and resume_checkpoint is None:
             baseline = snapshot_workspace(workspace_root)
-        options = ({"num_ctx": int(agent.context["num_ctx"])}
-                   if agent.context.get("num_ctx") else None)
+        options = {"num_ctx": working_ctx} if working_ctx else None
         runtime = AgentRuntime(
             self.client, max_steps=agent.budget.max_steps, keep_alive=self.keep_alive,
             repository=self.repository,
@@ -632,10 +643,14 @@ class AgentService:
         self.store.bind_run(result.run_id, agent.agent_id, agent.version,
                             agent.config_sha256, qualification.qualification_id)
         report: VerificationReport | None = None
-        if checks or agent.verification.get("require_checks"):
+        claims = result.usage.get("refused_change_claims") or []
+        if checks or agent.verification.get("require_checks") or claims:
             report = VerificationEngine(
                 workspace_root, allow_commands=allow_command_checks,
             ).verify(checks or [], run_id=result.run_id, run_status=result.status,
                      final_message=result.final_message, baseline=baseline)
+            # A run whose artifact records a refused change is never verified, whatever
+            # the content checks say: the artifact asserts something the host refused.
+            report = with_refused_claims(report, claims)
             self.store.save_verification(report.to_dict())
         return AgentRunOutcome(result, report, agent, qualification.qualification_id)

@@ -30,6 +30,14 @@ class ToolError(RuntimeError):
     """Raised for invalid, unauthorized or failed tool operations."""
 
 
+class ApprovalDenied(ToolError):
+    """The operator (or an unattended policy) refused an operation; nothing was changed.
+
+    Distinct from other tool errors so the host can hold the agent to it: a refused
+    change must not later be reported, or recorded in a file, as done.
+    """
+
+
 class _BoundedPipeCapture:
     """Drain a subprocess pipe concurrently while retaining only a bounded tail."""
 
@@ -108,6 +116,7 @@ class WorkspaceTools:
                  cancel_event: Event | None = None,
                  allow_sensitive_files: bool = False,
                  allow_git: bool = False, sandbox: str | None = None,
+                 allow_edit: bool = False,
                  web: Any | None = None, interaction: Any | None = None) -> None:
         # agents.web.WebAccess when the agent is granted web research; the only
         # network path an agent has (commands run offline in the AppContainer).
@@ -129,6 +138,8 @@ class WorkspaceTools:
         self.containment_limits = JobLimits()
         # Read-only git inspection; off unless the agent is granted it.
         self.allow_git = allow_git
+        # Exact-string edits of existing files (edit_file); off unless granted.
+        self.allow_edit = allow_edit
         located = shutil.which("git") if allow_git else None
         self.git_executable: Path | None = Path(located).resolve() if located else None
         self.allowed_command_paths: dict[str, Path] = {}
@@ -286,7 +297,7 @@ class WorkspaceTools:
         if len(encoded) > self.MAX_WRITE_BYTES:
             raise ToolError(f"File exceeds {self.MAX_WRITE_BYTES} byte write limit")
         if target.exists() and not self.approval(f"Overwrite workspace file: {path}"):
-            raise ToolError("Overwrite was not approved")
+            raise ApprovalDenied("Overwrite was not approved; the file was not changed")
         target.parent.mkdir(parents=True, exist_ok=True)
         descriptor, temporary_name = tempfile.mkstemp(prefix=".11vated-write-", dir=target.parent)
         temporary = Path(temporary_name)
@@ -301,6 +312,61 @@ class WorkspaceTools:
                 temporary.unlink()
         return {"path": path, "bytes_written": len(encoded),
                 "sha256": hashlib.sha256(encoded).hexdigest()}
+
+    def edit_file(self, path: str, old_string: str, new_string: str,
+                  replace_all: bool = False) -> dict[str, Any]:
+        """Replace an exact passage in an existing file.
+
+        Small models rewriting whole files drop or corrupt unrelated lines; an exact,
+        unique match keeps the change to what the model actually quoted. The edit is an
+        overwrite of an existing file, so it is under the same approval as one.
+        """
+        if not self.allow_edit:
+            raise ToolError("edit_file is not granted to this agent")
+        target = self._path(path)
+        if not target.is_file():
+            raise ToolError("File does not exist; create it with write_file")
+        if not old_string:
+            raise ToolError("old_string must not be empty")
+        if old_string == new_string:
+            raise ToolError("old_string and new_string are identical; nothing to change")
+        if target.stat().st_size > self.MAX_WRITE_BYTES:
+            raise ToolError(f"File exceeds {self.MAX_WRITE_BYTES} byte edit limit")
+        raw = target.read_bytes()
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ToolError("File is not UTF-8 text") from exc
+        newline = "\r\n" if "\r\n" in text else "\n"
+        # Models quote with \n; match a CRLF file without changing its line endings.
+        old = old_string.replace("\r\n", "\n").replace("\n", newline)
+        new = new_string.replace("\r\n", "\n").replace("\n", newline)
+        count = text.count(old)
+        if count == 0:
+            raise ToolError("old_string was not found. read_file the file and copy the passage "
+                            "exactly, including indentation")
+        if count > 1 and not replace_all:
+            raise ToolError(f"old_string matches {count} places; include more surrounding "
+                            "lines so it is unique, or set replace_all")
+        if not self.approval(f"Overwrite workspace file: {path}"):
+            raise ApprovalDenied("Overwrite was not approved; the file was not changed")
+        updated = text.replace(old, new) if replace_all else text.replace(old, new, 1)
+        encoded = updated.encode("utf-8")
+        if len(encoded) > self.MAX_WRITE_BYTES:
+            raise ToolError(f"File exceeds {self.MAX_WRITE_BYTES} byte write limit")
+        descriptor, temporary_name = tempfile.mkstemp(prefix=".11vated-edit-", dir=target.parent)
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(encoded)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, target)
+        finally:
+            if temporary.exists():
+                temporary.unlink()
+        return {"path": path, "replacements": count if replace_all else 1,
+                "bytes_written": len(encoded), "sha256": hashlib.sha256(encoded).hexdigest()}
 
     def search_text(self, pattern: str, path: str = ".") -> dict[str, Any]:
         root = self._path(path)
@@ -467,7 +533,7 @@ class WorkspaceTools:
         if self.cancel_event is not None and self.cancel_event.is_set():
             raise ToolError("Command execution was cancelled before launch")
         if not self.approval("Run approved executable: " + json.dumps(safe_argv)):
-            raise ToolError("Command execution was not approved")
+            raise ApprovalDenied("Command execution was not approved; the command did not run")
         process_options: dict[str, Any] = {
             "cwd": working_directory,
             "stdout": subprocess.PIPE,
@@ -669,6 +735,15 @@ class WorkspaceTools:
                 {"command": {"type": "string"}, "args": {"type": "array", "items": {"type": "string"}},
                  "cwd": {"type": "string", "default": "."}}, ["command"],
             ))
+        if self.allow_edit:
+            definitions.append(self._function(
+                "edit_file", "Replace an exact passage of an existing workspace file. old_string "
+                "must match the file exactly (read it first) and be unique unless replace_all is "
+                "true. Prefer this to rewriting a whole file with write_file.",
+                {"path": {"type": "string"}, "old_string": {"type": "string"},
+                 "new_string": {"type": "string"},
+                 "replace_all": {"type": "boolean", "default": False}},
+                ["path", "old_string", "new_string"]))
         if self.allow_git and self.git_executable is not None:
             definitions += [
                 self._function("git_status", "Read-only: branch and changed files of the "
@@ -752,6 +827,9 @@ class WorkspaceTools:
             "list_files": lambda: self.list_files(str(arguments.get("path", "."))),
             "read_file": lambda: self.read_file(str(arguments["path"])),
             "write_file": lambda: self.write_file(str(arguments["path"]), str(arguments["content"])),
+            "edit_file": lambda: self.edit_file(
+                str(arguments["path"]), str(arguments["old_string"]),
+                str(arguments["new_string"]), bool(arguments.get("replace_all", False))),
             "search_text": lambda: self.search_text(str(arguments["pattern"]), str(arguments.get("path", "."))),
             "git_status": lambda: self.git_status(),
             "git_diff": lambda: self.git_diff(str(arguments.get("path", "")),

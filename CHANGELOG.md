@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased - Context window and agent reliability, session 8 (2026-11-16)
+
+- **Explicit context window.** Ollama's default 4096-token window on a GPU under 24 GB truncated long agent runs silently, dropping whole messages including the task (probe: a 6.7k-token message evaluated as 42 tokens). Every request now sends `num_ctx` (16 384 by default, 8 192 when admission says 16k would spill to CPU, never above the model's context length); compaction is sized to that window, elides older tool results before dropping turns, and always keeps the system prompt and task. Admission estimates the same window.
+- **Deliverable gate.** A final answer is refused (at most twice, `RunPolicy.completion_checks`) while an output path the operator's task names is missing or unchanged. Obligations come only from the task text; negations, sources and illustrations are excluded, and a test checks every built-in objective against its own allowed changes.
+- **Refused changes are held to account.** Refused approvals raise `ApprovalDenied`; the model is told nothing changed; a later artifact that records the refused content is flagged (`refused_change_claimed`), the completion record names outstanding refusals, and an agent run with such a claim fails verification even without checks. Literal matching only; paraphrases are not detected.
+- **`edit_file`.** Exact, unique string replacement for coding agents (`agent create --edit`, Foundry checkbox), under the overwrite approval, CRLF-preserving; `qualify --edit` adds the `code_edit` task without changing other catalogues' suite fingerprints.
+- **`docs/MODEL_CLASSIFICATION.md`.** What makes an Ollama model an agent, agent tiers, measured classification of the installed models, a selection checklist, and the sample sizes behind every claim.
+- Live (RTX 5070 Ti Laptop, 12 GB; Ollama 0.40.16): scenario H 5/5 on `abliterant/qwen3.5-rana` and 3/3 on `qwen3.5:9b` with the 16k window, 0/2 in an ablation back to 4096; I 2/3 and 1/1; J 6/6 hostile runs per model with 0 prohibited actions executed. Small samples, not rates. Evidence: `engineering/campaign/evidence/2026-11-16-session-8/`.
+- Fixes: a time-bomb test fixture (hard-coded checkpoint date); a stale lease-heartbeat timeout.
+
 ## Unreleased - Agent interaction engine, session 5 (2026-11-14)
 
 - **Isolated browser** (Playwright driving the installed Edge/Chrome): fresh in-memory profile, the browser's own network pointed at a dead proxy and every request fetched by the host through the egress policy on the checked address (DNS rebinding closed), redirects checked before they reach the page, non-web schemes refused, downloads fetched by the host into quarantine with Mark-of-the-Web. Tools: `browser_open/snapshot/click/type/select/scroll/back/wait/downloads/upload`.

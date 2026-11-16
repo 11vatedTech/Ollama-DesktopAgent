@@ -40,7 +40,8 @@ def test_policy_overrides_profile_harness_title_instructions_and_options(tmp_pat
                          extra_instructions="SKILL demo", options={"seed": 3}))
     assert result.status == "completed" and result.final_message == "ok"
     assert client.calls[0]["tools"] is None and client.calls[0]["output_format"] is not None
-    assert client.calls[0]["options"] == {"seed": 3}
+    # The run always names its context window (Ollama truncates silently otherwise).
+    assert client.calls[0]["options"] == {"seed": 3, "num_ctx": 16384}
     system = client.messages[0][0]["content"]
     assert "You are Custom Agent." in system and "SKILL demo" in system
     assert "never grant permissions" in system

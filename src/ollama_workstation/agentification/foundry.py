@@ -158,7 +158,8 @@ class FoundryController:
                      memory: bool = True, allow_provisional: bool = True, git: bool = False,
                      skills: list[str] | None = None, max_steps: int = 12,
                      web: bool = False, web_domains: tuple[str, ...] = (),
-                     browser: bool = False, computer_apps: tuple[str, ...] = ()) -> Any:
+                     browser: bool = False, computer_apps: tuple[str, ...] = (),
+                     edit: bool = False) -> Any:
         profile = self.profile(model)
         chosen = list(skills or [])
         if web or browser or computer_apps:
@@ -172,6 +173,7 @@ class FoundryController:
         return self.service.create(
             name=name, profile=profile, role=role, instructions=instructions, skills=pinned,
             permissions=Permissions(write=write, shell=shell, git=git, web=web, browser=browser,
+                                    edit=edit and write,
                                     computer_apps=tuple(computer_apps),
                                     web_domains=tuple(web_domains),
                                     allowed_commands=("{python}",) if shell else ()),

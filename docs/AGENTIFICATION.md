@@ -119,6 +119,30 @@ turns. New terminal statuses: `time_limit`, `token_limit`. `AgentResult.usage`
 reports prompt and completion tokens, model requests, tool calls, repairs and
 elapsed seconds. Calling `run` without a policy behaves exactly as before.
 
+### Context window
+
+Ollama's default window on a GPU under 24 GB is 4096 tokens, and a conversation
+that outgrows it is truncated silently: whole messages disappear, including the
+task. Every request therefore names `num_ctx`: the policy's value, else the
+runtime default of 16 384, never more than the model's own context length. Agent
+runs choose the largest standard window (16 384, then 8 192) that admission says
+loads without CPU spill. The conversation is compacted against that window
+(about 2 characters per token): bodies of older tool results are elided first,
+then the oldest turns are dropped, and the system prompt and task are always
+kept. A single tool result may use at most a third of the budget.
+
+### Deliverable gate (`agents/deliverables.py`)
+
+When the catalogue includes `write_file` and the operator's task names an
+output path ("write report/total.txt"), the host checks that file before it
+accepts a final answer. A missing file (or an existing file left unchanged)
+gets one host notice per check, at most `RunPolicy.completion_checks` (default
+2); after that the answer is accepted, a `deliverables_missing` event is
+recorded and verification decides. Obligations come only from the task text:
+paths in negated clauses, sources ("from x", "of x") and illustrations ("for
+example x") are not obligations, and workspace or web content can never create
+one. Usage reports `completion_checks`.
+
 ## Acceptance scenarios (`acceptance.py`)
 
     11vated accept --models MODEL_A MODEL_B [--allow-code-execution]
@@ -222,6 +246,32 @@ They are read-only and run with fsmonitor, external diff, textconv, pager and
 hooks disabled, so a hostile repository configuration cannot execute code.
 Granting git changes the agent's tool manifest, so that agent must be qualified
 for its own catalogue (`AgentService.qualify`).
+
+## Refused changes
+
+An approval the host or operator refuses raises `ApprovalDenied` (overwrites, edits
+and commands). The model receives `{"refused": true, "performed": false}` with a
+note not to report or record the change as done. The runtime keeps each outstanding
+refusal with the lines it would have introduced (ignoring lines already in the
+file). If a later successful write records those lines elsewhere, a
+`refused_change_claimed` event is recorded and `usage["refused_change_claims"]`
+lists it; a later successful write to the refused path clears the refusal. A run
+that completes with outstanding refusals or claims gets a `[Host record]` note on its
+final message, and an agent run with a claim fails verification
+(`refused_change_claimed`, reason `claim_unsupported`) even when no checks were
+supplied. Matching is literal after normalising whitespace, quotes and case; a
+paraphrased claim is not detected.
+
+## Exact edits (`edit_file`)
+
+Agents granted `edit` (CLI `agent create --edit`, Foundry "May make exact
+edits") get `edit_file`: replace an exact passage of an existing file. The
+passage must be found and be unique unless `replace_all` is set; CRLF files
+keep their line endings; the edit is under the same approval as an overwrite.
+Rewriting a whole file to change one line is where small models drop or
+corrupt unrelated lines. `11vated qualify <model> --edit` adds the `code_edit`
+task, whose check is the full file content; catalogues without `edit_file`
+keep their suite fingerprint.
 
 ## Memory
 
