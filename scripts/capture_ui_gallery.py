@@ -25,6 +25,7 @@ PAGE_ORDER = (
     "command",
     "chat",
     "models",
+    "agents",
     "workforce",
     "operations",
     "integrations",

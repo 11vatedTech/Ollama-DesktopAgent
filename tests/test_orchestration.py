@@ -159,7 +159,8 @@ def test_denied_plan_approval_never_starts_a_child(tmp_path: Path) -> None:
 
 def test_missing_artifact_fails_verification_without_claiming_completion(tmp_path: Path) -> None:
     client = ScriptedClient([
-        assistant("I did not write the artifact."),
+        # The host's deliverable check asks twice more; the model still refuses.
+        *[assistant("I did not write the artifact.") for _ in range(3)],
     ])
     plan = WorkforcePlanner.analysis_plan("Analyze.")
     result = WorkforceOrchestrator(client, None).run(
@@ -177,7 +178,7 @@ def test_missing_artifact_fails_verification_without_claiming_completion(tmp_pat
 def test_blocked_dependency_prevents_downstream_execution(tmp_path: Path) -> None:
     client = ScriptedClient([
         assistant(calls=[write_call("wrong.txt", "wrong")]),
-        assistant("not the required artifact"),
+        *[assistant("not the required artifact") for _ in range(3)],
     ])
     plan = WorkforcePlanner.analysis_plan("Analyze.")
     result = WorkforceOrchestrator(client, None).run(

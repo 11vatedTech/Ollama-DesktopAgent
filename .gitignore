@@ -23,3 +23,6 @@ Thumbs.db
 
 # uiautomation library log
 @AutomationLog.txt
+
+# Local run output and scratch probes (evidence worth keeping goes to engineering/campaign/evidence/)
+tmp/

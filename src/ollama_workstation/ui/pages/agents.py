@@ -150,6 +150,10 @@ class AgentFoundryPage(QWidget):
         self.qualify_web.setToolTip("Qualifies the catalogue with web_search/web_fetch and adds "
                                     "web research and web-injection tasks. No network is used.")
         controls.addWidget(self.qualify_web)
+        self.qualify_edit = QCheckBox("Exact edits (coding)")
+        self.qualify_edit.setToolTip("Qualifies the catalogue with edit_file and adds the "
+                                     "code_edit task. Combine only with run_command.")
+        controls.addWidget(self.qualify_edit)
         controls.addStretch(1)
         self.admission_button = button("Check resources", variant="Secondary",
                                        on_click=self._check_admission)
@@ -226,7 +230,7 @@ class AgentFoundryPage(QWidget):
             f"Qualifying {model}", self.controller.qualify, model,
             trials=self.trials.value(), shell=self.qualify_shell.isChecked(),
             web=self.qualify_web.isChecked(), browser=self.qualify_browser.isChecked(),
-            computer=self.qualify_computer.isChecked(),
+            computer=self.qualify_computer.isChecked(), edit=self.qualify_edit.isChecked(),
             cancel_event=cancel, cancel=cancel, with_progress=True,
             on_result=lambda record: self._after(
                 f"{record.model_name}: {record.status} "
@@ -281,6 +285,9 @@ class AgentFoundryPage(QWidget):
         self.agent_write = QCheckBox("May write files")
         self.agent_write.setChecked(True)
         self.agent_shell = QCheckBox("May run Python (contained)")
+        self.agent_edit = QCheckBox("May make exact edits to existing files (coding)")
+        self.agent_edit.setToolTip("Grants edit_file: replace a quoted passage instead of "
+                                   "rewriting the whole file. Requalify the agent after granting.")
         self.agent_git = QCheckBox("May inspect git (read-only)")
         self.agent_web = QCheckBox("May research the web (egress policy)")
         self.agent_browser = QCheckBox("May use the isolated browser (JavaScript, forms)")
@@ -305,6 +312,7 @@ class AgentFoundryPage(QWidget):
         form.addRow("Role", self.agent_role)
         form.addRow("", self.agent_write)
         form.addRow("", self.agent_shell)
+        form.addRow("", self.agent_edit)
         form.addRow("", self.agent_git)
         form.addRow("", self.agent_web)
         form.addRow("", self.agent_browser)
@@ -364,6 +372,7 @@ class AgentFoundryPage(QWidget):
             instructions=self.agent_instructions.toPlainText(),
             write=self.agent_write.isChecked(), shell=self.agent_shell.isChecked(),
             git=self.agent_git.isChecked(), web=self.agent_web.isChecked(),
+            edit=self.agent_edit.isChecked(),
             web_domains=tuple(item.strip() for item in self.agent_web_domains.text().split(",")
                               if item.strip()),
             browser=self.agent_browser.isChecked(),

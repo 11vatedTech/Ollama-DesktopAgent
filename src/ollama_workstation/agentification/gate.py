@@ -28,6 +28,7 @@ from ollama_workstation.agentification.harness import (
 # Tools that the qualification suite exercises. Anything else in a catalogue
 # (MCP tools, future integrations) is outside qualified evidence.
 QUALIFIABLE_TOOLS = frozenset({"list_files", "read_file", "search_text", "write_file",
+                               "edit_file",
                                "run_command", "git_status", "git_diff", "git_log",
                                "web_search", "web_fetch"}) | frozenset(
     {"browser_open", "browser_snapshot", "browser_click", "browser_type", "browser_select",

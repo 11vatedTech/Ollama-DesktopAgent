@@ -115,9 +115,10 @@ def test_reserved_but_not_yet_resident_load_is_counted() -> None:
 def test_two_small_models_run_together() -> None:
     fake = FakeOllama()
     queue = scheduler(fake)
-    with queue.lease("small"):
+    # A 4096-token window each: the point is co-residence, not the default window.
+    with queue.lease("small", 4096):
         fake.load("small")
-        with queue.lease("small-2", timeout=0.2) as decision:
+        with queue.lease("small-2", 4096, timeout=0.2) as decision:
             assert decision.admitted
     assert fake.unloaded == []
 

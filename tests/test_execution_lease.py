@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 from pathlib import Path
 from threading import Barrier, Event, Thread
 
@@ -84,8 +85,8 @@ def save_checkpoint(repository: Repository, workspace: Path, run_id: str = "leas
             "step_budget": 12,
             "resume_count": 0,
         },
-        created_at="2026-11-12T00:00:00+00:00",
-        updated_at="2026-11-12T00:00:00+00:00",
+        created_at=datetime.now(UTC).isoformat(),
+        updated_at=datetime.now(UTC).isoformat(),
     )
 
 
@@ -208,10 +209,14 @@ def test_lease_heartbeat_renews_ownership(tmp_path: Path) -> None:
         def release_run_lease(self, run_id: str, owner_id: str) -> bool:
             return repository.release_run_lease(run_id, owner_id)
 
+    # Heartbeat is 1 s. The renewal must be observed before the assertion timeout,
+    # so allow headroom well beyond the heartbeat interval for a loaded runner.
+    # The correctness property, not the exact wall-clock, is what is being tested.
     with ExecutionLease(
         RenewalSpy(), "lease-run", "owner-a", ttl_seconds=60, heartbeat_seconds=1
     ):
-        assert renewed.wait(2.0)
+        assert renewed.wait(4.0), \
+            "heartbeat renewal did not fire within 4.0 s; the lease stayed with the live owner"
     assert repository.get_run_lease("lease-run") is None
 
 

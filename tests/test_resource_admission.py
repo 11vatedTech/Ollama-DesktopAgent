@@ -14,6 +14,7 @@ from ollama_workstation.agentification.resources import (
     ADMIT_AFTER_UNLOAD,
     ADMIT_DEGRADED,
     ADMIT_UNMEASURED,
+    DEFAULT_NUM_CTX,
     DENY,
     FALLBACK_KV_BYTES_PER_TOKEN,
     GIB,
@@ -50,7 +51,7 @@ def test_footprint_uses_model_geometry_and_grouped_query_attention() -> None:
     assert footprint.weights_bytes == int(4 * GIB * 1.10)
     fallback = estimate_footprint(4 * GIB, None, None)
     assert fallback.kv_basis == "fallback_constant"
-    assert fallback.kv_cache_bytes == FALLBACK_KV_BYTES_PER_TOKEN * 4096
+    assert fallback.kv_cache_bytes == FALLBACK_KV_BYTES_PER_TOKEN * DEFAULT_NUM_CTX
     assert estimate_footprint(4 * GIB, info, 16384).total_bytes > footprint.total_bytes
 
 

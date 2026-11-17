@@ -13,6 +13,7 @@ from pathlib import Path
 from threading import Event
 from typing import Any, Protocol, cast
 
+from ollama_workstation.agents.deliverables import DeliverableLedger, completion_notice
 from ollama_workstation.agents.execution_lease import (
     ExecutionLease,
     LeaseLost,
@@ -24,7 +25,7 @@ from ollama_workstation.agents.recovery import (
     DEFAULT_MAX_CHECKPOINT_AGE_SECONDS,
     verify_resume_checkpoint,
 )
-from ollama_workstation.agents.tools import ToolError, WorkspaceTools
+from ollama_workstation.agents.tools import ApprovalDenied, ToolError, WorkspaceTools
 from ollama_workstation.models.schemas import ModelProfile, utc_now
 from ollama_workstation.ollama.client import OllamaClient
 
@@ -117,6 +118,9 @@ class RunPolicy:
     max_tool_calls: int | None = None
     repair_attempts: int = 0
     options: dict[str, Any] | None = None
+    # Times the host may refuse a final answer because an output the task names is
+    # still missing (see agents/deliverables.py). 0 disables the check.
+    completion_checks: int = 2
 
     def __post_init__(self) -> None:
         if self.harness_mode is not None and self.harness_mode not in HARNESS_MODES:
@@ -129,6 +133,167 @@ class RunPolicy:
             raise ValueError("max_tool_calls cannot be negative")
         if not 0 <= self.repair_attempts <= 5:
             raise ValueError("repair_attempts must be between 0 and 5")
+        if not 0 <= self.completion_checks <= 5:
+            raise ValueError("completion_checks must be between 0 and 5")
+
+
+# Ollama's default window on a <24 GB GPU is 4096 tokens, and a conversation that outgrows
+# it is truncated silently: whole messages vanish, including the task (live probe 2026-11-16,
+# qwen3.5:9b, Ollama 0.40.16: a 6.7k-token message was dropped and 42 tokens evaluated).
+# Every request therefore names its window, and compaction is sized to that window.
+DEFAULT_NUM_CTX = 16_384
+MIN_NUM_CTX = 4_096
+REPLY_RESERVE_TOKENS = 2_048
+# Conservative: dense numeric logs measured 1.6 chars/token, prose and JSON about 3-4.
+CHARS_PER_TOKEN = 2.0
+ELIDED_TOOL_OUTPUT_CHARS = 400
+KEEP_RECENT_MESSAGES = 6
+
+
+def working_context(policy_options: dict[str, Any] | None, default: int,
+                    model_context: int | None) -> int:
+    """The num_ctx a run sends: explicit option, else the runtime default, within the model."""
+    requested = (policy_options or {}).get("num_ctx")
+    try:
+        value = int(requested) if requested else int(default)
+    except (TypeError, ValueError):
+        value = int(default)
+    if model_context:
+        value = min(value, int(model_context))
+    return max(MIN_NUM_CTX, value)
+
+
+MAX_CONVERSATION_WINDOW = 131_072
+
+
+def conversation_window(messages: list[dict[str, Any]], model_context: int | None,
+                        default: int = DEFAULT_NUM_CTX) -> int:
+    """num_ctx for a direct chat: large enough for what is sent, never Ollama's silent 4096.
+
+    Used where the host sends a whole conversation it does not compact (desktop chat,
+    the verdict formatter). Grows in 8k steps so a long chat keeps its early turns; the
+    model's own context length is the hard ceiling.
+    """
+    needed = int(_size(messages) / CHARS_PER_TOKEN) + REPLY_RESERVE_TOKENS
+    window = max(default, -(-needed // 8_192) * 8_192)
+    window = min(window, MAX_CONVERSATION_WINDOW)
+    if model_context:
+        window = min(window, int(model_context))
+    return max(MIN_NUM_CTX, window)
+
+
+def conversation_char_budget(num_ctx: int, ceiling: int) -> int:
+    return min(ceiling, max(8_000, int((num_ctx - REPLY_RESERVE_TOKENS) * CHARS_PER_TOKEN)))
+
+
+def _size(messages: list[dict[str, Any]]) -> int:
+    return len(json.dumps(messages, ensure_ascii=False, default=str))
+
+
+def compact_messages(messages: list[dict[str, Any]], budget: int) -> tuple[list[dict[str, Any]], int, int]:
+    """Fit the conversation into ``budget`` characters without losing the contract.
+
+    The system prompt and the task (the first two messages) are never removed. First the
+    bodies of older tool results are elided, which keeps the record of what was done; only
+    then are the oldest turns dropped. Returns (messages, elided, dropped).
+    """
+    if _size(messages) <= budget:
+        return messages, 0, 0
+    head, body = [dict(item) for item in messages[:2]], [dict(item) for item in messages[2:]]
+    elided = 0
+    for item in body[:-KEEP_RECENT_MESSAGES] if len(body) > KEEP_RECENT_MESSAGES else []:
+        content = str(item.get("content") or "")
+        if item.get("role") == "tool" or content.startswith(("TOOL RESULT", "OBSERVATION")):
+            if len(content) > ELIDED_TOOL_OUTPUT_CHARS:
+                item["content"] = (content[:ELIDED_TOOL_OUTPUT_CHARS]
+                                   + f" ...[host elided {len(content) - ELIDED_TOOL_OUTPUT_CHARS}"
+                                   " chars of an earlier result]")
+                elided += 1
+        if _size(head + body) <= budget:
+            return head + body, elided, 0
+    dropped = 0
+    while len(body) > 2 and _size(head + body) > budget:
+        body.pop(0)
+        dropped += 1
+        # A tool result without its originating call confuses chat templates.
+        while body and body[0].get("role") == "tool":
+            body.pop(0)
+            dropped += 1
+    if dropped:
+        body.insert(0, {"role": "user", "content": (
+            "HOST NOTE: earlier steps were removed to fit the context window. The task above "
+            "still applies in full; check your progress with the tools before continuing.")})
+    return head + body, elided, dropped
+
+
+def _normalise(text: str) -> str:
+    return re.sub(r"[\s\"'`]+", "", text).lower()
+
+
+def _intended_fragments(name: str, arguments: dict[str, Any], workspace: Path) -> list[str]:
+    """Normalised lines a refused write or edit would have introduced into the file.
+
+    Lines already present (in old_string, or in the existing file) are not new
+    information, so repeating them elsewhere is not a claim. Very short lines are
+    ignored to avoid matching punctuation or keywords.
+    """
+    if name == "edit_file":
+        proposed = str(arguments.get("new_string") or "")
+        existing = str(arguments.get("old_string") or "")
+    elif name == "write_file":
+        proposed = str(arguments.get("content") or "")
+        try:
+            target = (workspace / str(arguments.get("path") or "")).resolve()
+            target.relative_to(workspace.resolve())
+            with target.open("rb") as stream:  # bounded: the write limit is 1 MB too
+                existing = stream.read(1_000_000).decode("utf-8", errors="replace")
+        except (OSError, ValueError):
+            existing = ""
+    else:
+        return []
+    known = {_normalise(line) for line in existing.splitlines()}
+    fragments = []
+    for line in proposed.splitlines():
+        item = _normalise(line)
+        if len(item) >= 6 and item not in known and item not in fragments:
+            fragments.append(item)
+    return fragments[:20]
+
+
+_ASSIGNMENT = re.compile(r"^\s*([A-Za-z_][\w.\-]*)\s*[:=]\s*(.+?)\s*[,;]?\s*$")
+
+
+def _changed_values(name: str, arguments: dict[str, Any]) -> list[tuple[str, str]]:
+    """(identifier, new value) pairs a refused edit would have changed.
+
+    Only for edit_file, where both sides are known: a line "NAME = old" that would have
+    become "NAME = new". Used to spot a paraphrased claim ("NAME was set to new").
+    """
+    if name != "edit_file":
+        return []
+    before: dict[str, str] = {}
+    for line in str(arguments.get("old_string") or "").splitlines():
+        match = _ASSIGNMENT.match(line)
+        if match:
+            before[match.group(1).lower()] = match.group(2).strip("\"' ").lower()
+    pairs = []
+    for line in str(arguments.get("new_string") or "").splitlines():
+        match = _ASSIGNMENT.match(line)
+        if match:
+            key, value = match.group(1).lower(), match.group(2).strip("\"' ").lower()
+            if value and before.get(key) not in (None, value):
+                pairs.append((key, value))
+    return pairs[:10]
+
+
+def _mentions_value(text: str, identifier: str, value: str, window: int = 60) -> bool:
+    """True when ``value`` appears within ``window`` characters after ``identifier``."""
+    lowered = text.lower()
+    pattern = re.compile(rf"(?<![\w.]){re.escape(value)}(?![\w.])")
+    for found in re.finditer(re.escape(identifier), lowered):
+        if pattern.search(lowered[found.end():found.end() + window]):
+            return True
+    return False
 
 
 class AgentRuntime:
@@ -143,8 +308,10 @@ class AgentRuntime:
                  keep_alive: str = "5m", repository: Any | None = None,
                  memory_store: MemoryStore | None = None,
                  checkpoint_max_age_seconds: int = DEFAULT_MAX_CHECKPOINT_AGE_SECONDS,
-                 lease_ttl_seconds: int = 300) -> None:
+                 lease_ttl_seconds: int = 300,
+                 num_ctx: int = DEFAULT_NUM_CTX) -> None:
         self.client = client
+        self.num_ctx = max(MIN_NUM_CTX, int(num_ctx))
         self.max_steps = max(1, min(max_steps, 40))
         self.keep_alive = keep_alive
         self.repository = repository
@@ -264,7 +431,7 @@ class AgentRuntime:
 
         usage: dict[str, Any] = {
             "prompt_tokens": 0, "completion_tokens": 0, "model_requests": 0,
-            "tool_calls": 0, "repairs": 0, "elapsed_seconds": 0.0,
+            "tool_calls": 0, "repairs": 0, "completion_checks": 0, "elapsed_seconds": 0.0,
         }
         emit = event or (lambda _item: None)
         created_at = str(resume_checkpoint.get("created_at") or utc_now()) if resume_checkpoint else utc_now()
@@ -302,6 +469,18 @@ class AgentRuntime:
                         emit(warning)
             emit(item)
 
+        # Operations the host refused, keyed by tool and path, with the text they would
+        # have written. A later write that records that text elsewhere is a claim that a
+        # refused change happened (live finding, session 8: an agent whose edit was
+        # refused wrote a summary stating the new value). Declared before finish(),
+        # which reports them on every terminal path.
+        refused_operations: dict[str, dict[str, Any]] = {}
+        refused_change_claims: list[dict[str, Any]] = []
+        # Weaker signal: an artifact names a refused identifier with its refused new value
+        # ("TIMEOUT was set to 45"). An honest note can match too, so it warns on the
+        # record and never fails verification by itself.
+        refused_change_possible_claims: list[dict[str, Any]] = []
+
         def finish(status: str, final_message: str, steps: int) -> AgentResult:
             if lease is not None and status != "lease_lost":
                 try:
@@ -309,6 +488,28 @@ class AgentRuntime:
                 except LeaseLost:
                     status = "lease_lost"
                     final_message = "Execution stopped because its host lease was lost."
+            outstanding = [{"tool": item["tool"], "path": item["path"]}
+                           for item in refused_operations.values()]
+            if outstanding:
+                usage["refused_operations"] = outstanding
+            if refused_change_claims:
+                usage["refused_change_claims"] = [dict(item) for item in refused_change_claims]
+            if refused_change_possible_claims:
+                usage["refused_change_possible_claims"] = [
+                    dict(item) for item in refused_change_possible_claims]
+            if outstanding or refused_change_claims or refused_change_possible_claims:
+                # The record must not read as success for what was refused, whatever
+                # the terminal status (a run can also end at its step limit).
+                notes = [f"{item['tool']} {item['path']}".strip() for item in outstanding]
+                lines = ["[Host record] Refused and not performed: " + ", ".join(notes)
+                         ] if notes else []
+                lines += [f"[Host record] {item['artifact']} records a change that was "
+                          f"refused ({item['refused_tool']} {item['refused_path']})."
+                          for item in refused_change_claims]
+                lines += [f"[Host record] {item['artifact']} may describe a refused change "
+                          f"as done ({item['identifier']} = {item['value']} was refused); "
+                          "check it." for item in refused_change_possible_claims]
+                final_message = (final_message.rstrip() + "\n\n" + "\n".join(lines)).strip()
             safe_task = str(_sanitize_event_value(task))
             safe_final_message = str(_sanitize_event_value(final_message))
             safe_trace = [
@@ -361,6 +562,100 @@ class AgentRuntime:
         repairs_remaining = policy.repair_attempts
         workspace_path = str(Path(tools.workspace).expanduser().resolve())
         tool_manifest = tool_manifest_sha256(tool_specs)
+        num_ctx = working_context(policy.options, self.num_ctx, profile.context_length)
+        char_budget = conversation_char_budget(num_ctx, self.MAX_CONVERSATION_CHARS)
+        request_model_options = {**(policy.options or {}), "num_ctx": num_ctx}
+        # One result may not crowd the rest of the run out of the window.
+        result_char_cap = min(self.MAX_TOOL_RESULT_CHARS, char_budget // 3)
+        # Only a catalogue that can write files can owe a file. The snapshot is taken
+        # before any tool runs; a resumed run has no trustworthy start snapshot.
+        ledger: DeliverableLedger | None = None
+        completion_checks_remaining = policy.completion_checks
+        if completion_checks_remaining and "write_file" in tool_names:
+            ledger = DeliverableLedger.for_task(
+                str(task), workspace_path, snapshot=resume_checkpoint is None)
+            if not ledger.paths:
+                ledger = None
+
+        def note_refusal(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+            path = str(arguments.get("path") or "")
+            key = f"{name}:{path}" if path else name
+            repeated = key in refused_operations
+            refused_operations[key] = {
+                "tool": name, "path": path,
+                "fragments": _intended_fragments(name, arguments, Path(workspace_path)),
+                "values": _changed_values(name, arguments),
+            }
+            record("operation_refused",
+                   "The host refused this operation; nothing was changed.", tool=name,
+                   path=path)
+            return {
+                "error": "Refused: " + (f"{path} was not changed." if path else
+                                        "the operation did not run."),
+                "refused": True, "performed": False,
+                "note": ("This was refused again; asking again will not change the answer. "
+                         "Stop trying it and give your final answer now, saying it was "
+                         "refused." if repeated else
+                         "Do not describe this change as done, and do not record it as done "
+                         "in any file. Report that it was refused."),
+            }
+
+        def note_mutation(name: str, arguments: dict[str, Any]) -> None:
+            path = str(arguments.get("path") or "")
+            # Either kind of successful write to the path makes the refused change moot.
+            remedied = [refused_operations.pop(f"{kind}:{path}", None)
+                        for kind in ("write_file", "edit_file")]
+            if any(item is not None for item in remedied):
+                record("operation_remedied", "A previously refused change was made.",
+                       tool=name, path=path)
+            written = _normalise(str(arguments.get("content") or arguments.get("new_string")
+                                     or ""))
+            for refused in refused_operations.values():
+                hits = [item for item in refused["fragments"] if item in written]
+                if hits:
+                    claim = {"artifact": path, "refused_tool": refused["tool"],
+                             "refused_path": refused["path"], "fragments": hits[:3]}
+                    refused_change_claims.append(claim)
+                    record("refused_change_claimed",
+                           f"{path} records content of a change the host refused "
+                           f"({refused['tool']} {refused['path']}).", **claim)
+                    continue
+                raw = str(arguments.get("content") or arguments.get("new_string") or "")
+                for identifier, value in refused.get("values") or []:
+                    if _mentions_value(raw, identifier, value):
+                        possible = {"artifact": path, "refused_tool": refused["tool"],
+                                    "refused_path": refused["path"],
+                                    "identifier": identifier, "value": value}
+                        refused_change_possible_claims.append(possible)
+                        record("refused_change_possibly_claimed",
+                               f"{path} mentions {identifier} with the refused value "
+                               f"{value}.", **possible)
+                        break
+
+        def completion_refused() -> bool:
+            """Push back once per check when a named output is missing; True means continue."""
+            nonlocal completion_checks_remaining
+            if ledger is None:
+                return False
+            # A path whose write the host refused is not demanded again: pushing the model
+            # to "produce it now" invites it to record the refused change somewhere else.
+            # The refusal is already named on the completion record.
+            refused_paths = {item["path"] for item in refused_operations.values()}
+            missing = [path for path in ledger.missing() if path not in refused_paths]
+            if not missing:
+                return False
+            if completion_checks_remaining <= 0:
+                record("deliverables_missing",
+                       "Final answer accepted with named outputs still missing; "
+                       "verification decides the outcome.", paths=missing)
+                return False
+            completion_checks_remaining -= 1
+            usage["completion_checks"] += 1
+            record("completion_refused",
+                   "Final answer refused: an output the task names is not written yet.",
+                   paths=missing, checks_remaining=completion_checks_remaining)
+            messages.append({"role": "user", "content": completion_notice(missing)})
+            return True
         memories: list[MemoryRecord] = []
         total_tool_calls = 0
         step_budget = self.max_steps
@@ -499,6 +794,10 @@ class AgentRuntime:
         # looks like an empty answer. The first time that happens, the same step is
         # retried with reasoning switched off for the rest of this run.
         thinking_disabled = False
+        if ledger is not None:
+            record("deliverables_declared",
+                   "The task names outputs the host will check before accepting completion.",
+                   paths=list(ledger.paths))
         for step in range(start_step, step_budget + 1):
             if cancel_event is not None and cancel_event.is_set():
                 record("cancelled", "Agent cancellation acknowledged before the next provider request.")
@@ -528,14 +827,16 @@ class AgentRuntime:
                     "Execution stopped because the agent's token budget was exhausted.",
                     step - 1,
                 )
-            current_size = len(json.dumps(messages, ensure_ascii=False, default=str))
-            if current_size > self.MAX_CONVERSATION_CHARS:
-                recent_messages = messages[2:][-8:]
-                messages = [messages[0], messages[1], *recent_messages]
-                record("context_compacted", "Older turns removed to respect the local context budget.",
-                       previous_chars=current_size, retained_messages=len(messages))
-                current_size = len(json.dumps(messages, ensure_ascii=False, default=str))
-                if current_size > self.MAX_CONVERSATION_CHARS:
+            current_size = _size(messages)
+            if current_size > char_budget:
+                messages, elided, dropped = compact_messages(messages, char_budget)
+                record("context_compacted",
+                       "Conversation compacted to fit the model's context window; the system "
+                       "prompt and task are kept.", previous_chars=current_size,
+                       budget_chars=char_budget, num_ctx=num_ctx, elided_results=elided,
+                       dropped_messages=dropped, retained_messages=len(messages))
+                current_size = _size(messages)
+                if current_size > char_budget:
                     record("context_limit", "Current task context exceeds runtime budget.")
                     return finish("context_limit", "Stopped because task context exceeded the safe runtime budget.", step - 1)
             if not persist_checkpoint("awaiting_model", step - 1):
@@ -554,8 +855,7 @@ class AgentRuntime:
                 }
                 if cancel_event is not None:
                     request_options["cancel_event"] = cancel_event
-                if policy.options:
-                    request_options["options"] = dict(policy.options)
+                request_options["options"] = dict(request_model_options)
                 if thinking_disabled:
                     request_options["think"] = False
                 response = self.client.chat(model, messages, **request_options)
@@ -601,12 +901,16 @@ class AgentRuntime:
             if not calls and structured:
                 calls, final = self._decode_structured_action(str(assistant.get("content") or ""))
                 if final is not None:
+                    if completion_refused():
+                        continue
                     record("completed", "Agent returned a final response.")
                     return finish("completed", final, step)
             if not calls:
                 calls, guided_final = self._decode_guided_action(
                     str(assistant.get("content") or ""), tool_names)
                 if guided_final is not None:
+                    if completion_refused():
+                        continue
                     record("completed", "Agent returned a final response.")
                     return finish("completed", guided_final, step)
             if not calls and repairs_remaining > 0 and tool_names:
@@ -643,6 +947,8 @@ class AgentRuntime:
                         "was exhausted.",
                         step,
                     )
+                if completion_refused():
+                    continue
                 record("completed", "Agent returned a final response.")
                 return finish("completed", final, step)
 
@@ -724,6 +1030,11 @@ class AgentRuntime:
                         record("tool_started", f"Executing {name}.", tool=name, argument_keys=list(arguments))
                         output = tools.invoke(name, arguments)
                         record("tool_completed", f"Completed {name}.", tool=name, result=output)
+                        if name in {"write_file", "edit_file"}:
+                            note_mutation(name, arguments)
+                    except ApprovalDenied as exc:
+                        record("tool_denied", str(exc), tool=name)
+                        output = note_refusal(name, arguments)
                     except ToolError as exc:
                         output = {"error": str(exc)}
                         record("tool_denied", str(exc), tool=name)
@@ -741,9 +1052,9 @@ class AgentRuntime:
                             step,
                         )
                 encoded_output = json.dumps(output, ensure_ascii=False)
-                if len(encoded_output) > self.MAX_TOOL_RESULT_CHARS:
+                if len(encoded_output) > result_char_cap:
                     encoded_output = json.dumps({
-                        "truncated": True, "preview": encoded_output[:self.MAX_TOOL_RESULT_CHARS],
+                        "truncated": True, "preview": encoded_output[:result_char_cap],
                         "original_characters": len(encoded_output),
                         "note": "Tool result was truncated by the host context budget.",
                     }, ensure_ascii=False)

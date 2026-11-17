@@ -55,7 +55,7 @@ The interface is documented with its validation matrix, screenshot gallery and k
 | Optional allow-listed command tool | Implemented but disabled by default; configured executable resolution and human approval required. On Windows each command runs in an AppContainer (workspace-only file access, no network) inside a Job Object; fail-closed |
 | SQLite profile, conversation, run, checkpoint and scoped-memory persistence | Implemented; hybrid keyword + local-embedding recall, duplicate reinforcement, contradiction flags, poisoning defences and retention consolidation |
 | Universal agentification | Implemented: empirical harness qualification on verified tasks, versioned digest-bound agents, skills, independent verifier, RAM/VRAM admission, and one execution gate for every agent path; Agent Foundry desktop page |
-| Live acceptance scenarios A–F | Implemented and exercised against real models on the reference workstation. Outcomes are scenario-specific and evidence-backed: scenarios A–F are exercised in the campaign ledger; the agent-interaction scenarios run against real Edge/UIA Automation; current local outcomes on the reference workstation: A–F exercised, the isolated-workflow scenario (H) still fails on its reference run on the reference model, the cross-workflow scenario (I) passes on the reference model with the post-fix defenses, and the injection-retest scenario (J) has not been re-run after the current fixes. See `engineering/campaign/VERIFICATION_EVIDENCE.md` and the running CI status before claiming passage. This is a pre-release development increment, not a production certification. |
+| Live acceptance scenarios A–F | Implemented and exercised against real models on the reference workstation. Outcomes are scenario-specific and evidence-backed: scenarios A–F are exercised in the campaign ledger; the agent-interaction scenarios run against real Edge/UIA Automation; current local outcomes on the reference workstation: A–F exercised, the desktop-workflow scenario (H) passes 8 of 8 runs across `qwen3.5:9b` and `abliterant/qwen3.5-rana` since the context-window fix (session 8), the cross-environment workforce scenario (I) 3 of 4, and the injection retest (J) passed 6/6 hostile runs on both with no prohibited action executed. See `engineering/campaign/VERIFICATION_EVIDENCE.md` and the running CI status before claiming passage. This is a pre-release development increment, not a production certification. |
 | Durable run recovery | Implemented: integrity-hashed safe-boundary checkpoints, exact model-digest/workspace/harness/tool-manifest binding, AES-256-GCM checkpoint payloads with a separate local key, desktop and CLI recovery, fail-closed review for interrupted tools, and runtime-owned atomic run/workspace admission leases with heartbeat, dead-owner reclamation, active-lease recovery blocking and lease-loss shutdown |
 | PySide6 desktop shell and headless CLI | Implemented with the nine-workspace intelligence interface, shared design system, live inventory/profile/telemetry, streamed chat and stop, local conversations, workforce approvals, diagnostics, history/recovery and settings; Windows UI tests and import are configured in CI; full interactive QA on supported hardware remains |
 | Workforce orchestration | Implemented: evidence-backed role selection, validated DAG plans, parallel read-only waves with a resource scheduler (writers run alone), shared workspace, budgets, timeouts/cancellation, retry-safe failure handling, approvals, independent verdict/artifact checks, durable hash-chained events and desktop/CLI controls. Qualification remains explicit |
@@ -112,15 +112,20 @@ or `uninstall.ps1`; user data is kept unless `-RemoveUserData` is passed.
 ### First steps: from model to agent
 
 ```powershell
-11vated profile qwen2.5-coder:14b
-11vated qualify qwen2.5-coder:14b          # measured harness selection
-11vated agent create "Repo Scribe" --model qwen2.5-coder:14b --allow-provisional
+ollama pull qwen3.5:9b
+11vated profile qwen3.5:9b
+11vated qualify qwen3.5:9b --edit          # measured harness selection (coding catalogue)
+11vated agent create "Repo Scribe" --model qwen3.5:9b --edit
 11vated agent activate "Repo Scribe"
 11vated agent run "Repo Scribe" .\agent-workspace "Summarise the project"
 ```
 
+Edits to existing files need approval: from the CLI pass `--yes` to `agent run` (without
+it every overwrite and edit is refused), or approve in the desktop app.
+
 Or use the **Agent Foundry** page in the desktop app. A model that has not been
-qualified will not run as an agent anywhere in the workstation.
+qualified will not run as an agent anywhere in the workstation. Which models can be
+agents, and why some only describe their tools: [docs/MODEL_CLASSIFICATION.md](docs/MODEL_CLASSIFICATION.md).
 
 ## CLI
 
@@ -194,9 +199,9 @@ Read [SECURITY.md](SECURITY.md) before enabling command execution or using sensi
 
 Open items:
 
-- **Scenario H on the desktop/browser workflow** reaches correct invoice entry on the reference workstation model but still fails on some runs because the agent stops before performing the final required file-write action or fabricates an unsupported entry. That is an engineering gap, not a demo polish item. See `engineering/campaign/VERIFICATION_EVIDENCE.md`.
+- **Long-horizon scenarios at higher trial counts.** Session 8 found that scenario H failed because Ollama's default 4096-token window silently truncated long runs; with an explicit window H passed 5/5 (`abliterant/qwen3.5-rana`) and 3/3 (`qwen3.5:9b`), and an ablation back to 4096 failed 0/2. I has passed 3 of 4 runs across those two models. More trials are needed before quoting rates. See `engineering/campaign/VERIFICATION_EVIDENCE.md`.
 
-- **CI timing flake**: `tests/test_execution_lease.py::test_lease_heartbeat_renews_ownership` waits 2.0 s for a 1 s heartbeat and has timed out on a loaded hosted runner; it must be made deterministic before declaring CI stable.
+- **Timing-sensitive tests**: the lease heartbeat test now allows 4.0 s for a 1 s heartbeat; the real-UI Automation tests in `tests/test_computer_service.py` can fail under heavy machine load and pass when idle. Neither is deterministic yet.
 
 ## Optional MCP tool servers
 

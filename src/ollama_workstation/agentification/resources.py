@@ -26,7 +26,11 @@ GIB = 1024 * MIB
 # Engineering constants, not derived truths. Change them only with tests.
 WEIGHT_OVERHEAD = 1.10            # runtime graph/scratch buffers on top of the weight file
 FALLBACK_KV_BYTES_PER_TOKEN = 256 * 1024   # used when model metadata lacks layer geometry
-DEFAULT_NUM_CTX = 4096
+# What an agent run actually loads when it does not name a window (agents/runtime.py);
+# admission must estimate the same context or it admits a load that then spills.
+DEFAULT_NUM_CTX = 16_384
+# Smaller windows tried, in order, when the default would not fit fully on the GPU.
+FALLBACK_NUM_CTX = (8_192,)
 VRAM_HEADROOM_BYTES = 512 * MIB   # left free for the desktop compositor and other apps
 RAM_RESERVE_FRACTION = 0.10       # of total RAM kept for the OS and this application
 RAM_RESERVE_MIN_BYTES = 2 * GIB
@@ -253,6 +257,20 @@ class AdmissionController:
         host = HostResources.from_snapshot(self._snapshot())
         return decide(model, self.footprint(model, num_ctx), host, self.resident())
 
+    def working_context(self, model: str) -> int:
+        """Largest standard window that loads without CPU spill, else the default.
+
+        A spilled load is several times slower per step, which on a long agent run costs
+        more than the smaller window does, down to 8192 tokens.
+        """
+        for candidate in (DEFAULT_NUM_CTX, *FALLBACK_NUM_CTX):
+            try:
+                if self.evaluate(model, candidate).outcome in {ADMIT, ADMIT_AFTER_UNLOAD}:
+                    return candidate
+            except Exception:  # noqa: BLE001 - telemetry gaps fall back to the default
+                break
+        return DEFAULT_NUM_CTX
+
     def require(self, model: str, num_ctx: int | None = None) -> AdmissionDecision:
         decision = self.evaluate(model, num_ctx)
         if not decision.admitted:
@@ -404,6 +422,9 @@ class ResourceScheduler:
     def active(self) -> dict[str, int]:
         with self._condition:
             return dict(self._leases)
+
+    def working_context(self, model: str) -> int:
+        return self.controller.working_context(model)
 
     def require(self, model: str, num_ctx: int | None = None) -> AdmissionDecision:
         if self._held().get(model):

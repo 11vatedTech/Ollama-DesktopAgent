@@ -27,7 +27,12 @@ from ollama_workstation.agents.execution_lease import (
     new_owner_id,
 )
 from ollama_workstation.agents.memory import memory_store_for
-from ollama_workstation.agents.runtime import AgentEvent, AgentResult, AgentRuntime
+from ollama_workstation.agents.runtime import (
+    AgentEvent,
+    AgentResult,
+    AgentRuntime,
+    conversation_window,
+)
 from ollama_workstation.agents.tools import ToolError, WorkspaceTools
 from ollama_workstation.agents.verification import (
     DEFAULT_VERDICT_PATH,
@@ -1259,6 +1264,10 @@ class WorkforceOrchestrator:
                 # otherwise spend the whole context thinking under the JSON grammar
                 # and return an empty message, which silently failed every verdict.
                 think=False,
+                # The evidence must not be cut by Ollama's silent 4096-token default.
+                options={"num_ctx": conversation_window(
+                    [{"role": "user", "content": json.dumps(contract, ensure_ascii=False)}],
+                    None)},
             )
             message = response.get("message") or {}
             content = str(message.get("content") or "").strip()

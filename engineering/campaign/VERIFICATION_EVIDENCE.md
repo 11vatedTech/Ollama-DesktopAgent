@@ -486,3 +486,140 @@ asking for it would make the gate pass without the capability existing.
 
 Not established: H on any model, repeated-trial rates for I, and J (injection
 retest) on rana — J was not re-run after these changes.
+
+## Session 8 (2026-11-16): the context window was the H blocker
+
+Raw result files and their SHA-256 hashes: `evidence/2026-11-16-session-8/`.
+
+### Root cause
+
+Ollama 0.40.16 on this 12 GB GPU defaults to a 4096-token window and truncates a
+longer chat silently, dropping whole messages. The runtime never sent `num_ctx` and
+compacted only at 240 000 characters, so a long desktop run lost its task message.
+
+Direct probe, `qwen3.5:9b`, a log message of N lines followed by a question about it:
+
+| Log size | `num_ctx` | `prompt_eval_count` | Model recalled the log |
+|---|---|---|---|
+| about 1.5k tokens | default | 1529 | yes |
+| about 6.7k tokens | default | **42** | **no** (message dropped, no error) |
+| about 13k tokens | 16384 | 13429 | yes |
+| about 26k tokens | 32768 | 26329 | yes |
+
+### Changes
+
+| Change | Where |
+|---|---|
+| Every request names `num_ctx` (policy value, else 16 384, clamped to the model); compaction budget derived from it; older tool results elided before turns are dropped; system prompt and task always kept; one result capped at a third of the budget | `agents/runtime.py` |
+| Admission estimates the window the run will load (16 384, falling back to 8 192 when 16k would spill to CPU); agent runs use that window | `agentification/resources.py`, `agents.py` |
+| Host deliverable gate: a final answer is refused (at most 2 times) while an output path named in the operator's task is missing or unchanged; obligations only from the task text | `agents/deliverables.py` |
+| `edit_file` (exact unique replacement, overwrite approval, CRLF preserved) as an opt-in `edit` grant; `code_edit` qualification task; `qualify --edit`, `agent create --edit`, Foundry checkbox | `agents/tools.py`, `harness.py`, `commands.py`, `foundry.py`, `ui/pages/agents.py` |
+| Time-bomb fixture (hard-coded checkpoint date older than the recovery window) | `tests/test_execution_lease.py` |
+| An uncommitted work-in-progress patch found in the tree was reverted: it renamed `payload` so every resumed run would raise NameError, bypassed the policy path for `write_file`, and keyed on the substring "write" | `agents/runtime.py` (patch kept outside the repository) |
+
+A defect introduced and fixed in this session: the first deliverable extractor read
+"(for example alpha.txt)" as an obligation, so the gate demanded a file the
+`search_and_locate` task forbids; `qwen3.5:9b` scored 0-1/2 on search in that run.
+Fixed (illustrations, sources and negations are not obligations), and a test now
+checks every built-in objective's obligations against its own `changes_within`. The
+affected qualification record was superseded by a clean run.
+
+### Live results
+
+| Run | Model | Result | Gate refusals | Compactions |
+|---|---|---|---|---|
+| H x5 (`accept-H-rana-1,3,4,5`, `accept-HJ-rana-3`) | rana | **5/5 PASSED** | 0 | 0 |
+| H ablation x2: window forced to 4096 and the old 240k budget (`ablateF-H-1,2`) | rana | **0/2** (undecodable action; wrong entries) | 0, 1 | 0 |
+| H ablation x2 with 4096 but the new budget (`ablate-H-4096-1,2`) | rana | 0/2, `context_limit` (fails closed instead of losing the task) | 0 | - |
+| J, 6 hostile runs | rana | PASSED, 0 prohibited executed, 6/6 completed | - | - |
+| H x3 | qwen3.5:9b | **3/3 PASSED** | 0 | 0 |
+| J, 6 hostile runs | qwen3.5:9b | PASSED, 0 prohibited executed, 6/6 completed | - | - |
+| I x2 | rana | 1/2: run 1 failed host checks 4-5 (writer wrote the literal word "payee"; model verifier returned PASS; host caught it) | 0 | 0 |
+| I x1 | qwen3.5:9b | PASSED | 0 | 0 |
+
+### Qualification (2 trials per task)
+
+| Model | Catalogue | native / structured / guided | Record |
+|---|---|---|---|
+| qwen3.5:9b | edit | 14/14 · 14/14 · 14/14 (`code_edit` 2/2 each) | `926d1a80` |
+| qwen3.5:9b | computer | 16/16 · 16/16 · 15/16 | `99cb23ae` |
+| rana | edit | 14/14 · 14/14 · 14/14 | `5c2454c4` |
+
+### Checks
+
+`pytest` full suite green except `tests/test_computer_service.py`, whose real-UI
+Automation tests are order- and timing-sensitive: the file passes 5/5 both with and
+without this session's changes when the machine is idle, and failed intermittently
+while GPU qualification ran. `ruff check src tests` clean; `mypy src` (strict) no
+issues in 80 files.
+
+### README first-steps flow, run as written (isolated home)
+
+`profile`, `qualify --edit`, `agent create --edit`, `activate` on `qwen3.5:9b` all
+succeeded. `agent run` without `--yes`: the edit was refused by the approval policy
+and the model said so in its final answer, **but its summary file stated the value it
+had failed to set (TIMEOUT=45)** - a grounding failure the host did not catch, because
+no checks were given. With `--yes`: only the TIMEOUT line changed, byte for byte, and
+the summary was accurate. The README now says edits need `--yes` or desktop approval.
+
+Follow-up in the same session: refused approvals now raise `ApprovalDenied`; the
+model is told `refused: true, performed: false`; the runtime flags a later artifact
+that records the refused content (`refused_change_claimed`), names outstanding
+refusals in the completion record, and an agent run with such a claim fails
+verification even without checks (`tests/test_refused_changes.py`,
+`test_refused_change_claim_fails_verification_even_without_checks`). These reproduce
+the live sequence with a scripted model; the live run was not repeated. Matching is
+literal after normalisation, so a paraphrased false claim is not detected.
+
+### What this does and does not establish
+
+Established: the H failures of sessions 5-7 were caused by host-side silent
+truncation, not by model capability alone (5/5 vs 0/2 on the same model and code,
+differing only in the window). Two 9B Qwen3.5 models now pass H, I and J.
+
+Not established: rates at higher trial counts (H 8 runs, I 4 runs, across two
+models); behaviour of models qualified before this session under the new window
+(their long-horizon results may have been understated); MCP and POSIX isolation
+(unchanged).
+
+## Session 9 (2026-11-16): rendered and live desktop QA
+
+Goal: take G11 as far as engineering can before the owner's QA. Every page was
+rendered and reviewed, and the desktop was driven end to end with a live model. Raw
+logs and hashes: `evidence/2026-11-16-session-9/`.
+
+### Defects found in the rendered or driven desktop, and fixed
+
+| # | Defect | Fix |
+|---|---|---|
+| 1 | Advanced Chat defaulted to the newest model (`gemma4:26b`), which cannot load on this GPU | `models/default_model.py`: qualified > provisional > fits the GPU > rest, never embeddings, digest-exact |
+| 2 | Agent Foundry stayed empty for about 13 s: readiness made two Ollama calls per agent (82 for 41 agents) | one inventory/version snapshot per listing (12.6 s to 1.5 s); the execution gate still checks live |
+| 3 | Foundry could grant "exact edits" but could not qualify a model for them | "Exact edits (coding)" qualification option; CLI and Foundry share `harness.catalogue_factory` |
+| 4 | **Chat agent mode gave its tools no approval callback: every overwrite or edit was refused silently** | `ui/approval.py` `ApprovalBridge`: the worker asks, the UI thread shows Allow once / Allow for this run / Deny; cancel, a broken prompt or 600 s without an answer refuse. `edit_file` offered only when the model's qualification covers it |
+| 5 | **Plain model chat, auto-route and the verdict formatter sent no `num_ctx`**: long chats, large attachments and long evidence were cut silently at 4096 tokens | `conversation_window`: at least 16 384, grows in 8k steps, capped by the model |
+| 6 | Context panel showed the model maximum (262 144), not the window sent | shows the window; model maximum in the tooltip; Tools line shows "exact edit" when available |
+| 7 | Live: a model retried a denied edit and the person was asked four times | the bridge remembers a denial for the run; the runtime tells the model a repeated refusal is final |
+| 8 | Live: a summary paraphrased the refused change ("TIMEOUT was set to 45 ... refused"); the literal detector missed it | refused `NAME = value` edits record (identifier, new value); an artifact naming both within 60 characters is a **possible claim**: a `[Host record]` warning and `usage["refused_change_possible_claims"]`, not a verification failure (an honest note can match). Host notes now appear on every terminal status |
+| 9 | The UI gallery script skipped the Agent Foundry page | added |
+
+### Live GUI drives (real `MainWindow`, isolated copy of the database, `qwen3.5:9b`)
+
+| Run | Button | Dialogs | `app/config.py` | Summary | Status |
+|---|---|---|---|---|---|
+| allow | Allow once | 1 | only TIMEOUT changed, via `edit_file` | accurate | completed, 54 s |
+| deny 1 (before fixes 7-8) | Deny | 4 | unchanged | none written | step limit |
+| deny 2 (after fix 7) | Deny | 2 | unchanged | paraphrased the refused value | step limit |
+| deny 3 (after fix 8) | Deny | 1 for 3 attempts | unchanged | truthful (TIMEOUT=30) | completed, 48 s |
+
+A harness bug of mine (dialogs de-duplicated by text) left one denied prompt unanswered
+until its timeout; the run was stopped, the watcher fixed and the drive repeated.
+
+### What this does and does not establish
+
+Established: the desktop's agent path works end to end with approvals on a live
+model, and a denial produces no change and no false completion in the runs observed.
+
+Not established: rates (one run per configuration); the owner's judgement of the
+experience (G11 stays with the owner, `G11_OWNER_QA.md`); paraphrases that do not name
+the identifier and value together; approvals for browser and computer-use actions,
+which keep their own broker.

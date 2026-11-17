@@ -1,10 +1,10 @@
 # Campaign state
 
 **Product:** 11VATED INTELLIGENCE - Ollama Desktop Agent
-**Branch:** `campaign/complete-agent-v2` (from `main` after PR #4)
+**Branch:** `main` (v2 fast-forwarded in session 6)
 **Baseline commit:** `974517c0cf4f293192a289cb419f21654671c39b`
-**Last updated:** 2026-11-14 (session 5)
-**Overall status:** 10 of 15 gates VERIFIED, 4 PARTIAL, 1 OPEN. Every open item
+**Last updated:** 2026-11-16 (session 8)
+**Overall status:** 11 of 15 gates VERIFIED, 3 PARTIAL, 1 OPEN. Every open item
 needs an owner action or decision. See IMPLEMENTATION_MATRIX.md.
 
 ## Where the campaign stands
@@ -39,15 +39,33 @@ practice app), qualification tasks for both, acceptance scenarios G-J. B1-B5 and
 C1-C5 pass automated tests on real Edge and UI Automation; live G and J passed,
 I passed 1/3, H failed 0/9 because of model reliability. See VERIFICATION_EVIDENCE.
 
+## Session 8 (2026-11-16)
+
+Found the cause of the scenario H failures: Ollama's default 4096-token window
+truncated long runs silently, dropping the task. Every request now names its
+window (16 384, or 8 192 when 16k would spill), and compaction is sized to it.
+H then passed 5/5 on rana and 3/3 on the stock qwen3.5:9b; an ablation back to
+4096 failed 0/2. Added a host deliverable gate, an opt-in `edit_file` tool with
+its own qualification task, and `docs/MODEL_CLASSIFICATION.md` (what makes an
+Ollama model an agent, tiers, measured classification, selection checklist).
+G9 is VERIFIED. See VERIFICATION_EVIDENCE "Session 8".
+
+## Session 9 (2026-11-16)
+
+Rendered every page and drove the desktop end to end with a live model. Found and
+fixed nine defects, two of them serious: chat agent mode refused every overwrite
+silently (it had no approval path), and desktop chat still sent no context window.
+Added desktop approvals, chat window sizing, possible-claim detection for refused
+changes, and `G11_OWNER_QA.md`. See VERIFICATION_EVIDENCE "Session 9".
+
 ## Next exact action
 
-Owner: open and merge a PR for `campaign/complete-agent-v2`, close PRs #2/#3
-(fully contained in `main`), and try the Agent Foundry page.
+Owner: work through `engineering/campaign/G11_OWNER_QA.md` (about 20 minutes),
+decide on merging draft PR #5 (sessions 8-9), and provide a code-signing certificate.
 
 ## Owner decisions and inputs still needed
 
-1. G9: decided and built. Remaining: a local model that passes scenario H
-   reliably (qwen2.5-coder:14b 0/9, qwen3-vl:8b unsuitable).
+1. G1: review and merge draft PR #5 (sessions 8 and 9).
 2. G14: a code-signing certificate (thumbprint or PFX) for signed releases.
-3. G11: interactive QA of the desktop.
+3. G11: interactive QA of the desktop, using `G11_OWNER_QA.md`.
 4. G15: release certification once the above are done.

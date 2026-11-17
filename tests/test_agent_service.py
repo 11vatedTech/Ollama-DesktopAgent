@@ -224,3 +224,48 @@ def test_tampered_definitions_are_detected(service, client, repository, store) -
                    "'\"shell\": false', '\"shell\": true') WHERE agent_id=?", (agent.agent_id,))
     with pytest.raises(StoreIntegrityError):
         service.get(agent.agent_id)
+
+
+def test_refused_change_claim_fails_verification_even_without_checks(
+        service, client, repository, store, tmp_path, monkeypatch) -> None:
+    """Session 8: an artifact recording a refused change must never count as verified."""
+    from ollama_workstation.agentification import agents as agents_module
+    from ollama_workstation.agents.runtime import AgentResult
+
+    profile, agent = _qualified(service, client, repository, store)
+    service.activate(agent.agent_id)
+    claim = {"artifact": "notes/summary.md", "refused_tool": "edit_file",
+             "refused_path": "app/config.py", "fragments": ["timeout=45"]}
+
+    def fake_run(self, model, profile, task, tools, **kwargs):
+        return AgentResult("run-claim", "completed", "Done.", 2, [],
+                           {"refused_change_claims": [claim]})
+
+    monkeypatch.setattr(agents_module.AgentRuntime, "run", fake_run)
+    outcome = service.run(agent.agent_id, TASK, tmp_path / "ws", profile)
+    assert outcome.report is not None and not outcome.verified
+    assert any(check.kind == "refused_change_claimed" for check in outcome.report.checks)
+    assert store.list_verifications("run-claim")[0]["status"] == "failed"
+
+
+def test_readiness_listing_uses_one_snapshot_but_a_run_checks_live(
+        service, client, repository, store, monkeypatch) -> None:
+    """Session 9: per-agent inventory calls made the Foundry page wait ~13 s."""
+    _profile, agent = _qualified(service, client, repository, store)
+    calls = {"list": 0}
+    original = client.list_models
+
+    def counting():
+        calls["list"] += 1
+        return original()
+
+    monkeypatch.setattr(client, "list_models", counting)
+    inventory = counting()
+    live = service.readiness(agent)
+    calls["list"] = 1
+    for _ in range(5):
+        assert service.readiness(agent, inventory=inventory,
+                                 runtime_version=str(client.version())) == live
+    assert calls["list"] == 1
+    service.readiness(agent)  # the gate's form: always live
+    assert calls["list"] == 2
