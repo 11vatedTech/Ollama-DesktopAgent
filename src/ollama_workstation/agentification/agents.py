@@ -464,8 +464,9 @@ class AgentService:
         with tempfile.TemporaryDirectory(prefix="11vated-manifest-") as directory:
             return tool_manifest_sha256(self.build_tools(agent, Path(directory)).definitions())
 
-    def _installed(self, model_name: str) -> ModelRef | None:
-        for item in self.client.list_models():
+    def _installed(self, model_name: str,
+                   inventory: list[dict[str, Any]] | None = None) -> ModelRef | None:
+        for item in (self.client.list_models() if inventory is None else inventory):
             if str(item.get("name") or item.get("model") or "") == model_name:
                 return ModelRef(model_name, digest=str(item.get("digest") or ""))
         return None
@@ -476,12 +477,19 @@ class AgentService:
                    agent.model_name, agent.model_digest, self.tool_manifest(agent)))
         return None if raw is None else HarnessQualification.from_dict(raw)
 
-    def readiness(self, agent: AgentDefinition) -> list[str]:
-        """Every reason this exact configuration must not run. Empty means ready."""
+    def readiness(self, agent: AgentDefinition, *,
+                  inventory: list[dict[str, Any]] | None = None,
+                  runtime_version: str | None = None) -> list[str]:
+        """Every reason this exact configuration must not run. Empty means ready.
+
+        ``inventory`` and ``runtime_version`` let a listing check many agents against one
+        snapshot; the execution gate passes neither, so a run always checks live.
+        """
         issues: list[str] = []
         try:
-            installed = self._installed(agent.model_name)
-            runtime_version: str | None = str(self.client.version())
+            installed = self._installed(agent.model_name, inventory)
+            if runtime_version is None:
+                runtime_version = str(self.client.version())
         except Exception as exc:
             return [f"Ollama is unreachable, so the model cannot be verified: {exc}"]
         if installed is None:
@@ -493,7 +501,8 @@ class AgentService:
         if qualification is None:
             issues.append("no harness qualification exists for this model digest and tool set; "
                           "run: 11vated qualify " + agent.model_name
-                          + (" --shell" if agent.permissions.shell else ""))
+                          + (" --shell" if agent.permissions.shell else "")
+                          + (" --edit" if agent.permissions.edit else ""))
         else:
             harness = agent.harness or qualification.selected_harness
             if harness is None:

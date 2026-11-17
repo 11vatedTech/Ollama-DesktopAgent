@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased - Desktop QA, session 9 (2026-11-16)
+
+- **Chat agent approvals.** Agent mode in Advanced Chat asks before an overwrite or edit (Allow once, Allow for this run, Deny); a denial stands for the run; cancel or no answer refuses. Previously every overwrite was refused silently. `edit_file` is offered when the model is qualified for it.
+- **No silent truncation in chat.** Model chat, auto-route and the workforce verdict formatter now name a context window that grows with the conversation (at least 16 384, capped by the model).
+- **Refused changes:** a repeated refusal tells the model to stop and report; an artifact naming a refused identifier with its refused value is flagged as a possible claim on the run record (warning only).
+- Chat defaults to the best-qualified model that loads; Agent Foundry lists agents in 1.5 s instead of about 13 s and can qualify the edit catalogue; the context panel shows the window actually sent.
+- `engineering/campaign/G11_OWNER_QA.md`: the owner's 20-minute QA checklist. Live GUI drives: `engineering/campaign/evidence/2026-11-16-session-9/`.
+
 ## Unreleased - Context window and agent reliability, session 8 (2026-11-16)
 
 - **Explicit context window.** Ollama's default 4096-token window on a GPU under 24 GB truncated long agent runs silently, dropping whole messages including the task (probe: a 6.7k-token message evaluated as 42 tokens). Every request now sends `num_ctx` (16 384 by default, 8 192 when admission says 16k would spill to CPU, never above the model's context length); compaction is sized to that window, elides older tool results before dropping turns, and always keeps the system prompt and task. Admission estimates the same window.

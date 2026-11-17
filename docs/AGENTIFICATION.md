@@ -259,8 +259,21 @@ lists it; a later successful write to the refused path clears the refusal. A run
 that completes with outstanding refusals or claims gets a `[Host record]` note on its
 final message, and an agent run with a claim fails verification
 (`refused_change_claimed`, reason `claim_unsupported`) even when no checks were
-supplied. Matching is literal after normalising whitespace, quotes and case; a
-paraphrased claim is not detected.
+supplied. Matching is literal after normalising whitespace, quotes and case. For a
+refused `NAME = value` edit the runtime also records the identifier and new value; an
+artifact that names both within 60 characters is a *possible* claim
+(`refused_change_possibly_claimed`, a `[Host record]` warning,
+`usage["refused_change_possible_claims"]`). It never fails verification on its own,
+because an honest "setting NAME to value was refused" matches too. A repeated refusal
+of the same operation tells the model the answer is final. Host notes are added on
+every terminal status.
+
+In Advanced Chat's agent mode, approvals go to the person at the desktop
+(`ui/approval.py`): Allow once, Allow for this run, or Deny; a denial stands for the
+rest of the run; cancelling, a failed prompt or ten minutes without an answer refuse.
+Desktop chat, auto-route and the workforce verdict formatter size `num_ctx` to what
+they send (`conversation_window`: at least 16 384, grown in 8k steps, capped by the
+model).
 
 ## Exact edits (`edit_file`)
 

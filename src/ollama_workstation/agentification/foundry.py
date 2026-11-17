@@ -22,10 +22,9 @@ from ollama_workstation.agentification.agents import (
 from ollama_workstation.agentification.harness import (
     HarnessLab,
     HarnessQualification,
+    catalogue_factory,
     default_tool_factory,
-    interaction_tool_factory,
     shell_tool_factory,
-    web_tool_factory,
 )
 from ollama_workstation.agentification.resources import AdmissionController
 from ollama_workstation.agentification.store import AgentStore
@@ -119,7 +118,7 @@ class FoundryController:
         return profile  # type: ignore[no-any-return]
 
     def qualify(self, model: str, *, trials: int = 2, shell: bool = False, web: bool = False,
-                browser: bool = False, computer: bool = False,
+                browser: bool = False, computer: bool = False, edit: bool = False,
                 progress: Callable[[str], None] | None = None,
                 cancel_event: Event | None = None) -> HarnessQualification:
         self.admission.require(model)  # never start a model that cannot fit
@@ -127,9 +126,8 @@ class FoundryController:
         record = HarnessLab(self.client, keep_alive=getattr(self.settings, "keep_alive", "5m")
                             ).qualify(
             model, profile, trials=trials, progress=progress, cancel_event=cancel_event,
-            tool_factory=(interaction_tool_factory(browser=browser, computer=computer)
-                          if browser or computer else web_tool_factory if web
-                          else shell_tool_factory if shell else default_tool_factory),
+            tool_factory=catalogue_factory(shell=shell, web=web, browser=browser,
+                                           computer=computer, edit=edit),
         )
         self.store.save_qualification(record.to_dict())
         return record
@@ -140,10 +138,19 @@ class FoundryController:
     # -- agents ---------------------------------------------------------------------------
     def agent_rows(self) -> list[AgentRow]:
         rows: list[AgentRow] = []
+        # One inventory and version snapshot for the whole list: per-agent calls made the
+        # page wait about 13 s with 41 agents (rendered QA, session 9).
+        try:
+            inventory: list[dict[str, Any]] | None = list(self.client.list_models())
+            version: str | None = str(self.client.version())
+        except Exception:  # noqa: BLE001 - readiness then reports Ollama as unreachable
+            inventory, version = None, None
         for item in self.store.list_agents():
             agent = self.service.get(item["agent_id"])
             try:
-                issues = self.service.readiness(agent) if item["status"] != "retired" else []
+                issues = (self.service.readiness(agent, inventory=inventory,
+                                                 runtime_version=version)
+                          if item["status"] != "retired" else [])
             except Exception as exc:  # noqa: BLE001 - surfaced, never hidden
                 issues = [f"readiness check failed: {exc}"]
             rows.append(AgentRow(

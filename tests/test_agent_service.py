@@ -246,3 +246,26 @@ def test_refused_change_claim_fails_verification_even_without_checks(
     assert outcome.report is not None and not outcome.verified
     assert any(check.kind == "refused_change_claimed" for check in outcome.report.checks)
     assert store.list_verifications("run-claim")[0]["status"] == "failed"
+
+
+def test_readiness_listing_uses_one_snapshot_but_a_run_checks_live(
+        service, client, repository, store, monkeypatch) -> None:
+    """Session 9: per-agent inventory calls made the Foundry page wait ~13 s."""
+    _profile, agent = _qualified(service, client, repository, store)
+    calls = {"list": 0}
+    original = client.list_models
+
+    def counting():
+        calls["list"] += 1
+        return original()
+
+    monkeypatch.setattr(client, "list_models", counting)
+    inventory = counting()
+    live = service.readiness(agent)
+    calls["list"] = 1
+    for _ in range(5):
+        assert service.readiness(agent, inventory=inventory,
+                                 runtime_version=str(client.version())) == live
+    assert calls["list"] == 1
+    service.readiness(agent)  # the gate's form: always live
+    assert calls["list"] == 2

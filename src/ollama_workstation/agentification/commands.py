@@ -23,9 +23,9 @@ from ollama_workstation.agentification.agents import (
 from ollama_workstation.agentification.harness import (
     HarnessLab,
     HarnessQualification,
+    catalogue_factory,
     default_tool_factory,
     shell_tool_factory,
-    web_tool_factory,
 )
 from ollama_workstation.agentification.resources import AdmissionController, ResourceDenied
 from ollama_workstation.agentification.skills import SkillError, SkillEvaluator
@@ -40,24 +40,8 @@ COMMANDS = frozenset({"qualify", "agent", "skill", "verify", "accept", "resource
 
 def _qualification_factory(shell: bool, web: bool, browser: bool = False,
                            computer: bool = False, edit: bool = False) -> Any:
-    if sum((shell, web, browser or computer)) > 1:
-        raise ValueError("Qualify the --shell, --web and --browser/--computer catalogues separately")
-    if edit:
-        if web or browser or computer:
-            raise ValueError("--edit qualifies the coding catalogue; combine it only with --shell")
-        base = shell_tool_factory if shell else default_tool_factory
-
-        def edit_factory(workspace: Path, cancel_event: Any = None) -> Any:
-            tools = base(workspace, cancel_event)
-            tools.allow_edit = True
-            return tools
-
-        return edit_factory
-    if browser or computer:
-        from ollama_workstation.agentification.harness import interaction_tool_factory
-
-        return interaction_tool_factory(browser=browser, computer=computer)
-    return web_tool_factory if web else shell_tool_factory if shell else default_tool_factory
+    return catalogue_factory(shell=shell, web=web, browser=browser, computer=computer,
+                             edit=edit)
 
 
 def register(commands: Any) -> None:

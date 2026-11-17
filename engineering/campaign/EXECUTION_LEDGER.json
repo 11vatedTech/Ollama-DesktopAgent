@@ -95,9 +95,10 @@
     "G11": {
       "status": "PARTIAL",
       "evidence": [
-        "engineering/campaign/VERIFICATION_EVIDENCE.md#session-4-2026-11-13"
+        "engineering/campaign/VERIFICATION_EVIDENCE.md#session-4-2026-11-13",
+        "engineering/campaign/VERIFICATION_EVIDENCE.md#session-9-2026-11-16-rendered-and-live-desktop-qa"
       ],
-      "note": "all 10 pages and 5 Foundry tabs rendered and reviewed; layout defects fixed; owner interactive QA outstanding"
+      "note": "Session 9: every page rendered and reviewed; desktop driven end to end with a live model (approvals, exact edit, denial); 9 defects found and fixed. Remains PARTIAL until the owner completes engineering/campaign/G11_OWNER_QA.md."
     },
     "G12": {
       "status": "VERIFIED",
@@ -233,9 +234,9 @@
     }
   ],
   "next_action": {
-    "description": "Owner: review and commit the session 8 working-tree changes (context window, deliverable gate, edit_file, model classification)",
-    "command": "git status; pytest -q; 11vated accept --models qwen3.5:9b --scenarios H,I,J",
-    "then": "owner interactive QA (G11), signing certificate (G14), release certification (G15)"
+    "description": "Owner: complete G11_OWNER_QA.md, decide on merging PR #5, provide a code-signing certificate",
+    "command": "python -m ollama_workstation  (then follow engineering/campaign/G11_OWNER_QA.md)",
+    "then": "release certification (G15) once G1, G11 and G14 are closed"
   },
   "evidence": {
     "document": "engineering/campaign/VERIFICATION_EVIDENCE.md",

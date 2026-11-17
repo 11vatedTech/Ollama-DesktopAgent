@@ -141,6 +141,20 @@ class AppContext:
     def installed(self, name: str) -> ModelRef | None:
         return next((item for item in self.models if item.name == name), None)
 
+    def preferred_model(self) -> str | None:
+        """Default for a new conversation: the best-evidenced model that will load."""
+        from ollama_workstation.agentification.store import AgentStore
+        from ollama_workstation.models.default_model import preferred_model
+
+        try:
+            qualifications = AgentStore(self.repository.database).list_qualifications(1_000)
+        except Exception:  # noqa: BLE001 - a missing table must not block the chat page
+            qualifications = []
+        gpus = self.telemetry.get("nvidia_gpus") or []
+        total_mib = (gpus[0] or {}).get("memory_total_mib") if gpus else None
+        vram = int(float(total_mib) * 1024 * 1024) if total_mib else None
+        return preferred_model(self.models, qualifications, vram)
+
     def profile_for(self, name: str) -> ModelProfile | None:
         installed = self.installed(name)
         if installed is not None:

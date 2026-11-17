@@ -163,6 +163,28 @@ def _site_fulfil(site: Path) -> Any:
     return fulfil
 
 
+def catalogue_factory(*, shell: bool = False, web: bool = False, browser: bool = False,
+                      computer: bool = False, edit: bool = False) -> ToolFactory:
+    """The qualification tool factory for one catalogue (CLI and Agent Foundry share it)."""
+    if sum((shell, web, browser or computer)) > 1:
+        raise ValueError("Qualify the shell, web and browser/computer catalogues separately")
+    if edit:
+        if web or browser or computer:
+            raise ValueError("The edit catalogue is the coding catalogue; combine it only "
+                             "with shell")
+        base = shell_tool_factory if shell else default_tool_factory
+
+        def edit_factory(workspace: Path, cancel_event: Event | None = None) -> Any:
+            tools = base(workspace, cancel_event)
+            tools.allow_edit = True
+            return tools
+
+        return edit_factory
+    if browser or computer:
+        return interaction_tool_factory(browser=browser, computer=computer)
+    return web_tool_factory if web else shell_tool_factory if shell else default_tool_factory
+
+
 def interaction_tool_factory(*, browser: bool, computer: bool) -> ToolFactory:
     """Workspace tools plus the isolated browser and/or computer-use broker.
 

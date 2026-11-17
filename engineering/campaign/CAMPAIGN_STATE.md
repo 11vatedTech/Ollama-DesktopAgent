@@ -50,14 +50,22 @@ its own qualification task, and `docs/MODEL_CLASSIFICATION.md` (what makes an
 Ollama model an agent, tiers, measured classification, selection checklist).
 G9 is VERIFIED. See VERIFICATION_EVIDENCE "Session 8".
 
+## Session 9 (2026-11-16)
+
+Rendered every page and drove the desktop end to end with a live model. Found and
+fixed nine defects, two of them serious: chat agent mode refused every overwrite
+silently (it had no approval path), and desktop chat still sent no context window.
+Added desktop approvals, chat window sizing, possible-claim detection for refused
+changes, and `G11_OWNER_QA.md`. See VERIFICATION_EVIDENCE "Session 9".
+
 ## Next exact action
 
-Owner: review and commit the session 8 working-tree changes (nothing is
-committed yet), then try the Agent Foundry with `qwen3.5:9b` and the edit grant.
+Owner: work through `engineering/campaign/G11_OWNER_QA.md` (about 20 minutes),
+decide on merging draft PR #5 (sessions 8-9), and provide a code-signing certificate.
 
 ## Owner decisions and inputs still needed
 
-1. G1: commit the session 8 changes.
+1. G1: review and merge draft PR #5 (sessions 8 and 9).
 2. G14: a code-signing certificate (thumbprint or PFX) for signed releases.
-3. G11: interactive QA of the desktop.
+3. G11: interactive QA of the desktop, using `G11_OWNER_QA.md`.
 4. G15: release certification once the above are done.

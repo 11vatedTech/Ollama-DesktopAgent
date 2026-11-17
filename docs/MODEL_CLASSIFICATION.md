@@ -111,8 +111,11 @@ failure was removed; they are not rates, and they are not a security certificati
 Two further limits stay open. A model verifier's PASS is not accepted on its own: in the
 failed I run the verifier passed a report missing the payee names, and the host's
 content checks failed the scenario. The refused-change detector matches the refused
-content literally (ignoring spacing, quotes and case), so a paraphrased false claim is
-not caught; it closes the observed case, not the general one.
+content literally (ignoring spacing, quotes and case); a second check flags an artifact
+that names a refused identifier with its refused value as a *possible* claim (warning
+only). Paraphrases that do neither are not caught. Live, after the session 9 fixes, a
+denied edit produced a truthful summary; before them, one run paraphrased the refused
+value (see VERIFICATION_EVIDENCE "Session 9").
 
 ## 6. What to look for in an Ollama model
 

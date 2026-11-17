@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Event
 
 import pytest
 
@@ -335,4 +336,36 @@ def test_settings_shows_effective_numeric_and_workspace_values(
     assert page.timeout.text() == "120"
     assert page.max_steps.text() == "12"
     assert page.workspace.text() == str(context.workspace_path())
+    _dispose(page, qt_app)
+
+
+def test_model_chat_names_its_context_window(context: AppContext, qt_app: QApplication,
+                                             monkeypatch: pytest.MonkeyPatch) -> None:
+    """Session 9: desktop chat sent no num_ctx, so Ollama cut long chats silently at 4096."""
+    sent: dict[str, object] = {}
+
+    def fake_chat(model: str, messages: list[dict[str, object]], **kwargs: object) -> dict:
+        sent.update(kwargs)
+        return {"message": {"role": "assistant", "content": "ok"}}
+
+    monkeypatch.setattr(context.client, "chat", fake_chat)
+    page = ChatPage(context)
+    page._stream_chat("m:1", [{"role": "user", "content": "x" * 60_000}], [], Event(),
+                      lambda *_: None)
+    options = sent["options"]
+    assert isinstance(options, dict) and int(options["num_ctx"]) >= 32_768
+    _dispose(page, qt_app)
+
+
+def test_chat_agent_mode_asks_before_overwriting_and_offers_edits_only_when_qualified(
+        context: AppContext, qt_app: QApplication) -> None:
+    """Session 9: chat agent tools had no approval callback; every overwrite was refused."""
+    import inspect
+
+    from ollama_workstation.ui.approval import ApprovalBridge
+
+    page = ChatPage(context)
+    assert "approval" in inspect.signature(page._agent_task).parameters
+    assert page._edit_qualified("m:1", "no-such-digest") is False
+    assert isinstance(ApprovalBridge(lambda _t: "deny"), ApprovalBridge)
     _dispose(page, qt_app)

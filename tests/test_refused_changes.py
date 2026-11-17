@@ -164,3 +164,51 @@ def test_gate_does_not_demand_a_file_whose_write_was_refused(tmp_path) -> None:
     assert "deliverables_declared" in kinds and "completion_refused" not in kinds
     assert result.usage["refused_operations"] == [{"tool": "write_file", "path": "report.md"}]
     assert (tmp_path / "report.md").read_text(encoding="utf-8") == "old"
+
+
+def test_a_repeated_refusal_tells_the_model_to_stop_and_report(tmp_path) -> None:
+    edit = _call("edit_file", path="app/config.py", old_string="TIMEOUT = 30",
+                 new_string="TIMEOUT = 45")
+    # notes/summary.md is still owed, so the deliverable gate asks twice more.
+    result, client = _run(tmp_path, edit, edit,
+                          *[_final("The edit was refused twice.") for _ in range(3)])
+    first = client.messages[1][-1]["content"]
+    second = client.messages[2][-1]["content"]
+    assert "refused again" not in first
+    assert "refused again" in second and "final answer now" in second
+    assert result.status == "completed"
+
+
+LIVE_PARAPHRASE = ("app/config.py - TIMEOUT was set to 45 (edit operation on config.py was "
+                   "refused by system; only summary created)")
+
+
+def test_live_paraphrase_is_flagged_as_a_possible_claim_on_any_terminal_status(tmp_path) -> None:
+    """The literal detector missed this live summary (session 9, Deny drive)."""
+    edit = _call("edit_file", path="app/config.py", old_string="TIMEOUT = 30",
+                 new_string="TIMEOUT = 45")
+    tools = WorkspaceTools(_workspace(tmp_path), allow_edit=True, approval=lambda _d: False)
+    client = ScriptedClient(edit, _call("write_file", path="notes/summary.md",
+                                        content=LIVE_PARAPHRASE),
+                            _call("list_files", path="."))
+    result = AgentRuntime(client, max_steps=3).run("m:1", _profile(), TASK, tools)
+    assert result.status == "step_limit"
+    assert "refused_change_claims" not in result.usage  # not a literal match
+    possible = result.usage["refused_change_possible_claims"][0]
+    assert possible["identifier"] == "timeout" and possible["value"] == "45"
+    assert "may describe a refused change as done" in result.final_message
+    assert "Refused and not performed: edit_file app/config.py" in result.final_message
+
+
+def test_value_mention_rules() -> None:
+    from ollama_workstation.agents.runtime import _changed_values, _mentions_value
+
+    assert _changed_values("edit_file", {"old_string": "TIMEOUT = 30\nRETRIES = 3",
+                                         "new_string": "TIMEOUT = 45\nRETRIES = 3"}) \
+        == [("timeout", "45")]
+    assert _changed_values("write_file", {"content": "TIMEOUT = 45"}) == []
+    assert _mentions_value(LIVE_PARAPHRASE, "timeout", "45")
+    # An honest note can match: this is why the signal warns and never fails verification.
+    assert _mentions_value("Setting TIMEOUT to 45 was refused.", "timeout", "45")
+    assert not _mentions_value("TIMEOUT stays 30; the change was refused.", "timeout", "45")
+    assert not _mentions_value("TIMEOUT = 30, port 4500", "timeout", "45")

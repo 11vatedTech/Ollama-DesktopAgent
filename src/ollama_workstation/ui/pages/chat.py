@@ -46,7 +46,12 @@ from PySide6.QtWidgets import (
 from ollama_workstation.agentification.gate import clear_repository_run
 from ollama_workstation.agents.binding import validate_installed_model_binding
 from ollama_workstation.agents.mcp_gateway import CompositeToolRegistry, MCPToolGateway
-from ollama_workstation.agents.runtime import AgentEvent, AgentRuntime
+from ollama_workstation.agents.runtime import (
+    DEFAULT_NUM_CTX,
+    AgentEvent,
+    AgentRuntime,
+    conversation_window,
+)
 from ollama_workstation.agents.tools import WorkspaceTools
 from ollama_workstation.models.model_intelligence import ModelIntelligence
 from ollama_workstation.models.routing import (
@@ -55,6 +60,7 @@ from ollama_workstation.models.routing import (
     infer_task_capabilities,
 )
 from ollama_workstation.models.schemas import ModelProfile
+from ollama_workstation.ui.approval import ApprovalBridge, dialog_prompter
 from ollama_workstation.ui.components import (
     AutoTextBrowser,
     Card,
@@ -570,6 +576,10 @@ class ChatPage(QWidget):
             self.model_combo.addItem(name)
         if selected and selected in self._all_models:
             self.model_combo.setCurrentText(selected)
+        else:
+            preferred = self.context.preferred_model()
+            if preferred:
+                self.model_combo.setCurrentText(preferred)
         self.model_combo.blockSignals(False)
         self._refresh_agent_combo()
         self._sync_context()
@@ -630,9 +640,15 @@ class ChatPage(QWidget):
             context = None
         chars = sum(len(str(item.get("content") or "")) for item in self.messages)
         estimate = max(1, chars // 4)
-        self.ctx_context.setText(
-            f"~{estimate:,} tokens" + (f" / {context:,}" if context else "")
-        )
+        # The window actually sent (agent runs and chat), not the model's maximum.
+        window = conversation_window(list(self.messages), context) if self.messages else (
+            min(DEFAULT_NUM_CTX, context) if context else DEFAULT_NUM_CTX)
+        self.ctx_context.setText(f"~{estimate:,} / {window:,} tokens")
+        window_note = (
+            f"Estimated from conversation characters; not exact tokenization. Window sent "
+            f"to Ollama: {window:,} tokens"
+            + (f"; model maximum {context:,}" if context else "")
+            + ". It grows with the conversation instead of dropping messages.")
         preset_name = str(self.agent_combo.currentData() or "")
         preset = next(
             (item for item in self.context.settings.agent_presets
@@ -651,12 +667,16 @@ class ChatPage(QWidget):
         if mode == "model":
             self.ctx_tools.setText("No tools · direct inference")
         elif mode == "agent":
-            self.ctx_tools.setText("Read · list · search · write\nShell disabled")
+            installed = self.context.installed(model) if model else None
+            edits = installed is not None and self._edit_qualified(model, installed.digest)
+            self.ctx_tools.setText(
+                "Read · list · search · write" + (" · exact edit" if edits else "")
+                + "\nShell disabled · changes ask first")
         elif mode == "routed":
             self.ctx_tools.setText("No tools · host-selected model")
         else:
             self.ctx_tools.setText("Workforce Studio policy\nApproval required")
-        self.ctx_context.setToolTip("Estimated from conversation characters; not exact tokenization.")
+        self.ctx_context.setToolTip(window_note)
 
     def _toggle_context(self) -> None:
         visible = not self.context_panel.isVisible()
@@ -1102,6 +1122,7 @@ class ChatPage(QWidget):
             keep_alive=self.context.settings.keep_alive,
             cancel_event=cancel,
             stream_callback=emit,
+            options={"num_ctx": self._window(model, messages)},
         )
 
     def _start_routed(
@@ -1188,6 +1209,7 @@ class ChatPage(QWidget):
             keep_alive=self.context.settings.keep_alive,
             cancel_event=cancel,
             stream_callback=emit,
+            options={"num_ctx": self._window(chosen.model_name, messages)},
         )
         return {"response": response, "route": decision.to_dict(), "model": chosen.model_name}
 
@@ -1208,10 +1230,13 @@ class ChatPage(QWidget):
         workspace = self.context.workspace_path()
         cancel = Event()
         self._cancel_event = cancel
+        # Created on the UI thread; the worker asks through it and waits for the answer.
+        self._approval = ApprovalBridge(dialog_prompter(self), cancel_event=cancel)
         worker: FunctionWorker
         worker = FunctionWorker(
             self._agent_task, model, profile, prompt, workspace, cancel,
             lambda event: worker.signals.progress.emit(f"{event.kind}\t{event.message}"),
+            self._approval,
         )
         self._active_worker = worker
         worker.signals.progress.connect(self._on_agent_event)
@@ -1234,6 +1259,7 @@ class ChatPage(QWidget):
         workspace: Path,
         cancel: Event,
         progress: Any,
+        approval: ApprovalBridge | None = None,
     ) -> Any:
         installed = next(
             (item for item in self.context.profiler.inventory() if item.name == model), None
@@ -1241,7 +1267,13 @@ class ChatPage(QWidget):
         if installed is None:
             raise ValueError(f"Model {model!r} is not installed in Ollama.")
         validate_installed_model_binding(profile, installed)
-        tools = WorkspaceTools(workspace, allow_shell=False, cancel_event=cancel)
+        # edit_file only when this exact artifact is qualified on a catalogue that has
+        # it; otherwise the execution gate would (rightly) refuse the whole run.
+        tools = WorkspaceTools(
+            workspace, allow_shell=False, cancel_event=cancel,
+            approval=approval.ask if approval is not None else None,
+            allow_edit=self._edit_qualified(model, profile.digest),
+        )
         gateway_context = MCPToolGateway(
             self.context.settings.mcp_servers, cancel_event=cancel
         )
@@ -1267,6 +1299,22 @@ class ChatPage(QWidget):
                 model, profile, prompt, composite,
                 event=progress, cancel_event=cancel, policy=policy,
             )
+
+    def _window(self, model: str, messages: list[dict[str, Any]]) -> int:
+        """Ollama truncates silently past its default 4096 tokens; name a window."""
+        profile = self.context.profile_for(model)
+        return conversation_window(messages, profile.context_length if profile else None)
+
+    def _edit_qualified(self, model: str, digest: str) -> bool:
+        from ollama_workstation.agentification.store import AgentStore
+
+        try:
+            records = AgentStore(self.context.repository.database).qualifications_for(
+                model, digest)
+        except Exception:  # noqa: BLE001 - no record means no edit tool, never a crash
+            return False
+        return any("edit_file" in (record.get("tool_names") or ())
+                   and record.get("selected_harness") for record in records)
 
     def _on_agent_event(self, payload: str) -> None:
         kind, _, message = payload.partition("\t")

@@ -163,6 +163,25 @@ def working_context(policy_options: dict[str, Any] | None, default: int,
     return max(MIN_NUM_CTX, value)
 
 
+MAX_CONVERSATION_WINDOW = 131_072
+
+
+def conversation_window(messages: list[dict[str, Any]], model_context: int | None,
+                        default: int = DEFAULT_NUM_CTX) -> int:
+    """num_ctx for a direct chat: large enough for what is sent, never Ollama's silent 4096.
+
+    Used where the host sends a whole conversation it does not compact (desktop chat,
+    the verdict formatter). Grows in 8k steps so a long chat keeps its early turns; the
+    model's own context length is the hard ceiling.
+    """
+    needed = int(_size(messages) / CHARS_PER_TOKEN) + REPLY_RESERVE_TOKENS
+    window = max(default, -(-needed // 8_192) * 8_192)
+    window = min(window, MAX_CONVERSATION_WINDOW)
+    if model_context:
+        window = min(window, int(model_context))
+    return max(MIN_NUM_CTX, window)
+
+
 def conversation_char_budget(num_ctx: int, ceiling: int) -> int:
     return min(ceiling, max(8_000, int((num_ctx - REPLY_RESERVE_TOKENS) * CHARS_PER_TOKEN)))
 
@@ -239,6 +258,42 @@ def _intended_fragments(name: str, arguments: dict[str, Any], workspace: Path) -
         if len(item) >= 6 and item not in known and item not in fragments:
             fragments.append(item)
     return fragments[:20]
+
+
+_ASSIGNMENT = re.compile(r"^\s*([A-Za-z_][\w.\-]*)\s*[:=]\s*(.+?)\s*[,;]?\s*$")
+
+
+def _changed_values(name: str, arguments: dict[str, Any]) -> list[tuple[str, str]]:
+    """(identifier, new value) pairs a refused edit would have changed.
+
+    Only for edit_file, where both sides are known: a line "NAME = old" that would have
+    become "NAME = new". Used to spot a paraphrased claim ("NAME was set to new").
+    """
+    if name != "edit_file":
+        return []
+    before: dict[str, str] = {}
+    for line in str(arguments.get("old_string") or "").splitlines():
+        match = _ASSIGNMENT.match(line)
+        if match:
+            before[match.group(1).lower()] = match.group(2).strip("\"' ").lower()
+    pairs = []
+    for line in str(arguments.get("new_string") or "").splitlines():
+        match = _ASSIGNMENT.match(line)
+        if match:
+            key, value = match.group(1).lower(), match.group(2).strip("\"' ").lower()
+            if value and before.get(key) not in (None, value):
+                pairs.append((key, value))
+    return pairs[:10]
+
+
+def _mentions_value(text: str, identifier: str, value: str, window: int = 60) -> bool:
+    """True when ``value`` appears within ``window`` characters after ``identifier``."""
+    lowered = text.lower()
+    pattern = re.compile(rf"(?<![\w.]){re.escape(value)}(?![\w.])")
+    for found in re.finditer(re.escape(identifier), lowered):
+        if pattern.search(lowered[found.end():found.end() + window]):
+            return True
+    return False
 
 
 class AgentRuntime:
@@ -421,6 +476,10 @@ class AgentRuntime:
         # which reports them on every terminal path.
         refused_operations: dict[str, dict[str, Any]] = {}
         refused_change_claims: list[dict[str, Any]] = []
+        # Weaker signal: an artifact names a refused identifier with its refused new value
+        # ("TIMEOUT was set to 45"). An honest note can match too, so it warns on the
+        # record and never fails verification by itself.
+        refused_change_possible_claims: list[dict[str, Any]] = []
 
         def finish(status: str, final_message: str, steps: int) -> AgentResult:
             if lease is not None and status != "lease_lost":
@@ -435,14 +494,21 @@ class AgentRuntime:
                 usage["refused_operations"] = outstanding
             if refused_change_claims:
                 usage["refused_change_claims"] = [dict(item) for item in refused_change_claims]
-            if status == "completed" and (outstanding or refused_change_claims):
-                # The completion record must not read as success for what was refused.
+            if refused_change_possible_claims:
+                usage["refused_change_possible_claims"] = [
+                    dict(item) for item in refused_change_possible_claims]
+            if outstanding or refused_change_claims or refused_change_possible_claims:
+                # The record must not read as success for what was refused, whatever
+                # the terminal status (a run can also end at its step limit).
                 notes = [f"{item['tool']} {item['path']}".strip() for item in outstanding]
                 lines = ["[Host record] Refused and not performed: " + ", ".join(notes)
                          ] if notes else []
                 lines += [f"[Host record] {item['artifact']} records a change that was "
                           f"refused ({item['refused_tool']} {item['refused_path']})."
                           for item in refused_change_claims]
+                lines += [f"[Host record] {item['artifact']} may describe a refused change "
+                          f"as done ({item['identifier']} = {item['value']} was refused); "
+                          "check it." for item in refused_change_possible_claims]
                 final_message = (final_message.rstrip() + "\n\n" + "\n".join(lines)).strip()
             safe_task = str(_sanitize_event_value(task))
             safe_final_message = str(_sanitize_event_value(final_message))
@@ -514,9 +580,11 @@ class AgentRuntime:
         def note_refusal(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
             path = str(arguments.get("path") or "")
             key = f"{name}:{path}" if path else name
+            repeated = key in refused_operations
             refused_operations[key] = {
                 "tool": name, "path": path,
                 "fragments": _intended_fragments(name, arguments, Path(workspace_path)),
+                "values": _changed_values(name, arguments),
             }
             record("operation_refused",
                    "The host refused this operation; nothing was changed.", tool=name,
@@ -525,7 +593,10 @@ class AgentRuntime:
                 "error": "Refused: " + (f"{path} was not changed." if path else
                                         "the operation did not run."),
                 "refused": True, "performed": False,
-                "note": ("Do not describe this change as done, and do not record it as done "
+                "note": ("This was refused again; asking again will not change the answer. "
+                         "Stop trying it and give your final answer now, saying it was "
+                         "refused." if repeated else
+                         "Do not describe this change as done, and do not record it as done "
                          "in any file. Report that it was refused."),
             }
 
@@ -548,6 +619,18 @@ class AgentRuntime:
                     record("refused_change_claimed",
                            f"{path} records content of a change the host refused "
                            f"({refused['tool']} {refused['path']}).", **claim)
+                    continue
+                raw = str(arguments.get("content") or arguments.get("new_string") or "")
+                for identifier, value in refused.get("values") or []:
+                    if _mentions_value(raw, identifier, value):
+                        possible = {"artifact": path, "refused_tool": refused["tool"],
+                                    "refused_path": refused["path"],
+                                    "identifier": identifier, "value": value}
+                        refused_change_possible_claims.append(possible)
+                        record("refused_change_possibly_claimed",
+                               f"{path} mentions {identifier} with the refused value "
+                               f"{value}.", **possible)
+                        break
 
         def completion_refused() -> bool:
             """Push back once per check when a named output is missing; True means continue."""

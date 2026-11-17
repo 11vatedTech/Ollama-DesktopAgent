@@ -581,3 +581,45 @@ Not established: rates at higher trial counts (H 8 runs, I 4 runs, across two
 models); behaviour of models qualified before this session under the new window
 (their long-horizon results may have been understated); MCP and POSIX isolation
 (unchanged).
+
+## Session 9 (2026-11-16): rendered and live desktop QA
+
+Goal: take G11 as far as engineering can before the owner's QA. Every page was
+rendered and reviewed, and the desktop was driven end to end with a live model. Raw
+logs and hashes: `evidence/2026-11-16-session-9/`.
+
+### Defects found in the rendered or driven desktop, and fixed
+
+| # | Defect | Fix |
+|---|---|---|
+| 1 | Advanced Chat defaulted to the newest model (`gemma4:26b`), which cannot load on this GPU | `models/default_model.py`: qualified > provisional > fits the GPU > rest, never embeddings, digest-exact |
+| 2 | Agent Foundry stayed empty for about 13 s: readiness made two Ollama calls per agent (82 for 41 agents) | one inventory/version snapshot per listing (12.6 s to 1.5 s); the execution gate still checks live |
+| 3 | Foundry could grant "exact edits" but could not qualify a model for them | "Exact edits (coding)" qualification option; CLI and Foundry share `harness.catalogue_factory` |
+| 4 | **Chat agent mode gave its tools no approval callback: every overwrite or edit was refused silently** | `ui/approval.py` `ApprovalBridge`: the worker asks, the UI thread shows Allow once / Allow for this run / Deny; cancel, a broken prompt or 600 s without an answer refuse. `edit_file` offered only when the model's qualification covers it |
+| 5 | **Plain model chat, auto-route and the verdict formatter sent no `num_ctx`**: long chats, large attachments and long evidence were cut silently at 4096 tokens | `conversation_window`: at least 16 384, grows in 8k steps, capped by the model |
+| 6 | Context panel showed the model maximum (262 144), not the window sent | shows the window; model maximum in the tooltip; Tools line shows "exact edit" when available |
+| 7 | Live: a model retried a denied edit and the person was asked four times | the bridge remembers a denial for the run; the runtime tells the model a repeated refusal is final |
+| 8 | Live: a summary paraphrased the refused change ("TIMEOUT was set to 45 ... refused"); the literal detector missed it | refused `NAME = value` edits record (identifier, new value); an artifact naming both within 60 characters is a **possible claim**: a `[Host record]` warning and `usage["refused_change_possible_claims"]`, not a verification failure (an honest note can match). Host notes now appear on every terminal status |
+| 9 | The UI gallery script skipped the Agent Foundry page | added |
+
+### Live GUI drives (real `MainWindow`, isolated copy of the database, `qwen3.5:9b`)
+
+| Run | Button | Dialogs | `app/config.py` | Summary | Status |
+|---|---|---|---|---|---|
+| allow | Allow once | 1 | only TIMEOUT changed, via `edit_file` | accurate | completed, 54 s |
+| deny 1 (before fixes 7-8) | Deny | 4 | unchanged | none written | step limit |
+| deny 2 (after fix 7) | Deny | 2 | unchanged | paraphrased the refused value | step limit |
+| deny 3 (after fix 8) | Deny | 1 for 3 attempts | unchanged | truthful (TIMEOUT=30) | completed, 48 s |
+
+A harness bug of mine (dialogs de-duplicated by text) left one denied prompt unanswered
+until its timeout; the run was stopped, the watcher fixed and the drive repeated.
+
+### What this does and does not establish
+
+Established: the desktop's agent path works end to end with approvals on a live
+model, and a denial produces no change and no false completion in the runs observed.
+
+Not established: rates (one run per configuration); the owner's judgement of the
+experience (G11 stays with the owner, `G11_OWNER_QA.md`); paraphrases that do not name
+the identifier and value together; approvals for browser and computer-use actions,
+which keep their own broker.

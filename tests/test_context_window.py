@@ -84,3 +84,16 @@ def test_every_request_names_its_window(tmp_path) -> None:
     ):
         runtime.run("m:1", profile, "Answer.", WorkspaceTools(tmp_path), policy=policy)
         assert runtime.client.calls[0]["options"]["num_ctx"] == expected  # type: ignore[attr-defined]
+
+
+def test_direct_chat_window_grows_with_the_conversation_within_the_model() -> None:
+    from ollama_workstation.agents.runtime import conversation_window
+
+    short = [{"role": "user", "content": "hi"}]
+    assert conversation_window(short, 262144) == 16384  # never Ollama's silent 4096
+    long = [{"role": "user", "content": "x" * 60_000}]  # about 30k tokens at 2 chars/token
+    window = conversation_window(long, 262144)
+    assert window >= 32_768 and window % 8_192 == 0
+    assert conversation_window(long, 8192) == 8192  # the model's limit is the ceiling
+    huge = [{"role": "user", "content": "x" * 2_000_000}]
+    assert conversation_window(huge, None) == 131_072
