@@ -7,7 +7,7 @@ VERIFICATION_EVIDENCE.md.
 
 | Gate | Outcome required | Status | Implemented | Evidence | Missing before the gate can close |
 |---|---|---|---|---|---|
-| G1 | Repository integrity, consolidation | PARTIAL | PR #4 merged; #2/#3 contained in main; strict mypy clean and enforced in CI; hosted CI green | "Session 4"; "Session 6" (v2 fast-forwarded into main, #2/#3 closed) | Session 8 work is uncommitted in the working tree; commit it (owner) |
+| G1 | Repository integrity, consolidation | VERIFIED | PR #4 merged; #2/#3 contained in main; strict mypy enforced in CI; sessions 8-9 merged via PR #5 (merge `bc9f7ec`) after hosted CI 8/8 on its head `782814c` | "Session 6"; "Session 9" | - |
 | G2 | Model intelligence, empirical qualification | VERIFIED | Profiler, benchmarks, routing; verified agent-task suite run live on three models, with stored final messages for every failed attempt | "Harness qualification on real models" | (Improvement, not a gate blocker: more tasks/trials, long-context and vision suites — R7) |
 | G3 | Universal agentification, harness selection | VERIFIED | Measured harness selection; versioned digest-bound agents; one execution gate for every path; Agent Foundry UI | Live qualification; gate tests; scenarios A-E ran on gated agents | - |
 | G4 | Functional autonomous execution | VERIFIED | Bounded loop, budgets, protocol repair (fenced-JSON fix), tool-error guidance | Live scenarios A, B, C | - |
@@ -20,7 +20,7 @@ VERIFICATION_EVIDENCE.md.
 | G11 | Complete desktop experience | PARTIAL | Ten pages; Foundry with Skills tab, web and edit permissions; chat agent approvals (Allow once / for this run / Deny); chat window sizing; rendered review of every page; live GUI drives with a real model | "Session 4: visual review"; "Session 9" (9 defects found and fixed) | Owner interactive QA and sign-off: `G11_OWNER_QA.md` (owner) |
 | G12 | End-to-end recovery | VERIFIED | Checkpoints, leases, dead-owner reclamation, frozen-safe recovery child | Live scenario E | (Further drills: Ollama restart mid-run, model removal, DB error) |
 | G13 | Real-world acceptance scenarios | VERIFIED | A-F implemented and run on real models | Acceptance run 20261113-110646 and D re-runs | - |
-| G14 | Clean Windows packaging and install | PARTIAL | Signing support, release manifest, clean-machine CI install (no Python on PATH) | "Session 4: release" | Owner code-signing certificate |
-| G15 | Final release certification | OPEN | - | - | G1 (commit session 8), G11 owner QA, G14 certificate |
+| G14 | Clean Windows packaging and install | PARTIAL | Signing support, release manifest, clean-machine CI install (no Python on PATH) | "Session 4: release" | Owner: choose a signing route (`docs/CODE_SIGNING_OPTIONS.md`) and provide the certificate or account |
+| G15 | Final release certification | OPEN | - | - | G11 owner QA, G14 certificate |
 
-Summary: 11 of 15 gates VERIFIED (G2-G10, G12, G13), 3 PARTIAL (G1, G11, G14), 1 OPEN (G15). Every remaining item needs an owner action or decision; none is blocked on engineering work that can proceed without one.
+Summary: 12 of 15 gates VERIFIED (G1-G10, G12, G13), 2 PARTIAL (G11, G14), 1 OPEN (G15). Every remaining item needs an owner action or decision; none is blocked on engineering work that can proceed without one.
