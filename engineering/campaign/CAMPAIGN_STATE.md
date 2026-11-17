@@ -4,7 +4,7 @@
 **Branch:** `main` (v2 fast-forwarded in session 6)
 **Baseline commit:** `974517c0cf4f293192a289cb419f21654671c39b`
 **Last updated:** 2026-11-16 (session 8)
-**Overall status:** 11 of 15 gates VERIFIED, 3 PARTIAL, 1 OPEN. Every open item
+**Overall status:** 12 of 15 gates VERIFIED, 2 PARTIAL, 1 OPEN. Every open item
 needs an owner action or decision. See IMPLEMENTATION_MATRIX.md.
 
 ## Where the campaign stands
@@ -60,12 +60,12 @@ changes, and `G11_OWNER_QA.md`. See VERIFICATION_EVIDENCE "Session 9".
 
 ## Next exact action
 
-Owner: work through `engineering/campaign/G11_OWNER_QA.md` (about 20 minutes),
-decide on merging draft PR #5 (sessions 8-9), and provide a code-signing certificate.
+Owner: work through `engineering/campaign/G11_OWNER_QA.md` (about 20 minutes) and
+choose a signing route from `docs/CODE_SIGNING_OPTIONS.md`. PR #5 (sessions 8-9) is
+merged (`bc9f7ec`).
 
 ## Owner decisions and inputs still needed
 
-1. G1: review and merge draft PR #5 (sessions 8 and 9).
-2. G14: a code-signing certificate (thumbprint or PFX) for signed releases.
-3. G11: interactive QA of the desktop, using `G11_OWNER_QA.md`.
-4. G15: release certification once the above are done.
+1. G14: choose a signing route (`docs/CODE_SIGNING_OPTIONS.md`) and provide the certificate or account.
+2. G11: interactive QA of the desktop, using `G11_OWNER_QA.md`.
+3. G15: release certification once the above are done.

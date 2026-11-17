@@ -4,7 +4,7 @@
   "baseline_commit": "974517c0cf4f293192a289cb419f21654671c39b",
   "baseline_branch": "feat/execution-integrity-v1-1",
   "branch": "main",
-  "current_commit": "52ca3b9",
+  "current_commit": "bc9f7ec",
   "updated_at": "2026-11-16",
   "objectives": [
     "model -> qualified agent",
@@ -15,12 +15,12 @@
   ],
   "gates": {
     "G1": {
-      "status": "PARTIAL",
+      "status": "VERIFIED",
       "evidence": [
         "PR #4 merged (c549c43)",
         "engineering/campaign/VERIFICATION_EVIDENCE.md#session-4-2026-11-13"
       ],
-      "note": "PR #4 merged by the owner; PRs #2/#3 have no commits outside main (verified) but closing them was blocked by permissions; strict mypy 0 errors and enforced in CI; remaining: merge campaign/complete-agent-v2, close #2/#3"
+      "note": "Sessions 8-9 merged via PR #5 (merge bc9f7ec) after hosted CI 8/8 on 782814c; earlier PRs #2/#3 closed as contained in main."
     },
     "G2": {
       "status": "VERIFIED",
@@ -119,7 +119,7 @@
       "evidence": [
         "engineering/campaign/VERIFICATION_EVIDENCE.md#session-4-2026-11-13"
       ],
-      "note": "optional Authenticode signing in the build; release manifest records signing; CI install runs with no Python/dev tools on PATH on a fresh runner VM; remaining: an owner code-signing certificate"
+      "note": "optional Authenticode signing in the build; release manifest records signing; CI install runs with no Python/dev tools on PATH on a fresh runner VM; remaining: an owner code-signing certificate Session 9: signing routes researched in docs/CODE_SIGNING_OPTIONS.md; owner to choose and provide the certificate or account."
     },
     "G15": {
       "status": "OPEN",
@@ -234,9 +234,9 @@
     }
   ],
   "next_action": {
-    "description": "Owner: complete G11_OWNER_QA.md, decide on merging PR #5, provide a code-signing certificate",
+    "description": "Owner: complete G11_OWNER_QA.md; choose a signing route from docs/CODE_SIGNING_OPTIONS.md",
     "command": "python -m ollama_workstation  (then follow engineering/campaign/G11_OWNER_QA.md)",
-    "then": "release certification (G15) once G1, G11 and G14 are closed"
+    "then": "signed release build and release certification (G15)"
   },
   "evidence": {
     "document": "engineering/campaign/VERIFICATION_EVIDENCE.md",
